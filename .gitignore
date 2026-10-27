@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Proyecto: datos de clientes y entorno virtual (no se suben)
+data/
+.venv/
