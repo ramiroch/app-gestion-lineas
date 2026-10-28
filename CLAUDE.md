@@ -13,12 +13,22 @@ Sistema de gestión para las líneas de aceite y jugo de los clientes de Brown. 
 **Objetivo actual (hasta el 30/11/2026):** dejar funcionando la primera planta, **LEDESMA**, con:
 1. Datos maestros (planta, líneas, equipos, puntos de muestreo, rangos).
 2. Carga de análisis de laboratorio (Scott) con cálculo automático y validación de rangos.
-3. Importación del histórico desde los Excel de LEDESMA (laboratorio, operación y producción). Las frutas y los equipos de la planta salen de esos archivos y de `data/maestros_ledesma.xlsx`: no los inventes.
+3. Importación del histórico del archivo `data/historico/eficiencia eBOE Naranja 25 2.xlsm` (hojas **BOE** y **Resumen**).
 4. Cartas de control (I-MR, X̄-R, X̄-S) con reglas de Nelson, y capacidad (Cp, Cpk, Pp, Ppk).
 5. Dashboard de la planta con semáforos y alertas.
 
+### Planta LEDESMA (resumen; el detalle está en `docs/mapeo_ledesma.md`)
+- Naranja Valencia · **3 eBOE** · turnos M 05:00–12:59, T 13:00–20:59, N 21:00–04:59.
+- **Día de producción: de 05:00 a 04:59** (empieza con el turno M). Una muestra de 00:00–04:59 pertenece al día de producción anterior (`fecha_produccion`). La hora de inicio del día es un parámetro de la planta.
+- Puntos de muestreo por eBOE: Fruta entrada, Fruta salida y Emulsión (licor).
+- Muestras en pares Entrada/Salida por eBOE y hora. Eficiencia eBOE = 1 − salida/entrada; rendimiento eBOE = entrada − salida (kg/t).
+- Fórmulas de la planta: blanco fijo 0,2 mL; aceite en fruta = 68,8416 × (ml − blanco) × N / g; aceite en emulsión % = (ml − blanco) × 3,45 × N / g. Los factores y el blanco son **configurables por planta**.
+- Objetivos: eficiencia eBOE 80–90 %; rendimiento eBOE 6,6–6,8 kg/t; aceite en emulsión 0,80–1,10 %; °Brix emulsión ≤ 5; pH 3–7.
+- Producción por turno (carga manual): fruta procesada t, aceite envasado kg, jugo concentrado kg, reproceso kg.
+- Nunca importes los promedios de la hoja Resumen: se recalculan desde la hoja BOE.
+
 ## Stack (versión 0, local)
-- Python 3.12 o superior (hoy se usa 3.13), entorno virtual en `.venv`.
+- Python 3.13, entorno virtual en `.venv`.
 - **Streamlit** para las pantallas, **Plotly** para los gráficos.
 - **SQLAlchemy** sobre **SQLite** (`data/app.db`). Más adelante se migra a PostgreSQL en Azure: no uses nada específico de SQLite.
 - pandas, NumPy, SciPy, statsmodels para cálculos y estadística.
