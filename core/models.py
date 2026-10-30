@@ -7,7 +7,9 @@ un cliente tiene muchas plantas, una planta muchas líneas, etc.
 from datetime import time
 
 from sqlalchemy import Float, ForeignKey, String, Time
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
+
+ESTADOS_EQUIPO = ("Operativo", "Pendiente de instalación", "Fuera de servicio")
 
 
 class Base(DeclarativeBase):
@@ -27,7 +29,8 @@ class Cliente(Base):
 class Planta(Base):
     """Planta de un cliente, con los parámetros que usan sus cálculos.
 
-    Los valores por defecto son los de LEDESMA (docs/mapeo_ledesma.md, sección 5):
+    pais va en la planta porque un mismo cliente puede tener plantas en
+    distintos países. Los valores por defecto son los de LEDESMA (docs/mapeo_ledesma.md, sección 5):
     - blanco_ml: blanco de la titulación Scott, en mL.
     - factor_aceite_fruta: aceite en fruta (kg/t) = (mL − blanco) × N × factor / g.
     - factor_aceite_emulsion: aceite en emulsión (%) = (mL − blanco) × N × factor / g.
@@ -39,6 +42,7 @@ class Planta(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     cliente_id: Mapped[int] = mapped_column(ForeignKey("cliente.id"))
     nombre: Mapped[str] = mapped_column(String(100))
+    pais: Mapped[str] = mapped_column(String(50))
     blanco_ml: Mapped[float] = mapped_column(Float, default=0.2)
     factor_aceite_fruta: Mapped[float] = mapped_column(Float, default=68.8416)
     factor_aceite_emulsion: Mapped[float] = mapped_column(Float, default=3.45)
@@ -62,22 +66,38 @@ class Linea(Base):
 class Equipo(Base):
     """Equipo de una línea (eBOE, mBOE, JEX, desludger, etc.).
 
-    modelo, numero_serie y codigo_activo_mc son opcionales porque muchas veces
-    no se conocen al dar de alta el equipo.
+    nombre: el nombre del equipo en Maintenance Connection (MC).
+    estado: uno de ESTADOS_EQUIPO; por defecto "Operativo".
+    modelo, serie_mc, numero_serie, codigo_activo_mc y numero_activo_fijo son
+    opcionales porque muchas veces no se conocen al dar de alta el equipo.
     """
 
     __tablename__ = "equipo"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     linea_id: Mapped[int] = mapped_column(ForeignKey("linea.id"))
+    nombre: Mapped[str] = mapped_column(String(100))  # por ejemplo "JEX N° 2"
     tipo: Mapped[str] = mapped_column(String(50))  # por ejemplo "eBOE"
     numero: Mapped[int]  # eBOE 1, eBOE 2, ...
+    estado: Mapped[str] = mapped_column(String(30), default="Operativo")
     modelo: Mapped[str | None] = mapped_column(String(50))  # por ejemplo "6107E"
+    serie_mc: Mapped[str | None] = mapped_column(String(50))  # campo "Series" de MC
     numero_serie: Mapped[str | None] = mapped_column(String(50))
     codigo_activo_mc: Mapped[str | None] = mapped_column(String(50))  # Maintenance Connection
+    # "FIXED ASSET NBR" de MC. No es único: hay números repetidos entre equipos.
+    numero_activo_fijo: Mapped[str | None] = mapped_column(String(50))
 
     linea: Mapped["Linea"] = relationship(back_populates="equipos")
     puntos_muestreo: Mapped[list["PuntoMuestreo"]] = relationship(back_populates="equipo")
+
+    @validates("estado")
+    def validar_estado(self, clave, estado):
+        """Controla que el estado sea uno de ESTADOS_EQUIPO."""
+        if estado not in ESTADOS_EQUIPO:
+            raise ValueError(
+                f'Estado "{estado}" no válido. Usá uno de: {", ".join(ESTADOS_EQUIPO)}.'
+            )
+        return estado
 
 
 class PuntoMuestreo(Base):
