@@ -23,9 +23,15 @@ Sistema de gestión para las líneas de aceite y jugo de los clientes de Brown. 
 - Puntos de muestreo por eBOE: Fruta entrada, Fruta salida y Emulsión (licor).
 - Muestras en pares Entrada/Salida por eBOE y hora. Eficiencia eBOE = 1 − salida/entrada; rendimiento eBOE = entrada − salida (kg/t).
 - Fórmulas de la planta: blanco fijo 0,2 mL; aceite en fruta = 68,8416 × (ml − blanco) × N / g; aceite en emulsión % = (ml − blanco) × 3,45 × N / g. Los factores y el blanco son **configurables por planta**.
+
 - Objetivos: eficiencia eBOE 80–90 %; rendimiento eBOE 6,6–6,8 kg/t; aceite en emulsión 0,80–1,10 %; °Brix emulsión ≤ 5; pH 3–7.
 - Producción por turno (carga manual): fruta procesada t, aceite envasado kg, jugo concentrado kg, reproceso kg.
 - Nunca importes los promedios de la hoja Resumen: se recalculan desde la hoja BOE.
+
+### Datos maestros
+- Única fuente: `data/maestros_clientes.xlsx`. Se cargan con `python -m core.importar_maestros` (se puede correr muchas veces; las filas con error van a `data/reporte_maestros.csv`).
+- Cada equipo se identifica por su `codigo` (SIGLA_PLANTA-TIPO-NN, por ejemplo LED-BOE-01), único y que **nunca cambia**.
+- **Parámetros de cálculo de la planta** (blanco_ml, factor_aceite_fruta, factor_aceite_emulsion, hora_inicio_dia): opcionales y **sin valor por defecto**. Lo que está vacío en la planilla queda vacío en la base y la pantalla lo muestra como "a definir". Los cálculos los leen **siempre** con `core.parametros.parametros_planta()`, que da un error claro si falta alguno. Nunca uses los valores de LEDESMA para otra planta.
 
 ## Stack (versión 0, local)
 - Python 3.13, entorno virtual en `.venv`.
@@ -90,6 +96,8 @@ CAF = kg de aceite por tonelada de fruta a la salida del BOE (menor es mejor).
 ```
 .venv\Scripts\activate          # activar el entorno (Windows)
 pip install -r requirements.txt
+pip install -e .                # instala el proyecto (core/) en modo editable; una sola vez
+python -m core.importar_maestros  # carga los datos maestros desde data/maestros_clientes.xlsx
 streamlit run app/app.py        # abrir la app
 pytest                          # correr las pruebas
 ```

@@ -4,8 +4,7 @@ Lee las hojas Cliente, Planta, Linea, Equipo, PuntoMuestreo y RangoReferencia
 (en ese orden, porque cada una necesita a su "padre" ya cargado).
 
 - Se puede correr muchas veces: si un registro ya existe se actualiza, no se duplica.
-- Una celda vacía se guarda vacía; los parámetros de planta vacíos toman el valor
-  por defecto del modelo.
+- Una celda vacía se guarda vacía (también los parámetros de cálculo de la planta).
 - Las filas con error no se cargan y se anotan en data/reporte_maestros.csv.
 - Un equipo se reconoce solo por su código (columna "codigo", que nunca cambia).
   PuntoMuestreo busca el equipo por ese código. Si en la base queda un equipo cuyo
@@ -54,8 +53,6 @@ CLAVES = {
     "PuntoMuestreo": ["cliente", "planta", "equipo (codigo)", "nombre"],
     "RangoReferencia": ["planta", "variable", "punto o equipo", "fruta"],
 }
-
-PARAMETROS_PLANTA = ["blanco_ml", "factor_aceite_fruta", "factor_aceite_emulsion", "hora_inicio_dia"]
 
 
 class ErrorFila(Exception):
@@ -207,9 +204,6 @@ def _fila_planta(sesion: Session, datos: dict):
         "factor_aceite_emulsion": _numero(datos, "factor_aceite_emulsion"),
         "hora_inicio_dia": _hora(datos, "hora_inicio_dia"),
     }
-    for parametro in PARAMETROS_PLANTA:
-        if campos[parametro] is None:
-            campos[parametro] = _defecto(Planta, parametro)
     return _buscar(cliente.plantas, nombre=campos["nombre"]), campos
 
 

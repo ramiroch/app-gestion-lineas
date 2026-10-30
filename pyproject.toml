@@ -1,0 +1,14 @@
+# Proyecto mínimo para poder hacer "pip install -e ." y que "import core" funcione desde
+# cualquier lugar (Streamlit, pytest, scripts). Las dependencias están en requirements.txt.
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "app-gestion-lineas"
+version = "0.1.0"
+description = "Gestión de líneas de aceite y jugo – Brown"
+requires-python = ">=3.12"
+
+[tool.setuptools]
+packages = ["core"]

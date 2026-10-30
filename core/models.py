@@ -30,7 +30,8 @@ class Planta(Base):
     """Planta de un cliente, con los parámetros que usan sus cálculos.
 
     pais va en la planta porque un mismo cliente puede tener plantas en
-    distintos países. Los valores por defecto son los de LEDESMA (docs/mapeo_ledesma.md, sección 5):
+    distintos países. Parámetros de cálculo (opcionales, sin valor por defecto: cada
+    planta tiene los suyos; los cálculos los leen con core/parametros.py):
     - blanco_ml: blanco de la titulación Scott, en mL.
     - factor_aceite_fruta: aceite en fruta (kg/t) = (mL − blanco) × N × factor / g.
     - factor_aceite_emulsion: aceite en emulsión (%) = (mL − blanco) × N × factor / g.
@@ -43,10 +44,10 @@ class Planta(Base):
     cliente_id: Mapped[int] = mapped_column(ForeignKey("cliente.id"))
     nombre: Mapped[str] = mapped_column(String(100))
     pais: Mapped[str] = mapped_column(String(50))
-    blanco_ml: Mapped[float] = mapped_column(Float, default=0.2)
-    factor_aceite_fruta: Mapped[float] = mapped_column(Float, default=68.8416)
-    factor_aceite_emulsion: Mapped[float] = mapped_column(Float, default=3.45)
-    hora_inicio_dia: Mapped[time] = mapped_column(Time, default=time(5, 0))
+    blanco_ml: Mapped[float | None] = mapped_column(Float)
+    factor_aceite_fruta: Mapped[float | None] = mapped_column(Float)
+    factor_aceite_emulsion: Mapped[float | None] = mapped_column(Float)
+    hora_inicio_dia: Mapped[time | None] = mapped_column(Time)
 
     cliente: Mapped["Cliente"] = relationship(back_populates="plantas")
     lineas: Mapped[list["Linea"]] = relationship(back_populates="planta")

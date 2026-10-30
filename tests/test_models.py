@@ -25,7 +25,9 @@ def sesion():
 def crear_ledesma(sesion):
     """Carga LEDESMA: 1 línea, 3 eBOE y 3 puntos de muestreo por eBOE."""
     cliente = Cliente(nombre="LEDESMA", pais="Argentina")
-    planta = Planta(nombre="LEDESMA", pais="Argentina", cliente=cliente)
+    planta = Planta(nombre="LEDESMA", pais="Argentina", cliente=cliente, blanco_ml=0.2,
+                    factor_aceite_fruta=68.8416, factor_aceite_emulsion=3.45,
+                    hora_inicio_dia=time(5, 0))
     linea = Linea(nombre="Línea 1", planta=planta)
     for numero in [1, 2, 3]:
         equipo = Equipo(codigo=f"LED-BOE-0{numero}", nombre=f"eBOE {numero}", tipo="eBOE",
@@ -58,7 +60,7 @@ def test_cada_punto_sabe_a_que_eboe_pertenece(sesion):
         assert sorted(p.tipo for p in equipo.puntos_muestreo) == sorted(TIPOS_PUNTO)
 
 
-def test_planta_usa_parametros_de_calculo_por_defecto(sesion):
+def test_planta_guarda_sus_parametros_de_calculo(sesion):
     planta = crear_ledesma(sesion)
 
     assert planta.blanco_ml == 0.2
@@ -66,6 +68,16 @@ def test_planta_usa_parametros_de_calculo_por_defecto(sesion):
     assert planta.factor_aceite_emulsion == 3.45
     assert planta.hora_inicio_dia == time(5, 0)
     assert planta.pais == "Argentina"
+
+
+def test_planta_sin_parametros_queda_vacia(sesion):
+    planta = crear_ledesma(sesion)
+    nueva = Planta(nombre="Otra", pais="Uruguay", cliente=planta.cliente)
+    sesion.add(nueva)
+    sesion.commit()
+
+    assert (nueva.blanco_ml, nueva.factor_aceite_fruta, nueva.factor_aceite_emulsion,
+            nueva.hora_inicio_dia) == (None, None, None, None)
 
 
 def test_equipo_nuevo_queda_operativo_por_defecto(sesion):

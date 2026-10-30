@@ -170,14 +170,14 @@ def test_equipo_que_sale_de_la_planilla_genera_aviso(sesion, datos, tmp_path):
     assert contar(sesion)["Equipo"] == 3     # avisa, pero no borra
 
 
-def test_celdas_vacias_y_parametros_por_defecto(sesion, datos, tmp_path):
+def test_celdas_vacias_quedan_vacias(sesion, datos, tmp_path):
     importar_maestros(sesion, escribir_planilla(tmp_path / "m.xlsx", datos))
 
     norte = sesion.scalars(select(Planta).where(Planta.nombre == "Planta Norte")).one()
     sur = sesion.scalars(select(Planta).where(Planta.nombre == "Planta Sur")).one()
     assert (norte.blanco_ml, norte.factor_aceite_fruta, norte.hora_inicio_dia) == (0.3, 68.0, time(6, 0))
     assert (sur.blanco_ml, sur.factor_aceite_fruta, sur.factor_aceite_emulsion,
-            sur.hora_inicio_dia) == (0.2, 68.8416, 3.45, time(5, 0))
+            sur.hora_inicio_dia) == (None, None, None, None)   # vacíos en la planilla
 
     jex = equipo_por_codigo(sesion, "SUR-JEX-01")
     assert jex.codigo_activo_mc is None
