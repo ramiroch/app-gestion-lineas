@@ -4,6 +4,7 @@ from datetime import time
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
@@ -27,7 +28,8 @@ def crear_ledesma(sesion):
     planta = Planta(nombre="LEDESMA", pais="Argentina", cliente=cliente)
     linea = Linea(nombre="Línea 1", planta=planta)
     for numero in [1, 2, 3]:
-        equipo = Equipo(nombre=f"eBOE {numero}", tipo="eBOE", numero=numero, linea=linea)
+        equipo = Equipo(codigo=f"LED-BOE-0{numero}", nombre=f"eBOE {numero}", tipo="eBOE",
+                        numero=numero, linea=linea)
         for tipo in TIPOS_PUNTO:
             PuntoMuestreo(tipo=tipo, nombre=f"eBOE {numero} – {tipo}", equipo=equipo)
     sesion.add(cliente)
@@ -76,7 +78,7 @@ def test_equipo_nuevo_queda_operativo_por_defecto(sesion):
 
 def test_equipo_pendiente_de_instalacion(sesion):
     planta = crear_ledesma(sesion)
-    desludger = Equipo(nombre="DESLUDGER N°1", tipo="desludger", numero=1,
+    desludger = Equipo(codigo="LED-DES-01", nombre="DESLUDGER N°1", tipo="desludger", numero=1,
                        estado="Pendiente de instalación", linea=planta.lineas[0])
     sesion.add(desludger)
     sesion.commit()
@@ -90,16 +92,39 @@ def test_equipo_pendiente_de_instalacion(sesion):
 
 def test_estado_invalido_da_error():
     with pytest.raises(ValueError, match="no válido"):
-        Equipo(nombre="eBOE 9", tipo="eBOE", numero=9, estado="Roto")
+        Equipo(codigo="LED-BOE-09", nombre="eBOE 9", tipo="eBOE", numero=9, estado="Roto")
 
 
 def test_numero_activo_fijo_puede_repetirse(sesion):
     planta = crear_ledesma(sesion)
     for numero in [1, 2]:
-        sesion.add(Equipo(nombre=f"JEX N°{numero}", tipo="JEX", numero=numero,
-                          numero_activo_fijo="AF-100", linea=planta.lineas[0]))
+        sesion.add(Equipo(codigo=f"LED-JEX-0{numero}", nombre=f"JEX N°{numero}", tipo="JEX",
+                          numero=numero, numero_activo_fijo="AF-100", linea=planta.lineas[0]))
     sesion.commit()
 
     repetidos = sesion.scalars(select(Equipo).where(Equipo.numero_activo_fijo == "AF-100")).all()
 
     assert len(repetidos) == 2
+
+
+def test_codigo_de_equipo_es_unico(sesion):
+    planta = crear_ledesma(sesion)
+    sesion.add(Equipo(codigo="LED-BOE-01", nombre="otro", tipo="eBOE", numero=9,
+                      linea=planta.lineas[0]))
+
+    with pytest.raises(IntegrityError):
+        sesion.commit()
+
+
+def test_codigo_de_equipo_nunca_cambia(sesion):
+    crear_ledesma(sesion)
+    equipo = sesion.scalars(select(Equipo).where(Equipo.codigo == "LED-BOE-01")).one()
+
+    equipo.codigo = "LED-BOE-01"   # asignar el mismo código no es un cambio
+    with pytest.raises(ValueError, match="nunca cambia"):
+        equipo.codigo = "LED-BOE-99"
+
+
+def test_codigo_vacio_da_error():
+    with pytest.raises(ValueError, match="necesita un código"):
+        Equipo(codigo="", nombre="eBOE 9", tipo="eBOE", numero=9)

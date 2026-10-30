@@ -50,6 +50,7 @@ class Planta(Base):
 
     cliente: Mapped["Cliente"] = relationship(back_populates="plantas")
     lineas: Mapped[list["Linea"]] = relationship(back_populates="planta")
+    rangos: Mapped[list["RangoReferencia"]] = relationship(back_populates="planta")
 
 
 class Linea(Base):
@@ -66,6 +67,8 @@ class Linea(Base):
 class Equipo(Base):
     """Equipo de una línea (eBOE, mBOE, JEX, desludger, etc.).
 
+    codigo: identificador único que nunca cambia, SIGLA_PLANTA-TIPO-NN (por ejemplo
+    LED-BOE-01); ver core/codigos_equipo.py.
     nombre: el nombre del equipo en Maintenance Connection (MC).
     estado: uno de ESTADOS_EQUIPO; por defecto "Operativo".
     modelo, serie_mc, numero_serie, codigo_activo_mc y numero_activo_fijo son
@@ -76,6 +79,7 @@ class Equipo(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     linea_id: Mapped[int] = mapped_column(ForeignKey("linea.id"))
+    codigo: Mapped[str] = mapped_column(String(30), unique=True)  # por ejemplo "LED-BOE-01"
     nombre: Mapped[str] = mapped_column(String(100))  # por ejemplo "JEX N° 2"
     tipo: Mapped[str] = mapped_column(String(50))  # por ejemplo "eBOE"
     numero: Mapped[int]  # eBOE 1, eBOE 2, ...
@@ -89,6 +93,15 @@ class Equipo(Base):
 
     linea: Mapped["Linea"] = relationship(back_populates="equipos")
     puntos_muestreo: Mapped[list["PuntoMuestreo"]] = relationship(back_populates="equipo")
+
+    @validates("codigo")
+    def validar_codigo(self, clave, codigo):
+        """Controla que el código no esté vacío y que nunca cambie una vez asignado."""
+        if not codigo:
+            raise ValueError("El equipo necesita un código.")
+        if self.codigo is not None and codigo != self.codigo:
+            raise ValueError(f'El código de un equipo nunca cambia ("{self.codigo}" → "{codigo}").')
+        return codigo
 
     @validates("estado")
     def validar_estado(self, clave, estado):
@@ -114,3 +127,25 @@ class PuntoMuestreo(Base):
     nombre: Mapped[str] = mapped_column(String(100))
 
     equipo: Mapped["Equipo"] = relationship(back_populates="puntos_muestreo")
+
+
+class RangoReferencia(Base):
+    """Rango objetivo de una variable en una planta (por ejemplo, eficiencia eBOE 80–90 %).
+
+    punto_o_equipo es texto libre ("BOE (todos)", "Emulsión (licor)", "Planta").
+    minimo y maximo son opcionales: hay rangos con un solo límite (°Brix ≤ 5).
+    """
+
+    __tablename__ = "rango_referencia"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    planta_id: Mapped[int] = mapped_column(ForeignKey("planta.id"))
+    variable: Mapped[str] = mapped_column(String(100))
+    punto_o_equipo: Mapped[str | None] = mapped_column(String(100))
+    fruta: Mapped[str | None] = mapped_column(String(50))
+    minimo: Mapped[float | None] = mapped_column(Float)
+    maximo: Mapped[float | None] = mapped_column(Float)
+    unidad: Mapped[str | None] = mapped_column(String(50))
+    fuente: Mapped[str | None] = mapped_column(String(200))
+
+    planta: Mapped["Planta"] = relationship(back_populates="rangos")
