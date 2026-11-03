@@ -2,7 +2,7 @@
 
 import copy
 import csv
-from datetime import time
+from datetime import datetime, time
 
 import pytest
 from openpyxl import Workbook
@@ -11,7 +11,8 @@ from sqlalchemy import func, select
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
 from core.importar_maestros import guardar_reporte, importar_maestros, texto_resumen
-from core.models import Cliente, Equipo, Linea, Planta, PuntoMuestreo, RangoReferencia
+from core.models import Cliente, Equipo, Linea, Planta, PuntoMuestreo, RangoReferencia, Turno
+from core.turnos import turno_de
 
 # Misma estructura que data/maestros_clientes.xlsx, con datos ficticios.
 PLANILLA_BASE = {
@@ -25,6 +26,12 @@ PLANILLA_BASE = {
          "factor_aceite_emulsion", "hora_inicio_dia", "observaciones", "sigla"],
         ["CLIENTE A", "Planta Norte", "Argentina", 0.3, 68.0, 3.4, time(6, 0), "nota", "NOR"],
         ["CLIENTE B", "Planta Sur", "Uruguay", None, None, None, None, None, "SUR"],
+    ],
+    "Turno": [
+        ["cliente", "planta", "nombre", "hora_inicio", "hora_fin"],
+        ["CLIENTE A", "Planta Norte", "M", time(6, 0), time(13, 59)],
+        ["CLIENTE A", "Planta Norte", "T", time(14, 0), time(21, 59)],
+        ["CLIENTE A", "Planta Norte", "N", "22:00", "05:59"],   # como texto y cruzando la medianoche
     ],
     "Linea": [
         ["cliente", "planta", "nombre"],
@@ -59,7 +66,7 @@ PLANILLA_BASE = {
     ],
 }
 
-MODELOS = [Cliente, Planta, Linea, Equipo, PuntoMuestreo, RangoReferencia]
+MODELOS = [Cliente, Planta, Turno, Linea, Equipo, PuntoMuestreo, RangoReferencia]
 
 
 def escribir_planilla(ruta, datos):
@@ -107,10 +114,29 @@ def test_primera_corrida_crea_todo(sesion, datos, tmp_path):
 
     assert errores == [] and avisos == []
     assert {hoja: c["creados"] for hoja, c in resumen.items()} == {
-        "Cliente": 2, "Planta": 2, "Linea": 2, "Equipo": 3, "PuntoMuestreo": 2, "RangoReferencia": 2}
-    assert contar(sesion) == {"Cliente": 2, "Planta": 2, "Linea": 2, "Equipo": 3,
+        "Cliente": 2, "Planta": 2, "Turno": 3, "Linea": 2, "Equipo": 3, "PuntoMuestreo": 2,
+        "RangoReferencia": 2}
+    assert contar(sesion) == {"Cliente": 2, "Planta": 2, "Turno": 3, "Linea": 2, "Equipo": 3,
                               "PuntoMuestreo": 2, "RangoReferencia": 2}
     assert equipo_por_codigo(sesion, "NOR-BOE-01").puntos_muestreo[0].tipo == "fruta entrada"
+
+
+def test_importa_los_turnos_y_sirven_para_calcular(sesion, datos, tmp_path):
+    importar_maestros(sesion, escribir_planilla(tmp_path / "m.xlsx", datos))
+
+    norte = sesion.scalars(select(Planta).where(Planta.nombre == "Planta Norte")).one()
+    turno_n = next(t for t in norte.turnos if t.nombre == "N")
+    assert (turno_n.hora_inicio, turno_n.hora_fin) == (time(22, 0), time(5, 59))
+    assert turno_de(norte, datetime(2025, 7, 10, 3, 0)).nombre == "N"
+
+
+def test_turno_con_hora_invalida_va_al_reporte(sesion, datos, tmp_path):
+    datos["Turno"][1][3] = "seis"
+
+    _, errores, _ = importar_maestros(sesion, escribir_planilla(tmp_path / "m.xlsx", datos))
+
+    assert [(hoja, fila) for hoja, fila, _ in errores] == [("Turno", 2)]
+    assert '"hora_inicio" tiene que ser una hora' in errores[0][2]
 
 
 def test_correr_dos_veces_no_duplica(sesion, datos, tmp_path):

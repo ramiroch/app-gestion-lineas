@@ -1,6 +1,6 @@
 """Importa los datos maestros desde data/maestros_clientes.xlsx a la base.
 
-Lee las hojas Cliente, Planta, Linea, Equipo, PuntoMuestreo y RangoReferencia
+Lee las hojas Cliente, Planta, Turno, Linea, Equipo, PuntoMuestreo y RangoReferencia
 (en ese orden, porque cada una necesita a su "padre" ya cargado).
 
 - Se puede correr muchas veces: si un registro ya existe se actualiza, no se duplica.
@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
 from core.models import (ESTADOS_EQUIPO, Cliente, Equipo, Linea, Planta, PuntoMuestreo,
-                         RangoReferencia)
+                         RangoReferencia, Turno)
 
 CARPETA_DATOS = Path(__file__).resolve().parent.parent / "data"
 RUTA_PLANILLA = CARPETA_DATOS / "maestros_clientes.xlsx"
@@ -36,6 +36,7 @@ COLUMNAS = {
     "Cliente": ["nombre", "pais_casa_matriz"],
     "Planta": ["cliente", "nombre", "pais", "blanco_ml", "factor_aceite_fruta",
                "factor_aceite_emulsion", "hora_inicio_dia"],
+    "Turno": ["cliente", "planta", "nombre", "hora_inicio", "hora_fin"],
     "Linea": ["cliente", "planta", "nombre"],
     "Equipo": ["codigo", "cliente", "planta", "linea", "nombre", "tipo", "numero", "modelo",
                "serie_mc", "numero_serie", "codigo_activo_mc", "numero_activo_fijo", "estado"],
@@ -48,6 +49,7 @@ COLUMNAS = {
 CLAVES = {
     "Cliente": ["nombre"],
     "Planta": ["cliente", "nombre"],
+    "Turno": ["cliente", "planta", "nombre"],
     "Linea": ["cliente", "planta", "nombre"],
     "Equipo": ["codigo"],
     "PuntoMuestreo": ["cliente", "planta", "equipo (codigo)", "nombre"],
@@ -207,6 +209,18 @@ def _fila_planta(sesion: Session, datos: dict):
     return _buscar(cliente.plantas, nombre=campos["nombre"]), campos
 
 
+def _fila_turno(sesion: Session, datos: dict):
+    _obligatorios(datos, "cliente", "planta", "nombre", "hora_inicio", "hora_fin")
+    planta = _buscar_planta(sesion, datos["cliente"], datos["planta"])
+    campos = {
+        "planta": planta,
+        "nombre": _texto(datos["nombre"]),
+        "hora_inicio": _hora(datos, "hora_inicio"),
+        "hora_fin": _hora(datos, "hora_fin"),
+    }
+    return _buscar(planta.turnos, nombre=campos["nombre"]), campos
+
+
 def _fila_linea(sesion: Session, datos: dict):
     _obligatorios(datos, "cliente", "planta", "nombre")
     planta = _buscar_planta(sesion, datos["cliente"], datos["planta"])
@@ -285,6 +299,7 @@ def _fila_rango(sesion: Session, datos: dict):
 HOJAS = [
     ("Cliente", Cliente, _fila_cliente),
     ("Planta", Planta, _fila_planta),
+    ("Turno", Turno, _fila_turno),
     ("Linea", Linea, _fila_linea),
     ("Equipo", Equipo, _fila_equipo),
     ("PuntoMuestreo", PuntoMuestreo, _fila_punto_muestreo),

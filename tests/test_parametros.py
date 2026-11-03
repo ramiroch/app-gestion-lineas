@@ -7,7 +7,7 @@ import pytest
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
 from core.models import Cliente, Planta
-from core.parametros import ParametrosIncompletos, parametros_planta
+from core.parametros import ParametrosIncompletos, parametros_planta, validar_parametros
 
 
 @pytest.fixture
@@ -68,3 +68,19 @@ def test_factor_cero_o_blanco_negativo(sesion):
 def test_planta_inexistente(sesion):
     with pytest.raises(ValueError, match="No existe la planta"):
         parametros_planta(sesion, 999)
+
+
+def test_solo_los_parametros_requeridos(sesion):
+    planta_id = crear_planta(sesion, hora_inicio_dia=time(5, 0))   # sin blanco ni factores
+
+    assert parametros_planta(sesion, planta_id, ["hora_inicio_dia"]) == {"hora_inicio_dia": time(5, 0)}
+    with pytest.raises(ParametrosIncompletos, match="no tiene definido el blanco"):
+        parametros_planta(sesion, planta_id, ["blanco_ml", "hora_inicio_dia"])
+
+
+def test_validar_parametros_con_la_planta_en_memoria():
+    planta = Planta(nombre="Sin guardar", factor_aceite_emulsion=3.45)
+
+    assert validar_parametros(planta, ["factor_aceite_emulsion"]) == {"factor_aceite_emulsion": 3.45}
+    with pytest.raises(ValueError, match="desconocido"):
+        validar_parametros(planta, ["factor_inventado"])

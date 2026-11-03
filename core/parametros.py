@@ -20,8 +20,8 @@ class ParametrosIncompletos(ValueError):
     """La planta no tiene definidos (o tiene mal) sus parámetros de cálculo."""
 
 
-def parametros_planta(sesion: Session, planta_id: int) -> dict:
-    """Devuelve {blanco_ml, factor_aceite_fruta, factor_aceite_emulsion, hora_inicio_dia}.
+def parametros_planta(sesion: Session, planta_id: int, requeridos: list[str] | None = None) -> dict:
+    """Devuelve los parámetros de cálculo de la planta (todos, o solo los `requeridos`).
 
     Unidades: blanco en mL; factores sin unidad (fórmula de la técnica Scott:
     resultado = (mL − blanco) × N × factor / g); hora como datetime.time.
@@ -31,7 +31,20 @@ def parametros_planta(sesion: Session, planta_id: int) -> dict:
     planta = sesion.get(Planta, planta_id)
     if planta is None:
         raise ValueError(f"No existe la planta con id {planta_id}.")
-    valores = {parametro: getattr(planta, parametro) for parametro in DESCRIPCION_PARAMETROS}
+    return validar_parametros(planta, requeridos)
+
+
+def validar_parametros(planta: Planta, requeridos: list[str] | None = None) -> dict:
+    """Igual que parametros_planta(), pero con la planta ya leída de la base.
+
+    requeridos: nombres de los parámetros que necesita el cálculo (por ejemplo
+    ["hora_inicio_dia"]). Si es None, se exigen los cuatro.
+    """
+    requeridos = list(DESCRIPCION_PARAMETROS) if requeridos is None else requeridos
+    desconocidos = [p for p in requeridos if p not in DESCRIPCION_PARAMETROS]
+    if desconocidos:
+        raise ValueError(f"Parámetro desconocido: {', '.join(desconocidos)}.")
+    valores = {parametro: getattr(planta, parametro) for parametro in requeridos}
 
     faltan = [DESCRIPCION_PARAMETROS[p] for p, valor in valores.items() if valor is None]
     if faltan:
@@ -41,11 +54,11 @@ def parametros_planta(sesion: Session, planta_id: int) -> dict:
             f'La planta "{planta.nombre}" no tiene {definido} {_enumerar(faltan)}. {completar} '
             "en la hoja Planta de data/maestros_clientes.xlsx y volvé a importar.")
 
-    if valores["blanco_ml"] < 0:
+    if valores.get("blanco_ml", 0) < 0:
         raise ParametrosIncompletos(
             f'La planta "{planta.nombre}" tiene el blanco negativo ({valores["blanco_ml"]} mL).')
     for factor in ("factor_aceite_fruta", "factor_aceite_emulsion"):
-        if valores[factor] <= 0:
+        if factor in valores and valores[factor] <= 0:
             raise ParametrosIncompletos(f'La planta "{planta.nombre}" tiene '
                                         f"{DESCRIPCION_PARAMETROS[factor]} en {valores[factor]}: "
                                         "tiene que ser mayor que 0.")

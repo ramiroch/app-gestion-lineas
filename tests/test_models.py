@@ -1,6 +1,6 @@
 """Pruebas de core/models.py y core/crear_base.py."""
 
-from datetime import time
+from datetime import date, datetime, time
 
 import pytest
 from sqlalchemy import select
@@ -8,7 +8,8 @@ from sqlalchemy.exc import IntegrityError
 
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
-from core.models import Cliente, Equipo, Linea, Planta, PuntoMuestreo
+from core.models import (AnalisisScott, Cliente, Equipo, LecturaOperacion, Linea, Planta,
+                         Proceso, PuntoMuestreo, RegistroProduccion, Turno, texto_origen)
 
 TIPOS_PUNTO = ["fruta entrada", "fruta salida", "emulsión"]
 
@@ -140,3 +141,191 @@ def test_codigo_de_equipo_nunca_cambia(sesion):
 def test_codigo_vacio_da_error():
     with pytest.raises(ValueError, match="necesita un código"):
         Equipo(codigo="", nombre="eBOE 9", tipo="eBOE", numero=9)
+
+
+# ---------------------------------------------------------------- turnos, procesos y datos de planta
+
+@pytest.fixture
+def motor():
+    """Motor de una base en memoria compartida entre sesiones (para leer con una sesión nueva)."""
+    motor = crear_motor("sqlite://")
+    crear_tablas(motor)
+    return motor
+
+
+def cargar_ledesma_con_datos(motor):
+    """LEDESMA con turnos, un proceso, un análisis, una lectura y un registro de producción."""
+    with crear_sesion(motor) as sesion:
+        planta = crear_ledesma(sesion)
+        turno_n = Turno(nombre="N", hora_inicio=time(21, 0), hora_fin=time(4, 59), planta=planta)
+        turno_m = Turno(nombre="M", hora_inicio=time(5, 0), hora_fin=time(12, 59), planta=planta)
+        proceso = Proceso(numero=3, temporada=2025, planta=planta)
+        # Con la planta ya guardada, los objetos nuevos hay que agregarlos a la sesión a mano.
+        sesion.add_all([turno_n, turno_m, proceso])
+        boe1 = sesion.scalars(select(Equipo).where(Equipo.codigo == "LED-BOE-01")).one()
+        entrada = next(p for p in boe1.puntos_muestreo if p.tipo == "fruta entrada")
+        sesion.add_all([
+            AnalisisScott(punto_muestreo=entrada, fecha_hora=datetime(2025, 6, 25, 2, 0), proceso=proceso,
+                          analista="CUESTA", fruta="N Val S/R", peso_muestra_g=25.0, vol_ml=7.4,
+                          blanco_ml=0.2, normalidad=0.1, peso_fruta_kg=10.2, n_frutos=48,
+                          calidad="Firme", ticket="T-1", licuadora="BERKEL", cargado_por="prueba"),
+            LecturaOperacion(equipo=boe1, fecha_hora=datetime(2025, 6, 25, 2, 0), operador="PÉREZ",
+                             programa="N3", flip_gate=6, tph=14.5, caudal_fase_pesada=3.2,
+                             cargado_por="prueba"),
+            RegistroProduccion(planta=planta, fecha_produccion=date(2025, 6, 24), turno=turno_n,
+                               proceso=proceso, fruta_t=310.0, aceite_envasado_kg=1650.0,
+                               jugo_conc_kg=22000.0, reproceso_kg=120.0, qf3=1.2, brix_fritz=65.1,
+                               cargado_por="prueba"),
+        ])
+        sesion.commit()
+
+
+def test_guardar_y_leer_turnos_y_proceso(motor):
+    cargar_ledesma_con_datos(motor)
+
+    with crear_sesion(motor) as sesion:
+        planta = sesion.scalars(select(Planta).where(Planta.nombre == "LEDESMA")).one()
+        turnos = {t.nombre: (t.hora_inicio, t.hora_fin) for t in planta.turnos}
+        assert turnos == {"N": (time(21, 0), time(4, 59)), "M": (time(5, 0), time(12, 59))}
+        assert [(p.numero, p.temporada) for p in planta.procesos] == [(3, 2025)]
+
+
+def test_guardar_y_leer_analisis_scott(motor):
+    cargar_ledesma_con_datos(motor)
+
+    with crear_sesion(motor) as sesion:
+        analisis = sesion.scalars(select(AnalisisScott)).one()
+        assert analisis.punto_muestreo.equipo.codigo == "LED-BOE-01"
+        assert analisis.punto_muestreo.tipo == "fruta entrada"
+        assert analisis.proceso.numero == 3
+        assert (analisis.peso_muestra_g, analisis.vol_ml, analisis.blanco_ml,
+                analisis.normalidad) == (25.0, 7.4, 0.2, 0.1)
+        assert (analisis.n_frutos, analisis.calidad, analisis.licuadora) == (48, "Firme", "BERKEL")
+        assert analisis.ph is None and analisis.observaciones is None
+        assert analisis.cargado_por == "prueba"
+        assert isinstance(analisis.cargado_en, datetime)    # se completa solo
+
+
+def test_guardar_y_leer_lectura_operacion(motor):
+    cargar_ledesma_con_datos(motor)
+
+    with crear_sesion(motor) as sesion:
+        lectura = sesion.scalars(select(LecturaOperacion)).one()
+        assert lectura.equipo.codigo == "LED-BOE-01"
+        assert (lectura.programa, lectura.flip_gate, lectura.tph, lectura.caudal_fase_pesada) == (
+            "N3", 6, 14.5, 3.2)
+        assert lectura.equipo.lecturas == [lectura]
+
+
+def test_guardar_y_leer_registro_produccion(motor):
+    cargar_ledesma_con_datos(motor)
+
+    with crear_sesion(motor) as sesion:
+        registro = sesion.scalars(select(RegistroProduccion)).one()
+        assert (registro.planta.nombre, registro.fecha_produccion, registro.turno.nombre) == (
+            "LEDESMA", date(2025, 6, 24), "N")
+        assert registro.proceso.numero == 3
+        assert (registro.fruta_t, registro.aceite_envasado_kg, registro.jugo_conc_kg,
+                registro.reproceso_kg, registro.qf3, registro.brix_fritz) == (
+            310.0, 1650.0, 22000.0, 120.0, 1.2, 65.1)
+
+
+def test_registro_produccion_unico_por_planta_fecha_y_turno(motor):
+    cargar_ledesma_con_datos(motor)
+
+    with crear_sesion(motor) as sesion:
+        planta = sesion.scalars(select(Planta).where(Planta.nombre == "LEDESMA")).one()
+        turno_n = next(t for t in planta.turnos if t.nombre == "N")
+        sesion.add(RegistroProduccion(planta=planta, fecha_produccion=date(2025, 6, 24),
+                                      turno=turno_n, cargado_por="prueba"))
+        with pytest.raises(IntegrityError):
+            sesion.commit()
+
+
+def test_turno_y_proceso_unicos(motor):
+    cargar_ledesma_con_datos(motor)
+
+    with crear_sesion(motor) as sesion:
+        planta = sesion.scalars(select(Planta).where(Planta.nombre == "LEDESMA")).one()
+        sesion.add(Turno(nombre="M", hora_inicio=time(6, 0), hora_fin=time(13, 59), planta=planta))
+        with pytest.raises(IntegrityError):
+            sesion.commit()
+        sesion.rollback()
+        sesion.add(Proceso(numero=3, temporada=2025, planta=planta))
+        with pytest.raises(IntegrityError):
+            sesion.commit()
+
+
+@pytest.mark.parametrize("campo, valor, mensaje", [
+    ("peso_muestra_g", 0, "mayor que 0"),
+    ("normalidad", -0.1, "mayor que 0"),
+    ("vol_ml", -1, "no puede ser negativo"),
+    ("blanco_ml", -0.2, "no puede ser negativo"),
+    ("ph", 15, "entre 0 y 14"),
+])
+def test_analisis_scott_valida_datos_crudos(campo, valor, mensaje):
+    with pytest.raises(ValueError, match=mensaje):
+        AnalisisScott(**{campo: valor})
+
+
+def test_lectura_y_produccion_validan_valores():
+    with pytest.raises(ValueError, match="entre 1 y 12"):
+        LecturaOperacion(flip_gate=13)
+    with pytest.raises(ValueError, match="no puede ser negativo"):
+        LecturaOperacion(tph=-5)
+    with pytest.raises(ValueError, match="no puede ser negativo"):
+        RegistroProduccion(fruta_t=-1)
+
+
+def test_analisis_unico_por_punto_y_fecha_hora(motor):
+    cargar_ledesma_con_datos(motor)
+
+    with crear_sesion(motor) as sesion:
+        original = sesion.scalars(select(AnalisisScott)).one()
+        sesion.add(AnalisisScott(punto_muestreo=original.punto_muestreo, fecha_hora=original.fecha_hora,
+                                 proceso=original.proceso, analista="OTRO", peso_muestra_g=20.0,
+                                 vol_ml=5.0, blanco_ml=0.2, normalidad=0.1, cargado_por="prueba"))
+        with pytest.raises(IntegrityError):
+            sesion.commit()
+
+
+def test_analisis_en_otro_punto_o_en_otra_hora_no_choca(motor):
+    cargar_ledesma_con_datos(motor)
+
+    with crear_sesion(motor) as sesion:
+        original = sesion.scalars(select(AnalisisScott)).one()
+        salida = next(p for p in original.punto_muestreo.equipo.puntos_muestreo if p.tipo == "fruta salida")
+        for punto, momento in ((salida, original.fecha_hora),
+                               (original.punto_muestreo, datetime(2025, 6, 25, 3, 0))):
+            sesion.add(AnalisisScott(punto_muestreo=punto, fecha_hora=momento, proceso=original.proceso,
+                                     analista="CUESTA", peso_muestra_g=25.0, vol_ml=1.0,
+                                     blanco_ml=0.2, normalidad=0.01, cargado_por="prueba"))
+        sesion.commit()
+
+        assert len(sesion.scalars(select(AnalisisScott)).all()) == 3
+
+
+def test_lectura_unica_por_equipo_y_fecha_hora(motor):
+    cargar_ledesma_con_datos(motor)
+
+    with crear_sesion(motor) as sesion:
+        original = sesion.scalars(select(LecturaOperacion)).one()
+        sesion.add(LecturaOperacion(equipo=original.equipo, fecha_hora=original.fecha_hora, tph=10.0,
+                                    cargado_por="prueba"))
+        with pytest.raises(IntegrityError):
+            sesion.commit()
+
+
+def test_origen_del_dato_importado_y_vacio_si_es_manual(motor):
+    cargar_ledesma_con_datos(motor)
+
+    with crear_sesion(motor) as sesion:
+        lectura = sesion.scalars(select(LecturaOperacion)).one()
+        lectura.origen = texto_origen("eficiencia eBOE Naranja 25 2.xlsm", "BOE", 125)
+        sesion.commit()
+
+    with crear_sesion(motor) as sesion:
+        assert sesion.scalars(select(LecturaOperacion)).one().origen == (
+            "eficiencia eBOE Naranja 25 2.xlsm › BOE › fila 125")
+        assert sesion.scalars(select(AnalisisScott)).one().origen is None        # cargado a mano
+        assert sesion.scalars(select(RegistroProduccion)).one().origen is None

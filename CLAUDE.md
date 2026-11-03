@@ -31,7 +31,8 @@ Sistema de gestión para las líneas de aceite y jugo de los clientes de Brown. 
 ### Datos maestros
 - Única fuente: `data/maestros_clientes.xlsx`. Se cargan con `python -m core.importar_maestros` (se puede correr muchas veces; las filas con error van a `data/reporte_maestros.csv`).
 - Cada equipo se identifica por su `codigo` (SIGLA_PLANTA-TIPO-NN, por ejemplo LED-BOE-01), único y que **nunca cambia**.
-- **Parámetros de cálculo de la planta** (blanco_ml, factor_aceite_fruta, factor_aceite_emulsion, hora_inicio_dia): opcionales y **sin valor por defecto**. Lo que está vacío en la planilla queda vacío en la base y la pantalla lo muestra como "a definir". Los cálculos los leen **siempre** con `core.parametros.parametros_planta()`, que da un error claro si falta alguno. Nunca uses los valores de LEDESMA para otra planta.
+- **Parámetros de cálculo de la planta** (blanco_ml, factor_aceite_fruta, factor_aceite_emulsion, hora_inicio_dia): opcionales y **sin valor por defecto**. Lo que está vacío en la planilla queda vacío en la base y la pantalla lo muestra como "a definir". Los cálculos los leen **siempre** con `core.parametros.parametros_planta()` (o `validar_parametros()` si ya tienen la planta), pidiendo solo los que necesitan; dan un error claro si falta alguno. Nunca uses los valores de LEDESMA para otra planta.
+- **Turnos** (hoja Turno): turno y día de producción se calculan con `core.turnos.turno_de()` y `fecha_produccion()`, nunca se guardan. El turno N cruza la medianoche.
 
 ## Stack (versión 0, local)
 - Python 3.13, entorno virtual en `.venv`.
@@ -60,6 +61,7 @@ LimitesControl (variable, punto, período base, LC, LCS, LCI)  ·  Alerta
 - Tipos de equipo: eBOE 6107E, mBOE 6108, bBOE 6107B, JEX 620/720, centrífuga primaria, desludger, pulidora, finisher.
 - **Guardar siempre los datos crudos** (mL, blanco, normalidad, gramos, factor) y calcular el resultado. Nunca guardar solo el resultado.
 - Cada registro guarda quién lo cargó y cuándo.
+- **Datos importados:** AnalisisScott es único por punto de muestreo + fecha_hora; LecturaOperacion por equipo + fecha_hora; RegistroProduccion por planta + fecha de producción + turno. El campo `origen` guarda archivo › hoja › fila (`texto_origen()`); queda vacío en la carga manual. Si el Excel trae filas con la misma clave y datos distintos, no se carga ninguna y van al reporte (`core.duplicados.separar_repetidas()`).
 
 ## Fórmulas (fuente: técnica Scott y manual BOE de Brown)
 | KPI | Fórmula | Referencia limón Argentina |
@@ -84,6 +86,12 @@ CAF = kg de aceite por tonelada de fruta a la salida del BOE (menor es mejor).
 - Reglas de Nelson 1–8, configurables por variable.
 - Capacidad: Cp/Cpk con sigma dentro (MR̄/d2), Pp/Ppk con sigma total; Anderson-Darling; Box-Cox si no es normal.
 - **Todo resultado estadístico se valida contra Minitab con una prueba automática.**
+
+## Reglas de análisis
+- Los promedios de eficiencia, rendimiento y aceite por día, turno, proceso o temporada se **ponderan por toneladas procesadas** cuando hay dato de producción; si no hay, se usa el promedio simple y se aclara en pantalla.
+- Todo gráfico, tarjeta o tabla muestra el **N** con el que se calculó y avisa cuando **N < 3**.
+- Los outliers se **marcan, nunca se borran**.
+- Todas las páginas de análisis usan la **barra de filtros global** (fechas de producción, eBOE, turno, proceso, programa).
 
 ## Reglas de código
 - Funciones puras en `core/` con docstring: qué calcula, fórmula, unidades y fuente.
