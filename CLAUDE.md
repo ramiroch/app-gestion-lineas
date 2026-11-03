@@ -27,6 +27,7 @@ Sistema de gestión para las líneas de aceite y jugo de los clientes de Brown. 
 - Objetivos: eficiencia eBOE 80–90 %; rendimiento eBOE 6,6–6,8 kg/t; aceite en emulsión 0,80–1,10 %; °Brix emulsión ≤ 5; pH 3–7.
 - Producción por turno (carga manual): fruta procesada t, aceite envasado kg, jugo concentrado kg, reproceso kg.
 - Nunca importes los promedios de la hoja Resumen: se recalculan desde la hoja BOE.
+- En la hoja BOE, la columna **Fecha es la fecha de producción**: una muestra de 00:00–04:59 se tomó el día siguiente. `core/importar_ledesma.py` arma la fecha_hora real comparando con la fila anterior del mismo proceso, día y temporada (los procesos se renumeran cada temporada).
 
 ### Datos maestros
 - Única fuente: `data/maestros_clientes.xlsx`. Se cargan con `python -m core.importar_maestros` (se puede correr muchas veces; las filas con error van a `data/reporte_maestros.csv`).
@@ -61,7 +62,7 @@ LimitesControl (variable, punto, período base, LC, LCS, LCI)  ·  Alerta
 - Tipos de equipo: eBOE 6107E, mBOE 6108, bBOE 6107B, JEX 620/720, centrífuga primaria, desludger, pulidora, finisher.
 - **Guardar siempre los datos crudos** (mL, blanco, normalidad, gramos, factor) y calcular el resultado. Nunca guardar solo el resultado.
 - Cada registro guarda quién lo cargó y cuándo.
-- **Datos importados:** AnalisisScott es único por punto de muestreo + fecha_hora; LecturaOperacion por equipo + fecha_hora; RegistroProduccion por planta + fecha de producción + turno. El campo `origen` guarda archivo › hoja › fila (`texto_origen()`); queda vacío en la carga manual. Si el Excel trae filas con la misma clave y datos distintos, no se carga ninguna y van al reporte (`core.duplicados.separar_repetidas()`).
+- **Datos importados:** AnalisisScott es único por punto de muestreo + fecha_hora; LecturaOperacion por equipo + fecha_hora; RegistroProduccion por planta + fecha de producción + turno + proceso (un turno puede tener dos procesos; las toneladas del turno se suman con `core.produccion.toneladas_turno()`). El campo `origen` guarda archivo › hoja › fila (`texto_origen()`); queda vacío en la carga manual. Si el Excel trae filas con la misma clave y datos distintos, no se carga ninguna y van al reporte (`core.duplicados.separar_repetidas()`).
 
 ## Fórmulas (fuente: técnica Scott y manual BOE de Brown)
 | KPI | Fórmula | Referencia limón Argentina |
@@ -106,6 +107,7 @@ CAF = kg de aceite por tonelada de fruta a la salida del BOE (menor es mejor).
 pip install -r requirements.txt
 pip install -e .                # instala el proyecto (core/) en modo editable; una sola vez
 python -m core.importar_maestros  # carga los datos maestros desde data/maestros_clientes.xlsx
+python -m core.importar_ledesma   # carga el histórico de LEDESMA (hojas BOE y Resumen)
 streamlit run app/app.py        # abrir la app
 pytest                          # correr las pruebas
 ```

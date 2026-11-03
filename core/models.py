@@ -320,11 +320,15 @@ class RegistroProduccion(Auditoria, Base):
     """Producción de una planta en un turno de un día de producción (carga manual).
 
     fruta_t: fruta procesada (t). aceite_envasado_kg, jugo_conc_kg y reproceso_kg en kg.
-    qf3 y brix_fritz: datos de laboratorio de otros archivos. Uno por planta, fecha y turno.
+    qf3 y brix_fritz: datos de laboratorio de otros archivos.
+    Único por planta + fecha de producción + turno + proceso: un turno puede tener dos
+    registros si en él termina un proceso y empieza otro. Las toneladas del turno se
+    obtienen sumando sus registros (core.produccion.toneladas_turno). El proceso es
+    obligatorio en lo importado del Excel.
     """
 
     __tablename__ = "registro_produccion"
-    __table_args__ = (UniqueConstraint("planta_id", "fecha_produccion", "turno_id"),)
+    __table_args__ = (UniqueConstraint("planta_id", "fecha_produccion", "turno_id", "proceso_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     planta_id: Mapped[int] = mapped_column(ForeignKey("planta.id"))

@@ -1,6 +1,6 @@
 # LEDESMA – Mapeo del archivo "eficiencia eBOE Naranja 25 2.xlsm" al formato único
 
-**Versión:** 0.2 · 28/10/2026 · Ramiro (Tech Service) · Solo se usan las hojas **BOE** y **Resumen**.
+**Versión:** 0.3 · 28/10/2026 · Ramiro (Tech Service) · Solo se usan las hojas **BOE** y **Resumen**.
 
 ## 1. Qué hay en el archivo
 
@@ -138,3 +138,23 @@ Cuando el importador termine, la app tiene que dar estos mismos valores.
 2. ¿Qué es un **PROCESO** (corrida, lote, semana)?
 3. ¿El **programa N0–N9** es el programa del eBOE?
 4. ¿Hay **una sola línea**?
+
+## 9. Análisis a reproducir (presentación de septiembre 2026, limón 2024–2026)
+
+La app tiene que generar para naranja (temporadas 2025 y 2026) los mismos análisis:
+
+| # | Análisis | Detalle |
+|---|---|---|
+| 1 | Histograma de aceite en fruta | Entrada vs Salida superpuestos, con curva normal; leyenda con media, desvío y N |
+| 2 | Boxplot de aceite en fruta | Por eBOE y lugar (Entrada / Salida), con outliers |
+| 3 | Tabla de estadística | Aceite en fruta en Salida por eBOE: N, media, error estándar, desvío, mín, Q1, mediana, Q3, máx |
+| 4 | Límites de outliers por IQR | Por eBOE: Q1, Q3, IQR, LI = Q1 − 1,5·IQR, LS = Q3 + 1,5·IQR |
+| 5 | Vista de proceso (flowsheet) | Por temporada: por eBOE aceite entrada y salida (kg/t), t/h y eficiencia; totales: eficiencia de aceite, eficiencia de proceso, fruta procesada (t), aceite envasado (kg), rendimiento de aceite (kg/t) |
+| 6 | Burbujas | Eficiencia eBOE promedio vs t/h; color = programa; tamaño = N; una vista por eBOE |
+| 7 | Superficie y contorno | Eficiencia eBOE vs programa y t/h (por eBOE) |
+| 8 | ANOVA + Tukey por temporada | Aceite en fruta (F, p), comparaciones de Tukey y gráfico de intervalos al 95 % |
+| 9 | Eficiencia por temporada | Boxplot e intervalos al 95 % |
+| 10 | Emulsión | Intervalos al 95 % de aceite en emulsión (%) por temporada e histograma con curva normal |
+| 11 | Comparación anual | Tabla con Tucumán, otras plantas y LEDESMA (fruta procesada, aceite en fruta, eficiencia eBOE, rendimiento, eficiencia de aceite, residuales, eficiencia de centrífugas). **Los datos de Tucumán y otras plantas y los de centrífugas no están en el archivo: se cargan aparte** |
+
+Conclusiones de septiembre que conviene contrastar con naranja: diferencias significativas de aceite en fruta entre campañas (ANOVA); la pérdida de eficiencia viene de más eventos de bajo rendimiento, no de un menor máximo; la variación entre campañas es mayor que la variación dentro de cada campaña.

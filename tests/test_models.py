@@ -230,16 +230,31 @@ def test_guardar_y_leer_registro_produccion(motor):
             310.0, 1650.0, 22000.0, 120.0, 1.2, 65.1)
 
 
-def test_registro_produccion_unico_por_planta_fecha_y_turno(motor):
+def test_registro_produccion_unico_por_planta_fecha_turno_y_proceso(motor):
     cargar_ledesma_con_datos(motor)
 
     with crear_sesion(motor) as sesion:
         planta = sesion.scalars(select(Planta).where(Planta.nombre == "LEDESMA")).one()
         turno_n = next(t for t in planta.turnos if t.nombre == "N")
-        sesion.add(RegistroProduccion(planta=planta, fecha_produccion=date(2025, 6, 24),
-                                      turno=turno_n, cargado_por="prueba"))
+        sesion.add(RegistroProduccion(planta=planta, fecha_produccion=date(2025, 6, 24), turno=turno_n,
+                                      proceso=planta.procesos[0], cargado_por="prueba"))
         with pytest.raises(IntegrityError):
             sesion.commit()
+
+
+def test_turno_compartido_por_dos_procesos_admite_dos_registros(motor):
+    cargar_ledesma_con_datos(motor)
+
+    with crear_sesion(motor) as sesion:
+        planta = sesion.scalars(select(Planta).where(Planta.nombre == "LEDESMA")).one()
+        turno_n = next(t for t in planta.turnos if t.nombre == "N")
+        proceso_4 = Proceso(numero=4, temporada=2025, planta=planta)
+        sesion.add_all([proceso_4, RegistroProduccion(
+            planta=planta, fecha_produccion=date(2025, 6, 24), turno=turno_n, proceso=proceso_4,
+            fruta_t=50.0, cargado_por="prueba")])
+        sesion.commit()
+
+        assert len(sesion.scalars(select(RegistroProduccion)).all()) == 2
 
 
 def test_turno_y_proceso_unicos(motor):
