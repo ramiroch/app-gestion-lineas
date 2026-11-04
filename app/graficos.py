@@ -263,7 +263,9 @@ def burbujas(combos: pd.DataFrame) -> tuple[go.Figure, list[list[tuple]]]:
                             color=AZULES[num] if num is not None else GRIS,
                             opacity=[0.85 if r else 0.2 for r in sub["representativa"]],
                             line=dict(color="white", width=1)),
-                customdata=list(zip(sub["n"], sub["media"].map(lambda v: numero(v, 1)), ics, avisos)),
+                # customdata[4:7] = (eboe, programa, mtph): identifica la burbuja al hacer clic.
+                customdata=list(zip(sub["n"], sub["media"].map(lambda v: numero(v, 1)), ics, avisos,
+                                    [int(eboe)] * len(sub), [programa] * len(sub), sub["mtph"].astype(int))),
                 hovertemplate=f"<b>eBOE {eboe} · {programa} a %{{x}} MTPH</b><br>Eficiencia %{{customdata[1]}} %"
                               "<br>IC 95 %: %{customdata[2]}<br>N %{customdata[0]} pares%{customdata[3]}<extra></extra>")
             en_leyenda.add(programa)
@@ -273,9 +275,28 @@ def burbujas(combos: pd.DataFrame) -> tuple[go.Figure, list[list[tuple]]]:
     figura.update_yaxes(title_text="Eficiencia eBOE (%)", row=1, col=1)
     figura.update_annotations(font_size=12)
     estilo(figura)
-    figura.update_layout(margin=dict(t=80), legend=dict(y=1.14, title_text="Programa", itemsizing="constant"),
-                         dragmode="select")
+    # Sin dragmode "select" ni "lasso": con esos, Streamlit pone clickmode="event" y el clic no selecciona.
+    figura.update_layout(margin=dict(t=80), legend=dict(y=1.14, title_text="Programa", itemsizing="constant"))
     return figura, claves
+
+
+def combinaciones_de_puntos(puntos: list[dict], claves: list[list[tuple]]) -> list[tuple]:
+    """(eboe, programa, mtph) de los puntos elegidos en burbujas() (selection.points de Streamlit).
+
+    Usa el customdata de cada punto (posiciones 4 a 6); si no viene, curve_number + point_index
+    con las claves que devolvió burbujas().
+    """
+    elegidas = set()
+    for punto in puntos or []:
+        datos = punto.get("customdata")
+        if isinstance(datos, (list, tuple)) and len(datos) >= 7:
+            elegidas.add((int(datos[4]), str(datos[5]), int(datos[6])))
+            continue
+        traza, indice = punto.get("curve_number"), punto.get("point_index", punto.get("point_number"))
+        if traza is not None and indice is not None and traza < len(claves) and indice < len(claves[traza]):
+            eboe, programa, mtph = claves[traza][indice]
+            elegidas.add((int(eboe), programa, int(mtph)))
+    return sorted(elegidas)
 
 
 def superficie(mtph: list, programas: list, eficiencia, n, eboe) -> go.Figure:

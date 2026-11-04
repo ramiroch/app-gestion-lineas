@@ -23,7 +23,7 @@ from core.programa import (N_MINIMO, N_MINIMO_RANKING, combinaciones, de_combina
 from core.regresion import frase_pendiente, regresiones_por_grupo
 from filtros import (barra_filtros, filtros_elegidos, planta_elegida, tabla_emulsion_planta, tabla_planta,
                      toneladas_planta)
-from graficos import (boxplot, boxplot_temporadas, burbujas, contorno, dispersion_por_eboe, histograma,
+from graficos import (boxplot, boxplot_temporadas, burbujas, combinaciones_de_puntos, contorno, dispersion_por_eboe, histograma,
                       histograma_grupos, intervalos, superficie)
 
 
@@ -292,14 +292,15 @@ def quitar_seleccion() -> None:
     st.session_state[CLAVE_VERSION_BURBUJAS] = st.session_state.get(CLAVE_VERSION_BURBUJAS, 0) + 1
 
 
-def combinaciones_elegidas(evento, claves: list[list[tuple]]) -> list[tuple]:
-    """(eboe, programa, mtph) de las burbujas elegidas con clic, recuadro o lazo."""
-    elegidas = []
-    for punto in evento.selection.points if evento else []:
-        traza, indice = punto.get("curve_number"), punto.get("point_index", punto.get("point_number"))
-        if traza is not None and indice is not None and traza < len(claves) and indice < len(claves[traza]):
-            elegidas.append(claves[traza][indice])
-    return sorted(set(elegidas))
+def puntos_elegidos(evento, clave: str) -> tuple[list[dict], dict]:
+    """Puntos elegidos en el gráfico de burbujas y la selección cruda (para depurar).
+
+    Se leen del valor que devuelve st.plotly_chart; si viene vacío, de st.session_state[clave].
+    """
+    seleccion = (evento or {}).get("selection") or {}
+    if not seleccion.get("points") and clave in st.session_state:
+        seleccion = (st.session_state[clave] or {}).get("selection") or {}
+    return list(seleccion.get("points") or []), dict(seleccion)
 
 
 def tabla_muestras(muestras: pd.DataFrame) -> pd.DataFrame:
@@ -340,18 +341,24 @@ def pestana_programa(datos: pd.DataFrame) -> None:
 
     st.subheader("Eficiencia según MTPH y programa")
     figura, claves = burbujas(combos)
+    clave = f"burbujas_{st.session_state.get(CLAVE_VERSION_BURBUJAS, 0)}"
     evento = st.plotly_chart(figura, width="stretch", on_select="rerun", selection_mode=("points", "box", "lasso"),
-                             key=f"burbujas_{st.session_state.get(CLAVE_VERSION_BURBUJAS, 0)}")
-    st.caption(f"Tamaño = N de pares ({numero(combos['n'].sum(), 0)} en total). Hacé clic en una burbuja "
-               "(Shift+clic, recuadro o lazo para varias) para ver sus muestras y filtrar el resto de la pestaña.")
+                             key=clave)
+    st.caption(f"Tamaño = N de pares ({numero(combos['n'].sum(), 0)} en total). Hacé clic en una burbuja para ver "
+               "sus muestras y filtrar el resto de la pestaña. Para elegir varias: Shift+clic, o las herramientas "
+               "de recuadro y lazo de la barra del gráfico (arriba a la derecha).")
 
-    elegidas = combinaciones_elegidas(evento, claves)
+    puntos, seleccion_cruda = puntos_elegidos(evento, clave)
+    elegidas = combinaciones_de_puntos(puntos, claves)
+    st.button("Quitar selección", on_click=quitar_seleccion, disabled=not elegidas)
+    with st.expander("Depuración (provisorio)"):
+        st.write(f"Key del gráfico: `{clave}` · puntos recibidos: {len(puntos)} · combinaciones: {elegidas}")
+        st.json(seleccion_cruda, expanded=False)
     if elegidas:
         muestras = de_combinaciones(pares, elegidas)
         nombres = ", ".join(f"eBOE {e} · {p} a {m} MTPH" for e, p, m in elegidas)
         st.markdown(f"**Muestras de {nombres}** (N {numero(len(muestras), 0)})")
         st.dataframe(tabla_muestras(muestras), hide_index=True)
-        st.button("Quitar selección", on_click=quitar_seleccion)
         st.info("El resto de la pestaña muestra solo las combinaciones elegidas.")
         combos = combinaciones(muestras)
 
