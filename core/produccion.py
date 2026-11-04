@@ -6,7 +6,7 @@ import pandas as pd
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from core.models import RegistroProduccion, Turno
+from core.models import Proceso, RegistroProduccion, Turno
 
 
 def toneladas_turno(sesion: Session, planta_id: int, fecha_produccion: date, turno_id: int) -> float | None:
@@ -37,5 +37,26 @@ def toneladas_por_turno(sesion: Session, planta_id: int) -> pd.DataFrame:
         .where(RegistroProduccion.planta_id == planta_id, RegistroProduccion.fruta_t.is_not(None))
         .group_by(RegistroProduccion.fecha_produccion, Turno.nombre)).all()
     tabla = pd.DataFrame(filas, columns=["fecha_produccion", "turno", "fruta_t"])
+    tabla["fecha_produccion"] = pd.to_datetime(tabla["fecha_produccion"])
+    return tabla
+
+
+COLUMNAS_PRODUCCION = ["fecha_produccion", "turno", "proceso_id", "temporada", "fruta_t", "aceite_envasado_kg"]
+
+
+def tabla_produccion(sesion: Session, planta_id: int) -> pd.DataFrame:
+    """Registros de producción de la planta, uno por turno y proceso (carga manual o importada).
+
+    Columnas: fecha_produccion (fecha de pandas), turno (nombre), proceso_id, temporada (del proceso;
+    vacía si el registro no tiene proceso), fruta_t (MT de fruta procesada) y aceite_envasado_kg.
+    Se filtra con core.proceso.filtrar_produccion().
+    """
+    filas = sesion.execute(
+        select(RegistroProduccion.fecha_produccion, Turno.nombre, RegistroProduccion.proceso_id, Proceso.temporada,
+               RegistroProduccion.fruta_t, RegistroProduccion.aceite_envasado_kg)
+        .join(Turno, RegistroProduccion.turno_id == Turno.id)
+        .outerjoin(Proceso, RegistroProduccion.proceso_id == Proceso.id)
+        .where(RegistroProduccion.planta_id == planta_id)).all()
+    tabla = pd.DataFrame(filas, columns=COLUMNAS_PRODUCCION)
     tabla["fecha_produccion"] = pd.to_datetime(tabla["fecha_produccion"])
     return tabla

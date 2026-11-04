@@ -6,23 +6,32 @@ Pestaña Temporadas: análisis 8 a 10 (ANOVA, Tukey, intervalos al 95 % y boxplo
 ignora fechas y procesos, y respeta eBOE, turno y programa.
 Pestaña Programa y MTPH: análisis 6 y 7 (burbujas, superficie y contorno), con todos los filtros y
 filtrado cruzado al hacer clic en una burbuja.
+Pestaña Proceso: análisis 5 (flowsheet): KPI por eBOE, totales del período y comparación de dos períodos.
+Solo se dibuja la pestaña abierta. Cada gráfico tiene un botón PNG, cada tabla un botón Excel, y cada
+pestaña un "Descargar todo" (app/descargas.py).
 Solo muestra: la estadística está en core/, los gráficos en app/graficos.py y los datos
 filtrados vienen de app/filtros.py.
 """
 
+from dataclasses import replace
+
 import pandas as pd
 import streamlit as st
 
-from core.analisis import filtrar, filtros_sin_periodo, pares_con_emulsion
+from core.analisis import (ATAJO_PERSONALIZADO, atajos, filtrar, filtros_sin_periodo, opciones, pares_con_emulsion,
+                           rango_de_atajo)
 from core.comparaciones import comparar_grupos, frase_resultado
 from core.estadistica import limites_iqr, media_ponderada_por_turno, resumen_descriptivo
 from core.formato import numero, texto_p
 from core.parametros import ParametrosIncompletos
 from core.programa import (N_MINIMO, N_MINIMO_RANKING, combinaciones, de_combinaciones, frase_programa, frase_uso,
                            grilla, mejores_y_peores, rallado_por_programa, uso_de_programas)
+from core.proceso import (INDICADORES_EBOE, INDICADORES_TOTALES, comparar_resumenes, filtrar_produccion,
+                          resumen_proceso)
 from core.regresion import frase_pendiente, regresiones_por_grupo
-from filtros import (barra_filtros, filtros_elegidos, planta_elegida, tabla_emulsion_planta, tabla_planta,
-                     toneladas_planta)
+from descargas import Descargas
+from filtros import (barra_filtros, filtros_elegidos, planta_elegida, produccion_planta, tabla_emulsion_planta,
+                     tabla_planta, toneladas_planta)
 from graficos import (barras_uso, boxplot, boxplot_temporadas, burbujas, combinaciones_de_puntos, contorno, dispersion_por_eboe, histograma,
                       histograma_grupos, intervalos, superficie)
 
@@ -60,7 +69,7 @@ def avisar_n_chico(grupos: dict[str, int]) -> None:
         st.warning(f"Menos de 3 muestras en: {', '.join(chicos)}. Esos valores no son representativos.")
 
 
-def pestana_periodo(datos: pd.DataFrame) -> None:
+def pestana_periodo(datos: pd.DataFrame, registro: Descargas) -> None:
     if datos.empty:
         st.info("No hay muestras con estos filtros.")
         return
@@ -84,10 +93,10 @@ def pestana_periodo(datos: pd.DataFrame) -> None:
                "describen las muestras: cada muestra cuenta igual.")
 
     st.subheader("Distribución del aceite en fruta")
-    st.plotly_chart(histograma(datos), width="stretch")
+    registro.grafico(histograma(datos), "Distribución del aceite en fruta")
 
     st.subheader("Aceite en fruta por eBOE y lugar")
-    st.plotly_chart(boxplot(datos), width="stretch")
+    registro.grafico(boxplot(datos), "Aceite en fruta por eBOE y lugar")
     st.caption("Caja: Q1 a Q3 con la mediana. Bigotes: hasta el último valor dentro de los límites IQR. "
                "Círculos abiertos: outliers (se marcan, no se borran). El N de cada caja está en su tooltip.")
 
@@ -100,7 +109,7 @@ def pestana_periodo(datos: pd.DataFrame) -> None:
                       "Desvío": r["desvio"], "Mín": r["minimo"], "Q1": r["q1"], "Mediana": r["mediana"],
                       "Q3": r["q3"], "Máx": r["maximo"]})
     if filas:
-        st.dataframe(tabla(filas, decimales_ee=True), hide_index=True)
+        registro.tabla(tabla(filas, decimales_ee=True), "Estadística de Salida por eBOE")
         avisar_n_chico(grupos)
     else:
         st.info("No hay muestras de Salida con estos filtros.")
@@ -112,7 +121,7 @@ def pestana_periodo(datos: pd.DataFrame) -> None:
         grupos[f"eBOE {eboe} {lugar.lower()}"] = lim["n"]
         filas.append({"eBOE": f"eBOE {eboe}", "Lugar": lugar, "N": lim["n"], "Q1": lim["q1"], "Q3": lim["q3"],
                       "IQR": lim["iqr"], "LI": lim["li"], "LS": lim["ls"], "Outliers": lim["outliers"]})
-    st.dataframe(tabla(filas), hide_index=True)
+    registro.tabla(tabla(filas), "Límites IQR")
     avisar_n_chico(grupos)
     st.caption("LI = Q1 − 1,5·IQR · LS = Q3 + 1,5·IQR · cuartiles con el método de Minitab.")
 
@@ -154,8 +163,8 @@ def tabla_tukey(resultado: dict, decimales: int, unidad: str) -> pd.DataFrame:
     })
 
 
-def bloque_temporadas(titulo: str, datos: pd.DataFrame, variable: str, sujeto: str, articulo: str,
-                      unidad: str, unidad_frase: str, titulo_y: str, decimales: int) -> None:
+def bloque_temporadas(registro: Descargas, titulo: str, datos: pd.DataFrame, variable: str, sujeto: str,
+                      articulo: str, unidad: str, unidad_frase: str, titulo_y: str, decimales: int) -> None:
     """Un bloque de la pestaña: frase, intervalos + boxplot, tabla ANOVA, Levene/Welch y Tukey."""
     st.subheader(titulo)
     try:
@@ -166,8 +175,10 @@ def bloque_temporadas(titulo: str, datos: pd.DataFrame, variable: str, sujeto: s
 
     st.markdown(f"**{frase_resultado(resultado, sujeto, articulo, unidad_frase, decimales)}**")
     izquierda, derecha = st.columns(2)
-    izquierda.plotly_chart(intervalos(resultado["medias"], titulo_y, unidad, decimales), width="stretch")
-    derecha.plotly_chart(boxplot_temporadas(datos, variable, titulo_y, unidad, decimales), width="stretch")
+    registro.grafico(intervalos(resultado["medias"], titulo_y, unidad, decimales), f"{titulo} - intervalos",
+                     donde=izquierda)
+    registro.grafico(boxplot_temporadas(datos, variable, titulo_y, unidad, decimales), f"{titulo} - boxplot",
+                     donde=derecha)
     medias = resultado["medias"]
     ic = ("desvío combinado (varianzas iguales)" if resultado["ic_metodo"] == "combinado"
           else "desvío de cada temporada (varianzas distintas)")
@@ -175,7 +186,7 @@ def bloque_temporadas(titulo: str, datos: pd.DataFrame, variable: str, sujeto: s
                + f". IC de la media calculado con el {ic}.")
     avisar_n_chico({f"temporada {g}": n for g, n in zip(medias["grupo"], medias["n"])})
 
-    st.dataframe(tabla_anova(resultado, decimales), hide_index=True)
+    registro.tabla(tabla_anova(resultado, decimales), f"ANOVA {titulo}")
     levene = f"Levene (¿varianzas iguales?): {texto_p(resultado['levene']['p'])}"
     if resultado["welch"]:
         w = resultado["welch"]
@@ -185,12 +196,12 @@ def bloque_temporadas(titulo: str, datos: pd.DataFrame, variable: str, sujeto: s
     else:
         st.caption(f"{levene} → no hay evidencia de que difieran; vale el p del ANOVA.")
     with st.expander("Comparaciones de Tukey"):
-        st.dataframe(tabla_tukey(resultado, decimales, unidad), hide_index=True)
+        registro.tabla(tabla_tukey(resultado, decimales, unidad), f"Tukey {titulo}")
         st.caption("Diferencia = temporada posterior − anterior, en las unidades de la variable. "
                    "Tukey supone varianzas iguales.")
 
 
-def bloque_caudal(entradas: pd.DataFrame) -> None:
+def bloque_caudal(entradas: pd.DataFrame, registro: Descargas) -> None:
     """Caudal de fase pesada por temporada (¿bajó el agua?): frase, intervalos y medias."""
     st.markdown("##### Caudal de fase pesada")
     try:
@@ -200,13 +211,14 @@ def bloque_caudal(entradas: pd.DataFrame) -> None:
         return
     st.markdown(f"**{frase_resultado(resultado, 'El caudal de fase pesada', 'el', 'm³/h', 2)}**")
     izquierda, derecha = st.columns(2)
-    izquierda.plotly_chart(intervalos(resultado["medias"], "Caudal fase pesada (m³/h)", "m³/h", 2), width="stretch")
+    registro.grafico(intervalos(resultado["medias"], "Caudal fase pesada (m³/h)", "m³/h", 2),
+                     "Caudal de fase pesada - intervalos", donde=izquierda)
     medias = resultado["medias"]
-    derecha.dataframe(pd.DataFrame({
+    registro.tabla(pd.DataFrame({
         "Temporada": medias["grupo"], "N": medias["n"].map(lambda n: numero(n, 0)),
         "Media (m³/h)": medias["media"].map(numero), "Desvío": medias["desvio"].map(numero),
         "IC 95 %": [f"{numero(a)} a {numero(b)}" for a, b in zip(medias["ic_inf"], medias["ic_sup"])],
-    }), hide_index=True)
+    }), "Caudal de fase pesada", donde=derecha)
     derecha.caption(f"Levene {texto_p(resultado['levene']['p'])}"
                     + (f" · Welch {texto_p(resultado['welch']['p'])}" if resultado["welch"]
                        else f" · ANOVA {texto_p(resultado['p'])}")
@@ -232,7 +244,7 @@ def tabla_rectas(regresiones: pd.DataFrame, unidad_x: str) -> pd.DataFrame:
     })
 
 
-def bloque_agua_licor(fruta: pd.DataFrame, emulsion: pd.DataFrame) -> None:
+def bloque_agua_licor(fruta: pd.DataFrame, emulsion: pd.DataFrame, registro: Descargas) -> None:
     """Eficiencia eBOE vs caudal de fase pesada y vs aceite en emulsión, dentro de cada temporada."""
     st.subheader("Agua y licor")
     st.caption("Cómo se relaciona la eficiencia del eBOE con el agua (caudal de fase pesada) y con el licor "
@@ -246,14 +258,15 @@ def bloque_agua_licor(fruta: pd.DataFrame, emulsion: pd.DataFrame) -> None:
             st.markdown("- " + frase_pendiente(reg, str(reg["temporada"]), paso, x_texto, "puntos", "de eficiencia",
                                                decimales))
         por_eboe = regresiones_por_grupo(datos, x, "eficiencia_pct", ["eboe", "temporada"])
-        st.plotly_chart(dispersion_por_eboe(datos, x, "eficiencia_pct", por_eboe, titulo_x, "Eficiencia eBOE (%)",
-                                            unidad_x, "puntos", 2, 1), width="stretch")
+        nombre = f"Eficiencia vs {titulo_x.split(' (')[0].lower()}"
+        registro.grafico(dispersion_por_eboe(datos, x, "eficiencia_pct", por_eboe, titulo_x, "Eficiencia eBOE (%)",
+                                             unidad_x, "puntos", 2, 1), nombre)
         avisar_n_chico({f"eBOE {f['eboe']} {f['temporada']}": f["n"] for f in por_eboe.to_dict("records")})
         with st.expander("Rectas por eBOE y temporada"):
-            st.dataframe(tabla_rectas(por_eboe, unidad_x), hide_index=True)
+            registro.tabla(tabla_rectas(por_eboe, unidad_x), f"Rectas - {nombre}")
 
 
-def pestana_temporadas() -> None:
+def pestana_temporadas(registro: Descargas) -> None:
     filtros = filtros_sin_periodo(filtros_elegidos())
     st.info("Esta pestaña compara temporadas: **no usa el filtro de fechas ni el de proceso** (toma todas "
             f"las fechas y procesos). Sí respeta eBOE, turno y programa. Filtros aplicados: {texto_filtros(filtros)}.")
@@ -262,9 +275,9 @@ def pestana_temporadas() -> None:
     entradas = fruta[fruta["lugar"] == "Entrada"]
     pares = entradas.dropna(subset=["eficiencia_par"]).assign(eficiencia_pct=lambda d: d["eficiencia_par"] * 100)
 
-    bloque_temporadas("Aceite en fruta de entrada", entradas, "aceite_fruta", "El aceite en fruta de entrada",
+    bloque_temporadas(registro, "Aceite en fruta de entrada", entradas, "aceite_fruta", "El aceite en fruta de entrada",
                       "el", "kg/MT", "kg/MT", "Aceite en fruta entrada (kg/MT)", 2)
-    bloque_temporadas("Eficiencia eBOE", pares, "eficiencia_pct", "La eficiencia", "la", "%", "puntos",
+    bloque_temporadas(registro, "Eficiencia eBOE", pares, "eficiencia_pct", "La eficiencia", "la", "%", "puntos",
                       "Eficiencia eBOE (%)", 1)
     try:
         emulsion = filtrar(tabla_emulsion_planta(planta_elegida()), filtros)
@@ -272,14 +285,14 @@ def pestana_temporadas() -> None:
         st.subheader("Aceite en emulsión")
         st.warning(str(error))
         return
-    bloque_temporadas("Aceite en emulsión", emulsion, "aceite_emulsion", "El aceite en emulsión", "el", "%",
+    bloque_temporadas(registro, "Aceite en emulsión", emulsion, "aceite_emulsion", "El aceite en emulsión", "el", "%",
                       "puntos", "Aceite en emulsión (%)", 2)
     if not emulsion.empty:
         st.markdown("##### Distribución del aceite en emulsión por temporada")
-        st.plotly_chart(histograma_grupos(emulsion, "aceite_emulsion", "temporada", "Aceite en emulsión (%)", "%"),
-                        width="stretch")
-    bloque_caudal(entradas)
-    bloque_agua_licor(fruta, emulsion)
+        registro.grafico(histograma_grupos(emulsion, "aceite_emulsion", "temporada", "Aceite en emulsión (%)", "%"),
+                         "Distribución del aceite en emulsión")
+    bloque_caudal(entradas, registro)
+    bloque_agua_licor(fruta, emulsion, registro)
     st.caption("Promedios simples por muestra: el ANOVA compara muestras, no se pondera por toneladas.")
 
 
@@ -325,7 +338,7 @@ def tabla_ranking(ranking: pd.DataFrame) -> pd.DataFrame:
     })
 
 
-def pestana_programa(datos: pd.DataFrame) -> None:
+def pestana_programa(datos: pd.DataFrame, registro: Descargas) -> None:
     st.caption("Respeta todos los filtros de la barra. Eficiencia = promedio simple de los pares de cada "
                f"combinación de eBOE, programa y MTPH. Las combinaciones con N < {N_MINIMO} se ven tenues y no "
                f"entran en la superficie; el ranking y las frases usan solo las que tienen N ≥ {N_MINIMO_RANKING}.")
@@ -342,8 +355,8 @@ def pestana_programa(datos: pd.DataFrame) -> None:
     st.subheader("Eficiencia según MTPH y programa")
     figura, claves = burbujas(combos)
     clave = f"burbujas_{st.session_state.get(CLAVE_VERSION_BURBUJAS, 0)}"
-    evento = st.plotly_chart(figura, width="stretch", on_select="rerun", selection_mode=("points", "box", "lasso"),
-                             key=clave)
+    evento = registro.grafico(figura, "Burbujas programa y MTPH", on_select="rerun",
+                              selection_mode=("points", "box", "lasso"), key=clave)
     st.caption(f"Tamaño = N de pares ({numero(combos['n'].sum(), 0)} en total). Hacé clic en una burbuja para ver "
                "sus muestras y filtrar el resto de la pestaña. Para elegir varias: Shift+clic, o las herramientas "
                "de recuadro y lazo de la barra del gráfico (arriba a la derecha).")
@@ -354,7 +367,7 @@ def pestana_programa(datos: pd.DataFrame) -> None:
         muestras = de_combinaciones(pares, elegidas)
         nombres = ", ".join(f"eBOE {e} · {p} a {m} MTPH" for e, p, m in elegidas)
         st.markdown(f"**Muestras de {nombres}** (N {numero(len(muestras), 0)})")
-        st.dataframe(tabla_muestras(muestras), hide_index=True)
+        registro.tabla(tabla_muestras(muestras), "Muestras elegidas")
         st.info("El resto de la pestaña muestra solo las combinaciones elegidas.")
         combos = combinaciones(muestras)
 
@@ -370,8 +383,8 @@ def pestana_programa(datos: pd.DataFrame) -> None:
         st.info(f"Para la superficie hacen falta al menos 2 MTPH y 2 programas con N ≥ {N_MINIMO} en el eBOE {eboe}.")
     else:
         izquierda, derecha = st.columns(2)
-        izquierda.plotly_chart(superficie(mtph, programas, eficiencia, n, eboe), width="stretch")
-        derecha.plotly_chart(contorno(mtph, programas, eficiencia, n, eboe), width="stretch")
+        registro.grafico(superficie(mtph, programas, eficiencia, n, eboe), f"Superficie eBOE {eboe}", donde=izquierda)
+        registro.grafico(contorno(mtph, programas, eficiencia, n, eboe), f"Contorno eBOE {eboe}", donde=derecha)
         st.caption(f"Solo celdas con N ≥ {N_MINIMO}; las vacías quedan sin color. En el contorno, los puntos "
                    "marcan las celdas con datos: entre ellas el color es interpolado.")
 
@@ -383,10 +396,10 @@ def pestana_programa(datos: pd.DataFrame) -> None:
     eboes = sorted(ranking["eboe"].unique())
     for columna, eboe in zip(st.columns(len(eboes)), eboes):
         columna.markdown(f"**eBOE {eboe}**")
-        columna.dataframe(tabla_ranking(ranking[ranking["eboe"] == eboe]), hide_index=True)
+        registro.tabla(tabla_ranking(ranking[ranking["eboe"] == eboe]), f"Ranking eBOE {eboe}", donde=columna)
 
 
-def bloque_uso_programas(datos: pd.DataFrame) -> None:
+def bloque_uso_programas(datos: pd.DataFrame, registro: Descargas) -> None:
     """Cuánto se usa cada programa y cómo sale rallada la fruta en cada uno, por eBOE."""
     st.subheader("Uso de programas")
     st.caption("Con los filtros de la barra (no con la selección de burbujas). \"Del tiempo\" = % de pares "
@@ -398,7 +411,7 @@ def bloque_uso_programas(datos: pd.DataFrame) -> None:
         return
     for eboe in sorted(uso["eboe"].unique()):
         st.markdown("- " + frase_uso(pares, eboe))
-    st.plotly_chart(barras_uso(uso), width="stretch")
+    registro.grafico(barras_uso(uso), "Uso de programas")
 
     st.markdown("##### Rallado de la fruta de salida por programa")
     rallado = rallado_por_programa(pares)
@@ -409,13 +422,148 @@ def bloque_uso_programas(datos: pd.DataFrame) -> None:
     for columna, eboe in zip(st.columns(len(eboes)), eboes):
         sub = rallado[rallado["eboe"] == eboe]
         columna.markdown(f"**eBOE {eboe}** · N {numero(sub['n'].sum(), 0)}")
-        columna.dataframe(pd.DataFrame({
+        registro.tabla(pd.DataFrame({
             "Programa": sub["programa"], "N": sub["n"].map(lambda v: numero(v, 0)),
             "% Ok": sub["pct_ok"].map(lambda v: numero(v, 1)),
             "% Poco rallada": sub["pct_poco"].map(lambda v: numero(v, 1)),
             "% Sobre rallada": sub["pct_sobre"].map(lambda v: numero(v, 1)),
-        }), hide_index=True)
+        }), f"Rallado eBOE {eboe}", donde=columna)
     avisar_n_chico({f"eBOE {f['eboe']} {f['programa']}": f["n"] for f in rallado.to_dict("records")})
+
+
+# ---------------------------------------------------------------- pestaña Proceso
+
+SIN_EMULSION = pd.DataFrame(columns=["eboe", "fecha_hora", "aceite_emulsion"])
+COLOR_DELTA = {+1: "normal", -1: "inverse", 0: "off"}   # normal: verde si sube; inverse: verde si baja; off: gris
+
+
+def valor_con_unidad(valor, unidad: str, decimales: int) -> str:
+    if valor is None or pd.isna(valor):
+        return "—"
+    return f"{numero(valor, decimales)} {unidad}"
+
+
+def texto_diferencia(diferencia, unidad: str, decimales: int) -> str | None:
+    """"+0,20 kg/MT", "-2,8 puntos" (los % se comparan en puntos). Con signo ASCII para st.metric."""
+    if diferencia is None or pd.isna(diferencia):
+        return None
+    signo = "+" if diferencia >= 0 else "-"
+    return f"{signo}{numero(abs(diferencia), decimales)} {'puntos' if unidad == '%' else unidad}"
+
+
+def tarjetas(donde, valores: dict, indicadores, por_fila: int, comparacion: dict | None = None) -> None:
+    """Una st.metric por indicador, en filas de `por_fila`. Con comparacion ({clave: fila de
+    comparar_resumenes}), cada tarjeta muestra la diferencia: verde si mejora, roja si empeora, gris si
+    el indicador es neutro."""
+    columnas = []
+    for i, (clave, nombre, unidad, decimales, sentido) in enumerate(indicadores):
+        if i % por_fila == 0:
+            columnas = donde.columns(por_fila)
+        fila = (comparacion or {}).get(clave)
+        delta = texto_diferencia(fila["diferencia"], unidad, decimales) if fila is not None else None
+        columnas[i % por_fila].metric(nombre, valor_con_unidad(valores.get(clave), unidad, decimales),
+                                      delta=delta, delta_color=COLOR_DELTA[sentido])
+
+
+def mostrar_resumen(donde, resumen: dict, comparacion: pd.DataFrame | None = None, ancho_completo: bool = True) -> None:
+    """Tarjetas por eBOE y totales de un resumen_proceso(); con comparacion, con las diferencias."""
+    def de_seccion(seccion):
+        if comparacion is None:
+            return None
+        sub = comparacion[comparacion["seccion"] == seccion]
+        return {f["clave"]: f for f in sub.to_dict("records")}
+
+    totales = resumen["totales"]
+    donde.markdown("**Totales del período**")
+    tarjetas(donde, totales, INDICADORES_TOTALES, 3, de_seccion("Totales"))
+    donde.caption(f"Eficiencia: {numero(totales['n_pares'], 0)} pares, "
+                  f"{'ponderada por toneladas' if totales['ponderada'] else 'promedio simple (sin producción)'}. "
+                  f"Fruta y aceite: {numero(totales['n_turnos'], 0)} turnos con producción; rendimiento con los "
+                  f"{numero(totales['n_turnos_rendimiento'], 0)} que tienen fruta y aceite envasado.")
+
+    donde.markdown("**Por eBOE**")
+    columnas = donde.columns(len(resumen["eboes"])) if ancho_completo else [donde] * len(resumen["eboes"])
+    for columna, eboe in zip(columnas, resumen["eboes"]):
+        caja = columna.container(border=True)
+        caja.markdown(f"**eBOE {eboe['eboe']}** · N {numero(eboe['n'], 0)} pares")
+        tarjetas(caja, eboe, INDICADORES_EBOE, 2 if ancho_completo else 4, de_seccion(f"eBOE {eboe['eboe']}"))
+        caja.caption("Aceite y eficiencia " + ("ponderados por toneladas" if eboe["ponderada"] else
+                                              "con promedio simple (sin producción)") + "; MTPH promedio simple.")
+    avisar_n_chico({f"eBOE {e['eboe']}": e["n"] for e in resumen["eboes"]})
+
+
+def resumen_de(filtros) -> dict:
+    """resumen_proceso() con los análisis y la producción de la planta elegida, con esos filtros."""
+    planta_id = planta_elegida()
+    pares = pares_con_emulsion(filtrar(tabla_planta(planta_id), filtros), SIN_EMULSION)
+    produccion = filtrar_produccion(produccion_planta(planta_id), filtros)
+    return resumen_proceso(pares, toneladas_planta(planta_id), produccion)
+
+
+def tabla_resumen(resumen: dict) -> pd.DataFrame:
+    filas = [{"Sección": "Totales", "Indicador": nombre, "Valor": valor_con_unidad(resumen["totales"].get(clave), unidad, dec)}
+             for clave, nombre, unidad, dec, _ in INDICADORES_TOTALES]
+    for eboe in resumen["eboes"]:
+        filas += [{"Sección": f"eBOE {eboe['eboe']}", "Indicador": nombre,
+                   "Valor": valor_con_unidad(eboe.get(clave), unidad, dec)} for clave, nombre, unidad, dec, _ in INDICADORES_EBOE]
+        filas.append({"Sección": f"eBOE {eboe['eboe']}", "Indicador": "Pares", "Valor": numero(eboe["n"], 0)})
+    return pd.DataFrame(filas)
+
+
+def tabla_comparacion(comparacion: pd.DataFrame, nombre_a: str, nombre_b: str) -> pd.DataFrame:
+    return pd.DataFrame({
+        "Sección": comparacion["seccion"], "Indicador": comparacion["indicador"], "Unidad": comparacion["unidad"],
+        nombre_a: [numero(v, d) for v, d in zip(comparacion["valor_a"], comparacion["decimales"])],
+        nombre_b: [numero(v, d) for v, d in zip(comparacion["valor_b"], comparacion["decimales"])],
+        "Diferencia": [numero(v, d) for v, d in zip(comparacion["diferencia"], comparacion["decimales"])],
+        "Resultado": comparacion["evaluacion"].map({"mejora": "Mejora", "empeora": "Empeora", "igual": "Igual",
+                                                    "neutro": "Neutro (depende de la fruta)"}).fillna("—"),
+    })
+
+
+def pestana_proceso(registro: Descargas) -> None:
+    filtros = filtros_elegidos()
+    st.caption("Los análisis respetan todos los filtros de la barra. La producción (fruta procesada y aceite "
+               "envasado) es de la planta: respeta fechas, turno y proceso, pero no eBOE ni programa. Rendimiento "
+               "y eficiencia del proceso se calculan con totales del período (Σ aceite envasado / Σ fruta "
+               "procesada), no como promedio de turnos, porque por turno hay desfase de envasado.")
+    resumen = resumen_de(filtros)
+    if not resumen["eboes"]:
+        st.info("No hay pares entrada/salida con estos filtros.")
+    else:
+        mostrar_resumen(st, resumen)
+        with st.expander("Tabla del período"):
+            registro.tabla(tabla_resumen(resumen), "Resumen del período")
+
+    st.subheader("Comparación de dos períodos")
+    op = opciones(tabla_planta(planta_elegida()))
+    periodos = [a for a in atajos(op) if a != ATAJO_PERSONALIZADO]
+    if len(periodos) < 2:
+        st.info("Hace falta más de un período con datos para comparar.")
+        return
+    por_defecto = [periodos.index(p) if p in periodos else i for i, p in enumerate(("Temporada 2025", "Temporada 2026"))]
+    columna_a, columna_b = st.columns(2)
+    nombre_a = columna_a.selectbox("Período A", periodos, index=por_defecto[0], key="proceso_periodo_a")
+    nombre_b = columna_b.selectbox("Período B", periodos, index=por_defecto[1], key="proceso_periodo_b")
+    base = replace(filtros_sin_periodo(filtros), procesos=[])
+    resumenes = {}
+    for nombre in (nombre_a, nombre_b):
+        desde, hasta = rango_de_atajo(nombre, op)
+        resumenes[nombre] = (resumen_de(replace(base, desde=desde, hasta=hasta)), desde, hasta)
+    st.caption("Cada período usa los filtros de eBOE, turno y programa de la barra (no el de fechas ni el de "
+               "proceso). La diferencia es B − A: verde si mejora, rojo si empeora, gris si el indicador depende "
+               "de la fruta y no de la operación (aceite en fruta de entrada, fruta procesada, aceite envasado, MTPH).")
+    (resumen_a, desde_a, hasta_a), (resumen_b, desde_b, hasta_b) = resumenes[nombre_a], resumenes[nombre_b]
+    if not resumen_a["eboes"] or not resumen_b["eboes"]:
+        st.info("Uno de los dos períodos no tiene pares con estos filtros.")
+        return
+    comparacion = comparar_resumenes(resumen_a, resumen_b)
+    columna_a.caption(f"Del {desde_a:%d/%m/%Y} al {hasta_a:%d/%m/%Y}")
+    columna_b.caption(f"Del {desde_b:%d/%m/%Y} al {hasta_b:%d/%m/%Y}")
+    mostrar_resumen(columna_a, resumen_a, ancho_completo=False)
+    mostrar_resumen(columna_b, resumen_b, comparacion, ancho_completo=False)
+    with st.expander("Tabla de la comparación"):
+        registro.tabla(tabla_comparacion(comparacion, nombre_a, nombre_b), f"Comparación {nombre_a} vs {nombre_b}")
 
 
 # ---------------------------------------------------------------- página
@@ -427,11 +575,23 @@ datos = barra_filtros()
 if filtros_elegidos() is None:      # la planta no tiene análisis: la barra ya lo avisó
     st.stop()
 
-periodo, temporadas, programa = st.tabs(["Período", "Temporadas", "Programa y MTPH"])
-with periodo:
-    pestana_periodo(datos)
-with temporadas:
-    pestana_temporadas()
-with programa:
-    pestana_programa(datos)
-    bloque_uso_programas(datos)
+def pestana_programa_completa(registro: Descargas) -> None:
+    pestana_programa(datos, registro)
+    bloque_uso_programas(datos, registro)
+
+
+PESTANAS = {
+    "Período": lambda registro: pestana_periodo(datos, registro),
+    "Temporadas": pestana_temporadas,
+    "Programa y MTPH": pestana_programa_completa,
+    "Proceso": pestana_proceso,
+}
+# Con key y on_change, cada pestaña sabe si está abierta (.open): solo se dibuja la abierta.
+for (nombre, dibujar), pestana in zip(PESTANAS.items(), st.tabs(list(PESTANAS), key="pestana_analisis",
+                                                                    on_change="rerun")):
+    if pestana.open:
+        with pestana:
+            arriba = st.container()             # "Descargar todo" va arriba, pero se arma al final
+            registro = Descargas(nombre)
+            dibujar(registro)
+            registro.boton_todo(arriba)

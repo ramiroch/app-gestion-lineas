@@ -6,6 +6,7 @@ exportar a PNG desde un script (fig.write_image, con kaleido).
 """
 
 import math
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -31,6 +32,12 @@ AZULES = ["#86b6ef", "#6da7ec", "#5598e7", "#3987e5", "#2a78d6", "#256abf", "#1c
 ESCALA_AZUL = [[i / (len(AZULES) - 1), color] for i, color in enumerate(AZULES)]
 GRIS = "#8a8f98"
 ALTURA_CHICA = 380          # dos gráficos lado a lado
+ANCHO_PNG = 1600            # ancho de los PNG descargables (px)
+# Con el servidor de kaleido abierto (app/descargas.py), plotly avisa que ignora "kopts" en cada imagen;
+# el ancho y la escala igual se respetan (verificado: el PNG sale de 1600 px).
+warnings.filterwarnings("ignore", message="The kopts argument is ignored", category=UserWarning)
+ANCHO_DIBUJO_PNG = 1100     # se dibuja a este ancho y se escala: el texto queda del tamaño justo
+ANCHO_DIBUJO_PNG_MEDIO = 700   # gráficos que en la página ocupan media pantalla (en una columna)
 
 
 def estilo(figura: go.Figure, altura: int = ALTURA) -> go.Figure:
@@ -38,6 +45,20 @@ def estilo(figura: go.Figure, altura: int = ALTURA) -> go.Figure:
     figura.update_layout(separators=",.", height=altura, margin=dict(t=40, b=10, l=10, r=10),
                          legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0))
     return figura
+
+
+def png(figura: go.Figure, ancho_dibujo: int = ANCHO_DIBUJO_PNG) -> bytes:
+    """PNG de la figura para pegar en un informe: 1600 px de ancho, fondo blanco, alto proporcional.
+
+    Se dibuja a ancho_dibujo (el ancho que tiene en la página: ANCHO_DIBUJO_PNG o, si ocupa media
+    pantalla, ANCHO_DIBUJO_PNG_MEDIO) y se escala a ANCHO_PNG, así conserva sus proporciones y el texto
+    su tamaño relativo. No cambia la figura original. Usa kaleido.
+    """
+    copia = go.Figure(figura)
+    alto = copia.layout.height or ALTURA
+    copia.update_layout(template="plotly_white", paper_bgcolor="white", plot_bgcolor="white",
+                        width=ancho_dibujo, height=alto)
+    return copia.to_image(format="png", width=ancho_dibujo, height=alto, scale=ANCHO_PNG / ancho_dibujo)
 
 
 def histograma_grupos(datos: pd.DataFrame, variable: str, grupo: str, titulo_x: str, unidad: str,

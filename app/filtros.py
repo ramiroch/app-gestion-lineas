@@ -18,7 +18,7 @@ from core.analisis import (ATAJO_PERSONALIZADO, Filtros, atajos, filtrar, opcion
                            tabla_emulsion)
 from core.consultas import listar_clientes, listar_plantas
 from core.db import crear_motor, crear_sesion
-from core.produccion import toneladas_por_turno
+from core.produccion import tabla_produccion, toneladas_por_turno
 
 PLANTA_POR_DEFECTO = "LEDESMA"
 CLAVE = "filtros"
@@ -58,6 +58,13 @@ def toneladas_planta(planta_id: int):
         return toneladas_por_turno(sesion, planta_id)
 
 
+@st.cache_data(ttl=600)
+def produccion_planta(planta_id: int):
+    """Registros de producción de la planta (por turno y proceso), en caché 10 minutos."""
+    with crear_sesion(motor()) as sesion:
+        return tabla_produccion(sesion, planta_id)
+
+
 def planta_elegida() -> int | None:
     """Id de la planta elegida en la barra (None si todavía no se dibujó)."""
     etiqueta = _guardado().get("planta")
@@ -89,6 +96,7 @@ def _recargar() -> None:
     tabla_planta.clear()
     tabla_emulsion_planta.clear()
     toneladas_planta.clear()
+    produccion_planta.clear()
     plantas.clear()
 
 
