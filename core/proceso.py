@@ -17,18 +17,18 @@ from core.analisis import Filtros
 from core.estadistica import media_ponderada_por_turno
 
 # (clave, nombre, unidad, decimales, sentido): sentido +1 = mejor si sube, −1 = mejor si baja,
-# 0 = neutro (depende de la fruta o del volumen, no de la operación).
+# 0 = neutro (se muestra en gris; hoy ningún indicador lo usa).
 INDICADORES_EBOE = [
-    ("aceite_entrada", "Aceite en fruta entrada", "kg/MT", 2, 0),
+    ("aceite_entrada", "Aceite en fruta entrada", "kg/MT", 2, +1),
     ("aceite_salida", "Aceite en fruta salida", "kg/MT", 2, -1),
-    ("mtph", "MTPH promedio", "MTPH", 1, 0),
+    ("mtph", "MTPH promedio", "MTPH", 1, +1),
     ("eficiencia", "Eficiencia eBOE", "%", 1, +1),
 ]
 INDICADORES_TOTALES = [
     ("eficiencia", "Eficiencia eBOE global", "%", 1, +1),
-    ("aceite_entrada", "Aceite en fruta entrada", "kg/MT", 2, 0),
-    ("fruta_t", "Fruta procesada", "MT", 0, 0),
-    ("aceite_envasado_kg", "Aceite envasado", "kg", 0, 0),
+    ("aceite_entrada", "Aceite en fruta entrada", "kg/MT", 2, +1),
+    ("fruta_t", "Fruta procesada", "MT", 0, +1),
+    ("aceite_envasado_kg", "Aceite envasado", "kg", 0, +1),
     ("rendimiento", "Rendimiento de aceite", "kg/MT", 2, +1),
     ("eficiencia_proceso", "Eficiencia del proceso", "%", 1, +1),
 ]

@@ -451,18 +451,29 @@ def texto_diferencia(diferencia, unidad: str, decimales: int) -> str | None:
     return f"{signo}{numero(abs(diferencia), decimales)} {'puntos' if unidad == '%' else unidad}"
 
 
-def tarjetas(donde, valores: dict, indicadores, por_fila: int, comparacion: dict | None = None) -> None:
+# Títulos cortos para las tarjetas por eBOE (van varias en poco ancho): la unidad va en el título y el
+# valor queda solo con el número, así no se corta.
+TITULOS_CORTOS = {"aceite_entrada": "Entrada", "aceite_salida": "Salida", "mtph": "MTPH", "eficiencia": "Eficiencia"}
+
+
+def tarjetas(donde, valores: dict, indicadores, por_fila: int, comparacion: dict | None = None,
+             cortas: bool = False) -> None:
     """Una st.metric por indicador, en filas de `por_fila`. Con comparacion ({clave: fila de
-    comparar_resumenes}), cada tarjeta muestra la diferencia: verde si mejora, roja si empeora, gris si
-    el indicador es neutro."""
+    comparar_resumenes}), cada tarjeta muestra la diferencia: verde si mejora, roja si empeora.
+    cortas: título corto con la unidad ("Entrada (kg/MT)") y el valor sin unidad."""
     columnas = []
     for i, (clave, nombre, unidad, decimales, sentido) in enumerate(indicadores):
         if i % por_fila == 0:
             columnas = donde.columns(por_fila)
         fila = (comparacion or {}).get(clave)
         delta = texto_diferencia(fila["diferencia"], unidad, decimales) if fila is not None else None
-        columnas[i % por_fila].metric(nombre, valor_con_unidad(valores.get(clave), unidad, decimales),
-                                      delta=delta, delta_color=COLOR_DELTA[sentido])
+        if cortas:
+            corto = TITULOS_CORTOS.get(clave, nombre)
+            titulo = corto if corto == unidad else f"{corto} ({unidad})"
+            valor = valor_con_unidad(valores.get(clave), "", decimales).strip()
+        else:
+            titulo, valor = nombre, valor_con_unidad(valores.get(clave), unidad, decimales)
+        columnas[i % por_fila].metric(titulo, valor, delta=delta, delta_color=COLOR_DELTA[sentido])
 
 
 def mostrar_resumen(donde, resumen: dict, comparacion: pd.DataFrame | None = None, ancho_completo: bool = True) -> None:
@@ -486,10 +497,41 @@ def mostrar_resumen(donde, resumen: dict, comparacion: pd.DataFrame | None = Non
     for columna, eboe in zip(columnas, resumen["eboes"]):
         caja = columna.container(border=True)
         caja.markdown(f"**eBOE {eboe['eboe']}** · N {numero(eboe['n'], 0)} pares")
-        tarjetas(caja, eboe, INDICADORES_EBOE, 2 if ancho_completo else 4, de_seccion(f"eBOE {eboe['eboe']}"))
+        tarjetas(caja, eboe, INDICADORES_EBOE, 2 if ancho_completo else 4, de_seccion(f"eBOE {eboe['eboe']}"),
+                 cortas=True)
         caja.caption("Aceite y eficiencia " + ("ponderados por toneladas" if eboe["ponderada"] else
                                               "con promedio simple (sin producción)") + "; MTPH promedio simple.")
     avisar_n_chico({f"eBOE {e['eboe']}": e["n"] for e in resumen["eboes"]})
+
+
+def mostrar_comparacion(resumen_a: dict, resumen_b: dict, comparacion: pd.DataFrame) -> None:
+    """Período A y B lado a lado, fila por fila: cada fila de tarjetas de A queda a la altura de la de B
+    (si se dibujaran en dos columnas largas, las de B, con la diferencia, son más altas y los bloques de
+    eBOE quedan desplazados en diagonal)."""
+    def por_clave(seccion):
+        sub = comparacion[comparacion["seccion"] == seccion]
+        return {f["clave"]: f for f in sub.to_dict("records")}
+
+    def fila(valores_a, valores_b, indicadores, seccion, cortas=False):
+        lado_a, lado_b = st.columns(2, gap="large")
+        tarjetas(lado_a, valores_a, indicadores, len(indicadores), cortas=cortas)
+        tarjetas(lado_b, valores_b, indicadores, len(indicadores), por_clave(seccion), cortas=cortas)
+
+    st.markdown("**Totales del período**")
+    totales_a, totales_b = resumen_a["totales"], resumen_b["totales"]
+    for inicio in range(0, len(INDICADORES_TOTALES), 3):
+        fila(totales_a, totales_b, INDICADORES_TOTALES[inicio:inicio + 3], "Totales")
+
+    eboes_a = {e["eboe"]: e for e in resumen_a["eboes"]}
+    eboes_b = {e["eboe"]: e for e in resumen_b["eboes"]}
+    for eboe in sorted(set(eboes_a) | set(eboes_b)):
+        valores_a, valores_b = eboes_a.get(eboe, {"n": 0}), eboes_b.get(eboe, {"n": 0})
+        titulo_a, titulo_b = st.columns(2, gap="large")
+        titulo_a.markdown(f"**eBOE {eboe}** · N {numero(valores_a['n'], 0)} pares")
+        titulo_b.markdown(f"**eBOE {eboe}** · N {numero(valores_b['n'], 0)} pares")
+        fila(valores_a, valores_b, INDICADORES_EBOE, f"eBOE {eboe}", cortas=True)
+    avisar_n_chico({f"eBOE {e} ({nombre})": r.get(e, {"n": 0})["n"]
+                    for nombre, r in (("A", eboes_a), ("B", eboes_b)) for e in sorted(set(eboes_a) | set(eboes_b))})
 
 
 def resumen_de(filtros) -> dict:
@@ -551,8 +593,9 @@ def pestana_proceso(registro: Descargas) -> None:
         desde, hasta = rango_de_atajo(nombre, op)
         resumenes[nombre] = (resumen_de(replace(base, desde=desde, hasta=hasta)), desde, hasta)
     st.caption("Cada período usa los filtros de eBOE, turno y programa de la barra (no el de fechas ni el de "
-               "proceso). La diferencia es B − A: verde si mejora, rojo si empeora, gris si el indicador depende "
-               "de la fruta y no de la operación (aceite en fruta de entrada, fruta procesada, aceite envasado, MTPH).")
+               "proceso). La diferencia es B − A: verde si mejora, rojo si empeora. Mejor si sube: eficiencias, "
+               "rendimiento, aceite en fruta de entrada, fruta procesada, aceite envasado y MTPH; mejor si baja: "
+               "aceite en fruta de salida.")
     (resumen_a, desde_a, hasta_a), (resumen_b, desde_b, hasta_b) = resumenes[nombre_a], resumenes[nombre_b]
     if not resumen_a["eboes"] or not resumen_b["eboes"]:
         st.info("Uno de los dos períodos no tiene pares con estos filtros.")
@@ -560,8 +603,7 @@ def pestana_proceso(registro: Descargas) -> None:
     comparacion = comparar_resumenes(resumen_a, resumen_b)
     columna_a.caption(f"Del {desde_a:%d/%m/%Y} al {hasta_a:%d/%m/%Y}")
     columna_b.caption(f"Del {desde_b:%d/%m/%Y} al {hasta_b:%d/%m/%Y}")
-    mostrar_resumen(columna_a, resumen_a, ancho_completo=False)
-    mostrar_resumen(columna_b, resumen_b, comparacion, ancho_completo=False)
+    mostrar_comparacion(resumen_a, resumen_b, comparacion)
     with st.expander("Tabla de la comparación"):
         registro.tabla(tabla_comparacion(comparacion, nombre_a, nombre_b), f"Comparación {nombre_a} vs {nombre_b}")
 
@@ -587,8 +629,9 @@ PESTANAS = {
     "Proceso": pestana_proceso,
 }
 # Con key y on_change, cada pestaña sabe si está abierta (.open): solo se dibuja la abierta.
+# bind="query-params": la pestaña queda en la URL (?pestana_analisis=Proceso) y se puede compartir el enlace.
 for (nombre, dibujar), pestana in zip(PESTANAS.items(), st.tabs(list(PESTANAS), key="pestana_analisis",
-                                                                    on_change="rerun")):
+                                                                    on_change="rerun", bind="query-params")):
     if pestana.open:
         with pestana:
             arriba = st.container()             # "Descargar todo" va arriba, pero se arma al final

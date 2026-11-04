@@ -82,8 +82,8 @@ def test_comparar_resumenes():
 
     eficiencia = tabla.loc[("Totales", "eficiencia")]
     assert eficiencia["diferencia"] == pytest.approx(-5.0) and eficiencia["evaluacion"] == "empeora"
-    assert tabla.loc[("Totales", "aceite_entrada"), "evaluacion"] == "neutro"          # sube, pero es neutro
-    assert tabla.loc[("Totales", "fruta_t"), "evaluacion"] == "neutro"
+    assert tabla.loc[("Totales", "aceite_entrada"), "evaluacion"] == "mejora"          # subió: mejor fruta
+    assert tabla.loc[("Totales", "fruta_t"), "evaluacion"] == "igual"                  # misma producción
     assert tabla.loc[("eBOE 1", "aceite_salida"), "evaluacion"] == "mejora"            # bajó: mejora
     assert tabla.loc[("Totales", "rendimiento"), "evaluacion"] == "igual"
     assert list(tabla.index.get_level_values(0).unique()) == ["Totales", "eBOE 1", "eBOE 2"]
