@@ -426,3 +426,117 @@ def columnas_mensuales(tabla: pd.DataFrame, eje: list[str], titulo_y: str, unida
     if rango_y:
         figura.update_yaxes(range=rango_y)
     return estilo(figura)
+
+
+COLOR_REGLA_1 = "#e34948"      # rojo: punto fuera de los límites (regla 1)
+COLOR_OTRAS_REGLAS = "#f29b30"  # naranja claro (el de la paleta se confunde con el rojo); además cambia la forma
+ALTURA_CARTA = 620
+
+
+def _texto_punto(fila, tipo: str, dispersion: str, unidad: str, decimales: int, con_fases: bool) -> str:
+    """Tooltip de un punto de la carta de control."""
+    por_muestra = tipo == "I-MR"
+    titulo = f"Muestra {fila.punto}" if por_muestra else f"Turno {fila.punto}"
+    if con_fases:
+        titulo += f" · fase {fila.fase} ({fila.temporada})"
+    fecha = f"{fila.fecha_produccion:%d/%m/%Y}" + (f" · hora {fila.fecha_hora:%H:%M}" if por_muestra else "")
+    reglas = list(fila.reglas) + ([f"{dispersion} fuera de límites"] if fila.fuera_disp else [])
+    simbolo = "Valor" if por_muestra else "X̄"
+    lineas = [
+        f"<b>{titulo}</b>",
+        f"Fecha de producción: {fecha} · turno {fila.turno}",
+        f"Proceso {fila.proceso or '—'} · programa {fila.programa or '—'} · MTPH {numero(fila.mtph, 1)}",
+        f"{simbolo}: <b>{numero(fila.valor, decimales)} {unidad}</b>" + ("" if por_muestra else f" (n = {fila.n})"),
+        f"{dispersion}: {numero(fila.disp, decimales)}",
+        "Reglas violadas: " + (", ".join(str(r) for r in reglas) if reglas else "ninguna"),
+    ]
+    if fila.n < 2 and not por_muestra:
+        lineas.append("⚠ Turno con 1 sola muestra: sin desvío")
+    return "<br>".join(lineas)
+
+
+def _limites(figura, x, tabla, prefijo: str, fila: int, mostrar_leyenda: bool) -> None:
+    """LC continua y LCS/LCI punteadas en gris (en escalera si cambian con el tamaño del subgrupo)."""
+    for columna, nombre, trazo in ((f"{prefijo}lcs", "LCS / LCI", "dot"), (f"{prefijo}lci", "LCS / LCI", "dot"),
+                                   (f"{prefijo}lc", "Línea central", "solid")):
+        figura.add_scatter(x=x, y=tabla[columna], mode="lines", line=dict(color=GRIS, width=1.2, dash=trazo, shape="hvh"),
+                           name=nombre, legendgroup=nombre, hoverinfo="skip",
+                           showlegend=mostrar_leyenda and columna != f"{prefijo}lci", row=fila, col=1)
+
+
+def _etiquetas_limites(figura, tabla, prefijo: str, eje_y: str, central: str, decimales: int) -> None:
+    """Valor de LCS, LC y LCI a la derecha de la carta, como Minitab.
+
+    Si los límites cambian con el tamaño del subgrupo (X̄-S), se muestran los del tamaño más frecuente
+    y se aclara el n.
+    """
+    con_limites = tabla.dropna(subset=[f"{prefijo}lc"])
+    n_frecuente = int(con_limites["n"].mode().iloc[0])
+    fila = con_limites[con_limites["n"] == n_frecuente].iloc[-1]
+    variables = con_limites[f"{prefijo}lcs"].round(9).nunique() > 1
+    for columna, nombre in ((f"{prefijo}lcs", "LCS"), (f"{prefijo}lc", central), (f"{prefijo}lci", "LCI")):
+        texto = f"{nombre} = {numero(fila[columna], decimales)}" + (f" (n = {n_frecuente})" if variables else "")
+        figura.add_annotation(x=1.005, xref="paper", xanchor="left", y=fila[columna], yref=eje_y, text=texto,
+                              showarrow=False, font=dict(size=10, color=GRIS))
+
+
+def carta_control(tabla: pd.DataFrame, tipo: str, dispersion: str, titulo_y: str, unidad: str, decimales: int,
+                  fases: tuple | None = None) -> go.Figure:
+    """Carta de control en dos paneles: X̄ o I arriba; R, S o MR abajo (eje X: número de punto).
+
+    tabla: core.control.carta_de_control()["tabla"]. Línea de datos oscura, LC continua, LCS y LCI
+    punteadas en gris; puntos fuera de control: cuadrado rojo (regla 1 o, abajo, fuera de límites) y
+    rombo naranja (otras reglas de Nelson). fases: (temporada base, nueva) → línea vertical entre fases.
+    """
+    figura = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.07, row_heights=[0.63, 0.37])
+    x = tabla["punto"]
+    textos = [_texto_punto(f, tipo, dispersion, unidad, decimales, fases is not None) for f in tabla.itertuples()]
+    simbolo = "I" if tipo == "I-MR" else "X̄"
+
+    # Panel de arriba: datos, límites y puntos que violan reglas
+    figura.add_scatter(x=x, y=tabla["valor"], mode="lines+markers", name=f"{simbolo} {titulo_y}",
+                       line=dict(color=COLOR_DATOS, width=1), marker=dict(color=COLOR_DATOS, size=4),
+                       text=textos, hovertemplate="%{text}<extra></extra>", row=1, col=1)
+    _limites(figura, x, tabla, "", 1, True)
+    regla_1 = tabla["reglas"].map(lambda r: 1 in r)
+    otras = tabla["reglas"].map(bool) & ~regla_1
+    for seleccion, nombre, color, forma in ((regla_1, "Regla 1 (fuera de límites)", COLOR_REGLA_1, "square"),
+                                            (otras, "Otras reglas de Nelson", COLOR_OTRAS_REGLAS, "diamond")):
+        figura.add_scatter(x=x[seleccion], y=tabla.loc[seleccion, "valor"], mode="markers", name=nombre,
+                           legendgroup=nombre, showlegend=bool(seleccion.any()),
+                           marker=dict(color=color, symbol=forma, size=9,
+                                                           line=dict(color="white", width=1)),
+                           text=[t for t, s in zip(textos, seleccion) if s], hovertemplate="%{text}<extra></extra>",
+                           row=1, col=1)
+
+    # Panel de abajo: dispersión (R, S o MR) y sus límites
+    figura.add_scatter(x=x, y=tabla["disp"], mode="lines+markers", name=dispersion, showlegend=False,
+                       line=dict(color=COLOR_DATOS, width=1), marker=dict(color=COLOR_DATOS, size=4),
+                       text=textos, hovertemplate="%{text}<extra></extra>", connectgaps=False, row=2, col=1)
+    _limites(figura, x, tabla, "disp_", 2, False)
+    fuera = tabla["fuera_disp"]
+    figura.add_scatter(x=x[fuera], y=tabla.loc[fuera, "disp"], mode="markers", name="Regla 1 (fuera de límites)",
+                       legendgroup="Regla 1 (fuera de límites)", showlegend=bool(fuera.any() and not regla_1.any()),
+                       marker=dict(color=COLOR_REGLA_1, symbol="square", size=9, line=dict(color="white", width=1)),
+                       text=[t for t, s in zip(textos, fuera) if s], hovertemplate="%{text}<extra></extra>",
+                       row=2, col=1)
+
+    _etiquetas_limites(figura, tabla, "", "y", simbolo if simbolo == "I" else "X̿", decimales)
+    _etiquetas_limites(figura, tabla, "disp_", "y2", f"{dispersion}̄", decimales)
+
+    if fases is not None and (tabla["fase"] == "II").any():
+        corte = tabla.loc[tabla["fase"] == "II", "punto"].iloc[0] - 0.5
+        figura.add_vline(x=corte, line=dict(color=COLOR_DATOS, width=1.5), row="all", col=1)
+        for fase, temporada, ancla, desplazamiento in (("I", fases[0], "right", -6), ("II", fases[1], "left", 6)):
+            texto = f"Fase {fase} · {temporada}" + (" (límites)" if fase == "I" else " (límites de fase I)")
+            figura.add_annotation(x=corte, y=1, xref="x", yref="paper", yanchor="bottom", xanchor=ancla,
+                                  xshift=desplazamiento, text=texto, showarrow=False,
+                                  font=dict(size=11, color=COLOR_DATOS))
+
+    eje_x = "Muestra (número)" if tipo == "I-MR" else "Turno (número de subgrupo)"
+    figura.update_xaxes(title_text=eje_x, row=2, col=1)
+    figura.update_yaxes(title_text=f"{simbolo} ({unidad})", row=1, col=1)
+    figura.update_yaxes(title_text=f"{dispersion} ({unidad})", rangemode="tozero", row=2, col=1)
+    estilo(figura, ALTURA_CARTA)
+    figura.update_layout(margin=dict(t=60, b=10, l=10, r=125), legend=dict(y=1.06), hovermode="closest")
+    return figura
