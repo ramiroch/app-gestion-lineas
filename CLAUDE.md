@@ -21,10 +21,10 @@ Sistema de gestión para las líneas de aceite y jugo de los clientes de Brown. 
 - Naranja Valencia · **3 eBOE** · turnos M 05:00–12:59, T 13:00–20:59, N 21:00–04:59.
 - **Día de producción: de 05:00 a 04:59** (empieza con el turno M). Una muestra de 00:00–04:59 pertenece al día de producción anterior (`fecha_produccion`). La hora de inicio del día es un parámetro de la planta.
 - Puntos de muestreo por eBOE: Fruta entrada, Fruta salida y Emulsión (licor).
-- Muestras en pares Entrada/Salida por eBOE y hora. Eficiencia eBOE = 1 − salida/entrada; rendimiento eBOE = entrada − salida (kg/t).
+- Muestras en pares Entrada/Salida por eBOE y hora. Eficiencia eBOE = 1 − salida/entrada; rendimiento eBOE = entrada − salida (kg/MT).
 - Fórmulas de la planta: blanco fijo 0,2 mL; aceite en fruta = 68,8416 × (ml − blanco) × N / g; aceite en emulsión % = (ml − blanco) × 3,45 × N / g. Los factores y el blanco son **configurables por planta**.
 
-- Objetivos: eficiencia eBOE 80–90 %; rendimiento eBOE 6,6–6,8 kg/t; aceite en emulsión 0,80–1,10 %; °Brix emulsión ≤ 5; pH 3–7.
+- Objetivos: eficiencia eBOE 80–90 %; rendimiento eBOE 6,6–6,8 kg/MT; aceite en emulsión 0,80–1,10 %; °Brix emulsión ≤ 5; pH 3–7.
 - Producción por turno (carga manual): fruta procesada t, aceite envasado kg, jugo concentrado kg, reproceso kg.
 - Nunca importes los promedios de la hoja Resumen: se recalculan desde la hoja BOE.
 - En la hoja BOE, la columna **Fecha es la fecha de producción**: una muestra de 00:00–04:59 se tomó el día siguiente. `core/importar_ledesma.py` arma la fecha_hora real comparando con la fila anterior del mismo proceso, día y temporada (los procesos se renumeran cada temporada).
@@ -67,7 +67,7 @@ LimitesControl (variable, punto, período base, LC, LCS, LCI)  ·  Alerta
 ## Fórmulas (fuente: técnica Scott y manual BOE de Brown)
 | KPI | Fórmula | Referencia limón Argentina |
 |---|---|---|
-| Aceite en fruta (kg/t) | (mL − blanco) × N × 68,841 / g | Disponible 4–8 kg/t |
+| Aceite en fruta (kg/MT) | (mL − blanco) × N × 68,841 / g | Disponible 4–8 kg/MT |
 | Aceite en licor o fase (%) | (mL − blanco) × N × 3,442 / g | según el punto |
 | Remoción del BOE (%) | 100 × (entrada − salida) / entrada | 85–90 % |
 | Eficiencia simple del desludger (%) | (alimentación − fase media) / alimentación × 100 | 94–98 % |

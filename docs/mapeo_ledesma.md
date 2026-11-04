@@ -20,7 +20,7 @@
 | Variable | Objetivo |
 |---|---|
 | Eficiencia eBOE | 80–90 % |
-| Rendimiento eBOE | 6,6–6,8 kg/t |
+| Rendimiento eBOE | 6,6–6,8 kg/MT |
 | Rendimiento de jugo | ≤ 14 |
 | Aceite en emulsión (licor) | Normal 0,80–1,10 % (bajo < 0,80; alto > 1,10) |
 | °Brix de la emulsión | ≤ 5 |
@@ -49,7 +49,7 @@ Una fila por muestra. Por cada eBOE y hora hay **dos filas**: la de **Entrada** 
 | O | Sólidos centrifugables [%] | `AnalisisEmulsion.solidos_centrif` | |
 | P | Programa | `LecturaOperacion.programa` | N0–N9; normalizar "0" → "N0" |
 | Q | Flip Gate | `LecturaOperacion.flip_gate` | 1–12 |
-| R | Ton/H | `LecturaOperacion.tph` | 6–23 t/h |
+| R | Ton/H | `LecturaOperacion.tph` | 6–23 MTPH |
 | S | Caudal fase pesada [m³/h] | `LecturaOperacion.caudal_fase_pesada` | Medido |
 | T | Caudal fase pesada calc. | **se recalcula** | Balance de la planta; ver sección 5 |
 | U | Lugar de muestreo | `PuntoMuestreo` | Entrada / Salida |
@@ -95,7 +95,7 @@ Tiene tres tablas: **por turno** (Tabla1, A:V), **por día** (Tabla8, X:AR) y **
 2. **7 Entradas sin su Salida** inmediata del mismo eBOE: no se puede calcular eficiencia; van al reporte.
 3. **Horas como texto** (16 filas, por ejemplo "15.10").
 4. **Texto inconsistente:** firme/Firme, OK/Ok, poco rallada/Poco rallada, cuesta/Cuesta, "N Val S7R", programa 0 / N0.
-5. **Eficiencia del proceso > 100 %** en algunos turnos (máx. 174 %) y rendimiento de aceite de hasta 17 kg/t: el aceite envasado de un turno no corresponde a la fruta de ese turno (desfase del envasado). Mostrar ese KPI por día o por proceso, o marcarlo.
+5. **Eficiencia del proceso > 100 %** en algunos turnos (máx. 174 %) y rendimiento de aceite de hasta 17 kg/MT: el aceite envasado de un turno no corresponde a la fruta de ese turno (desfase del envasado). Mostrar ese KPI por día o por proceso, o marcarlo.
 6. **Día de producción de 05:00 a 04:59 (confirmado por Ramiro):** coincide con los turnos M, T y N. Las muestras entre 00:00 y 04:59 (turno N) pertenecen al día de producción anterior. Regla: `fecha_produccion = fecha si hora ≥ 05:00, si no fecha − 1 día`. La fecha original de la muestra se guarda igual.
 7. **Vínculos externos rotos:** finca, productor, rendimiento teórico, QF N°3, Brix Fritz y eficiencia de centrífuga vienen de otros archivos. Quedan fuera del primer import.
 
@@ -105,7 +105,7 @@ Tiene tres tablas: **por turno** (Tabla1, A:V), **por día** (Tabla8, X:AR) y **
 |---|---|---|---|
 | Blanco | Fijo 0,2 mL | Se registra por análisis | Campo `blanco` con valor por defecto 0,2 por planta |
 | Factor % emulsión | 3,45 | 3,442 | Factor configurable por planta (diferencia ≈ 0,2 %) |
-| Factor kg/t | 68,8416 | 68,841 | Ídem (diferencia despreciable) |
+| Factor kg/MT | 68,8416 | 68,841 | Ídem (diferencia despreciable) |
 | Eficiencia eBOE | 1 − salida/entrada | Remoción del BOE = 100 × (entrada − salida)/entrada | Es la misma fórmula |
 | Caudal fase pesada calc. | (AC × R × AD − 350 × 0,997 × 0,9 %) / ((0,9 % − 0,1 %) × (0,852 × 0,15 % + 0,997 × (1 − 0,15 %)) × 1000) | — | Balance propio de LEDESMA; se implementa después, con sus constantes documentadas |
 
@@ -121,7 +121,7 @@ Tiene tres tablas: **por turno** (Tabla1, A:V), **por día** (Tabla8, X:AR) y **
 
 Eficiencia promedio y rendimiento por eBOE, calculados desde la hoja BOE:
 
-| Temporada | eBOE | Pares | Eficiencia media | Rend. eBOE (kg/t) | Aceite en fruta entrada (kg/t) | % de pares < 80 % |
+| Temporada | eBOE | Pares | Eficiencia media | Rend. eBOE (kg/MT) | Aceite en fruta entrada (kg/MT) | % de pares < 80 % |
 |---|---|---|---|---|---|---|
 | 2025 | 1 | 732 | 85,3 % | 7,01 | 8,21 | 12 % |
 | 2025 | 2 | 727 | 81,3 % | 6,70 | 8,25 | 35 % |
@@ -149,9 +149,9 @@ La app tiene que generar para naranja (temporadas 2025 y 2026) los mismos análi
 | 2 | Boxplot de aceite en fruta | Por eBOE y lugar (Entrada / Salida), con outliers |
 | 3 | Tabla de estadística | Aceite en fruta en Salida por eBOE: N, media, error estándar, desvío, mín, Q1, mediana, Q3, máx |
 | 4 | Límites de outliers por IQR | Por eBOE: Q1, Q3, IQR, LI = Q1 − 1,5·IQR, LS = Q3 + 1,5·IQR |
-| 5 | Vista de proceso (flowsheet) | Por temporada: por eBOE aceite entrada y salida (kg/t), t/h y eficiencia; totales: eficiencia de aceite, eficiencia de proceso, fruta procesada (t), aceite envasado (kg), rendimiento de aceite (kg/t) |
-| 6 | Burbujas | Eficiencia eBOE promedio vs t/h; color = programa; tamaño = N; una vista por eBOE |
-| 7 | Superficie y contorno | Eficiencia eBOE vs programa y t/h (por eBOE) |
+| 5 | Vista de proceso (flowsheet) | Por temporada: por eBOE aceite entrada y salida (kg/MT), MTPH y eficiencia; totales: eficiencia de aceite, eficiencia de proceso, fruta procesada (t), aceite envasado (kg), rendimiento de aceite (kg/MT) |
+| 6 | Burbujas | Eficiencia eBOE promedio vs MTPH; color = programa; tamaño = N; una vista por eBOE |
+| 7 | Superficie y contorno | Eficiencia eBOE vs programa y MTPH (por eBOE) |
 | 8 | ANOVA + Tukey por temporada | Aceite en fruta (F, p), comparaciones de Tukey y gráfico de intervalos al 95 % |
 | 9 | Eficiencia por temporada | Boxplot e intervalos al 95 % |
 | 10 | Emulsión | Intervalos al 95 % de aceite en emulsión (%) por temporada e histograma con curva normal |
