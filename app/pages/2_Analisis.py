@@ -11,14 +11,15 @@ filtrados vienen de app/filtros.py.
 import pandas as pd
 import streamlit as st
 
-from core.analisis import filtrar, filtros_sin_periodo
+from core.analisis import filtrar, filtros_sin_periodo, pares_con_emulsion
 from core.comparaciones import comparar_grupos, frase_resultado
 from core.estadistica import limites_iqr, media_ponderada_por_turno, resumen_descriptivo
 from core.formato import numero, texto_p
 from core.parametros import ParametrosIncompletos
+from core.regresion import frase_pendiente, regresiones_por_grupo
 from filtros import (barra_filtros, filtros_elegidos, planta_elegida, tabla_emulsion_planta, tabla_planta,
                      toneladas_planta)
-from graficos import boxplot, boxplot_temporadas, histograma, histograma_grupos, intervalos
+from graficos import boxplot, boxplot_temporadas, dispersion_por_eboe, histograma, histograma_grupos, intervalos
 
 
 def porcentaje(fraccion, decimales: int = 1) -> str:
@@ -208,6 +209,45 @@ def bloque_caudal(entradas: pd.DataFrame) -> None:
     avisar_n_chico({f"temporada {g}": n for g, n in zip(medias["grupo"], medias["n"])})
 
 
+RELACIONES = [  # (columna x, título del eje, unidad, paso de la frase, texto de x, decimales de la pendiente)
+    ("caudal_fase_pesada", "Caudal fase pesada (m³/h)", "m³/h", "1 m³/h", "de caudal de fase pesada", 2),
+    ("aceite_emulsion", "Aceite en emulsión (%)", "%", "1 %", "de aceite en emulsión", 1),
+]
+
+
+def tabla_rectas(regresiones: pd.DataFrame, unidad_x: str) -> pd.DataFrame:
+    return pd.DataFrame({
+        "eBOE": regresiones["eboe"].map(lambda e: f"eBOE {e}"), "Temporada": regresiones["temporada"].astype(str),
+        "N": regresiones["n"].map(lambda n: numero(n, 0)),
+        f"Pendiente (puntos por {unidad_x})": regresiones["pendiente"].map(lambda v: numero(v, 2)),
+        "IC 95 % pendiente": [f"{numero(a, 2)} a {numero(b, 2)}" for a, b in
+                              zip(regresiones["ic_inf"], regresiones["ic_sup"])],
+        "R²": regresiones["r2"].map(lambda v: numero(v, 3)),
+        "p": regresiones["p"].map(lambda v: "—" if pd.isna(v) else texto_p(v).removeprefix("p ").removeprefix("= ")),
+    })
+
+
+def bloque_agua_licor(fruta: pd.DataFrame, emulsion: pd.DataFrame) -> None:
+    """Eficiencia eBOE vs caudal de fase pesada y vs aceite en emulsión, dentro de cada temporada."""
+    st.subheader("Agua y licor")
+    st.caption("Cómo se relaciona la eficiencia del eBOE con el agua (caudal de fase pesada) y con el licor "
+               "(aceite en emulsión). Las rectas y el R² de los gráficos se calculan dentro de cada eBOE y "
+               "temporada; las frases, dentro de cada temporada con los eBOE elegidos juntos. Nunca se juntan "
+               "las temporadas. Una relación no prueba una causa.")
+    datos = pares_con_emulsion(fruta, emulsion)
+    for x, titulo_x, unidad_x, paso, x_texto, decimales in RELACIONES:
+        st.markdown(f"##### Eficiencia eBOE vs {titulo_x.split(' (')[0].lower()}")
+        for reg in regresiones_por_grupo(datos, x, "eficiencia_pct", ["temporada"]).to_dict("records"):
+            st.markdown("- " + frase_pendiente(reg, str(reg["temporada"]), paso, x_texto, "puntos", "de eficiencia",
+                                               decimales))
+        por_eboe = regresiones_por_grupo(datos, x, "eficiencia_pct", ["eboe", "temporada"])
+        st.plotly_chart(dispersion_por_eboe(datos, x, "eficiencia_pct", por_eboe, titulo_x, "Eficiencia eBOE (%)",
+                                            unidad_x, "puntos", 2, 1), width="stretch")
+        avisar_n_chico({f"eBOE {f['eboe']} {f['temporada']}": f["n"] for f in por_eboe.to_dict("records")})
+        with st.expander("Rectas por eBOE y temporada"):
+            st.dataframe(tabla_rectas(por_eboe, unidad_x), hide_index=True)
+
+
 def pestana_temporadas() -> None:
     filtros = filtros_sin_periodo(filtros_elegidos())
     st.info("Esta pestaña compara temporadas: **no usa el filtro de fechas ni el de proceso** (toma todas "
@@ -234,6 +274,7 @@ def pestana_temporadas() -> None:
         st.plotly_chart(histograma_grupos(emulsion, "aceite_emulsion", "temporada", "Aceite en emulsión (%)", "%"),
                         width="stretch")
     bloque_caudal(entradas)
+    bloque_agua_licor(fruta, emulsion)
     st.caption("Promedios simples por muestra: el ANOVA compara muestras, no se pondera por toneladas.")
 
 

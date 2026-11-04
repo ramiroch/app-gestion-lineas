@@ -9,9 +9,11 @@ import math
 
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from core.estadistica import ancho_de_clase, cuartiles, curva_normal, es_outlier_iqr, limites_iqr, resumen_descriptivo
 from core.formato import numero
+from core.regresion import recta
 
 LUGARES = ("Entrada", "Salida")
 # Paleta categórica en orden fijo (azul, naranja, aqua, amarillo, magenta, verde, violeta, rojo):
@@ -162,3 +164,65 @@ def intervalos(medias: pd.DataFrame, titulo_y: str, unidad: str, decimales: int 
     figura.update_layout(yaxis_title=titulo_y, xaxis=dict(type="category", title="Temporada"),
                          title=dict(text="Media e IC del 95 %", font_size=14))
     return estilo(figura, ALTURA_CHICA)
+
+
+def dispersion_por_eboe(datos: pd.DataFrame, x: str, y: str, regresiones: pd.DataFrame, titulo_x: str,
+                        titulo_y: str, unidad_x: str, unidad_y: str, dec_x: int = 2, dec_y: int = 1) -> go.Figure:
+    """Dispersión de y vs x con un panel por eBOE (mismo eje Y), coloreada por temporada.
+
+    regresiones: regresiones_por_grupo(datos, x, y, ["eboe", "temporada"]); cada temporada de cada
+    panel lleva su recta (dentro de su rango de x) y su R² va en el título del panel. Las rectas se
+    dibujan al final, con borde blanco, para que los puntos no las tapen.
+    """
+    datos = datos.dropna(subset=[x, y])
+    eboes = sorted(datos["eboe"].unique())
+    temporadas = sorted(datos["temporada"].unique())
+    colores = {t: PALETA[i % len(PALETA)] for i, t in enumerate(temporadas)}
+    regs = {(f["eboe"], f["temporada"]): f for f in regresiones.to_dict("records")}
+
+    def r2(eboe, temporada):
+        reg = regs.get((eboe, temporada))
+        return None if reg is None or pd.isna(reg["r2"]) else reg["r2"]
+
+    titulos = [f"eBOE {e} · R² " + " · ".join(f"{t}: {numero(r2(e, t), 2)}" for t in temporadas) for e in eboes]
+    figura = make_subplots(rows=1, cols=max(len(eboes), 1), shared_yaxes=True, subplot_titles=titulos,
+                           horizontal_spacing=0.03)
+    for columna, eboe in enumerate(eboes, start=1):
+        for temporada in temporadas:
+            sub = datos[(datos["eboe"] == eboe) & (datos["temporada"] == temporada)]
+            if sub.empty:
+                continue
+            figura.add_scatter(
+                row=1, col=columna, x=sub[x], y=sub[y], mode="markers", name=str(temporada),
+                legendgroup=str(temporada), showlegend=columna == 1,
+                marker=dict(color=colores[temporada], size=6, opacity=0.35),
+                customdata=list(zip(sub["fecha_hora"].dt.strftime("%d/%m/%Y %H:%M"), sub["turno"],
+                                    sub["analista"].fillna("—"), sub[x].map(lambda v: numero(v, dec_x)),
+                                    sub[y].map(lambda v: numero(v, dec_y)))),
+                hovertemplate=f"<b>eBOE {eboe} · {temporada}</b><br>%{{customdata[0]}} · turno %{{customdata[1]}}"
+                              f"<br>Analista: %{{customdata[2]}}<br>{titulo_x}: %{{customdata[3]}}"
+                              f"<br>{titulo_y}: %{{customdata[4]}}<extra></extra>")
+        figura.update_xaxes(title_text=titulo_x, row=1, col=columna)
+
+    for columna, eboe in enumerate(eboes, start=1):          # rectas arriba de todos los puntos
+        for temporada in temporadas:
+            reg = regs.get((eboe, temporada))
+            if reg is None or pd.isna(reg["pendiente"]):
+                continue
+            sub = datos[(datos["eboe"] == eboe) & (datos["temporada"] == temporada)]
+            extremos = [sub[x].min(), sub[x].max()]
+            valores = recta(reg, extremos)
+            figura.add_scatter(row=1, col=columna, x=extremos, y=valores, mode="lines", showlegend=False,
+                               line=dict(color="white", width=6), hoverinfo="skip")
+            figura.add_scatter(
+                row=1, col=columna, x=extremos, y=valores, mode="lines", showlegend=False,
+                legendgroup=str(temporada), line=dict(color=colores[temporada], width=2.5),
+                hovertemplate=f"<b>Recta {temporada} · eBOE {eboe}</b><br>"
+                              f"Pendiente {numero(reg['pendiente'], dec_y)} {unidad_y} por {unidad_x}<br>"
+                              f"R² {numero(reg['r2'], 2)} · N {numero(reg['n'], 0)}<extra></extra>")
+    figura.update_yaxes(title_text=titulo_y, row=1, col=1)
+    figura.update_xaxes(matches="x")                       # misma escala de x en todos los paneles
+    figura.update_annotations(font_size=12)
+    estilo(figura)
+    figura.update_layout(margin=dict(t=80), legend=dict(y=1.14))   # leyenda arriba de los títulos de panel
+    return figura

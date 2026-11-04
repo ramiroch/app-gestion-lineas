@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from core.analisis import (ATAJO_MES, ATAJO_PERSONALIZADO, ATAJO_SEMANA, Filtros, analisis_filtrados,
-                           atajos, filtrar, filtros_sin_periodo, opciones, rango_de_atajo, tabla_analisis,
+                           atajos, filtrar, filtros_sin_periodo, opciones, pares_con_emulsion, rango_de_atajo, tabla_analisis,
                            tabla_emulsion)
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
@@ -156,6 +156,17 @@ def test_emulsion_sin_factor_da_error_claro(sesion, planta):
 
     with pytest.raises(ParametrosIncompletos, match="emulsión"):
         tabla_emulsion(sesion, planta.id)
+
+
+def test_pares_con_emulsion(sesion, planta):
+    pares = pares_con_emulsion(tabla_analisis(sesion, planta.id), tabla_emulsion(sesion, planta.id))
+
+    # 2 pares completos: eBOE 1 (2025, con emulsión) y eBOE 2 (2026, sin emulsión)
+    assert pares["eboe"].tolist() == [1, 2]
+    assert pares["eficiencia_pct"].tolist() == pytest.approx([90.0, 75.0])          # 1 − 0,7/7 y 1 − 2,1/8,4
+    assert pares["aceite_emulsion"].iloc[0] == pytest.approx(0.175)
+    assert pd.isna(pares["aceite_emulsion"].iloc[1])
+    assert pares["caudal_fase_pesada"].iloc[0] == 9.5
 
 
 def test_filtros_sin_periodo_saca_fechas_y_procesos():

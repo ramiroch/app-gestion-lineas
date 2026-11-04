@@ -153,6 +153,19 @@ def filtrar(tabla: pd.DataFrame, filtros: Filtros) -> pd.DataFrame:
     return tabla[seleccion].reset_index(drop=True)
 
 
+def pares_con_emulsion(fruta: pd.DataFrame, emulsion: pd.DataFrame) -> pd.DataFrame:
+    """Un renglón por par entrada/salida con su eficiencia, el caudal y el aceite en emulsión.
+
+    fruta y emulsion son tabla_analisis() y tabla_emulsion() (ya filtradas). Se toman las filas de
+    Entrada con eficiencia_par y se les agrega aceite_emulsion del análisis de emulsión del mismo
+    eBOE y fecha_hora (vacío si no hay). eficiencia_pct = eficiencia_par × 100 (puntos de %).
+    """
+    pares = fruta[(fruta["lugar"] == "Entrada") & fruta["eficiencia_par"].notna()]
+    licor = emulsion[["eboe", "fecha_hora", "aceite_emulsion"]]
+    unidos = pares.merge(licor, on=["eboe", "fecha_hora"], how="left", validate="one_to_one")
+    return unidos.assign(eficiencia_pct=unidos["eficiencia_par"] * 100)
+
+
 def filtros_sin_periodo(filtros: Filtros) -> Filtros:
     """Copia de los filtros sin fechas ni procesos, para comparar temporadas.
 
