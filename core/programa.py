@@ -4,8 +4,10 @@ Una combinación es eBOE + programa + MTPH (redondeada a 1 MTPH). Se trabaja con
 entrada/salida (core.analisis.pares_con_emulsion), con la eficiencia en puntos de %.
 Promedio simple por par: cada par cuenta igual (no es un promedio por día, turno, proceso ni
 temporada, que son los que se ponderan por toneladas).
-Las combinaciones con N < N_MINIMO se muestran como poco representativas y no entran en la
-superficie, en el ranking ni en la frase.
+Dos mínimos de N:
+- N_MINIMO (3): debajo, la combinación se muestra tenue (poco representativa) y no entra en la superficie.
+- N_MINIMO_RANKING (10): solo las combinaciones con al menos ese N entran en el ranking de mejores y
+  peores y en la frase; con N chico los extremos salen de combinaciones con IC muy anchos.
 """
 
 import numpy as np
@@ -15,6 +17,7 @@ from scipy import stats
 from core.formato import numero
 
 N_MINIMO = 3
+N_MINIMO_RANKING = 10
 PROGRAMAS = list(range(10))      # N0 a N9
 
 
@@ -56,15 +59,19 @@ def _representativas(combos: pd.DataFrame) -> pd.DataFrame:
     return combos.loc[combos["representativa"].astype(bool)]
 
 
-def mejores_y_peores(combos: pd.DataFrame, k: int = 5) -> pd.DataFrame:
-    """Las k mejores y las k peores combinaciones representativas de cada eBOE.
+def _con_n_minimo(combos: pd.DataFrame, n_minimo: int) -> pd.DataFrame:
+    return combos.loc[(combos["n"] >= n_minimo).astype(bool)]
+
+
+def mejores_y_peores(combos: pd.DataFrame, k: int = 5, n_minimo: int = N_MINIMO_RANKING) -> pd.DataFrame:
+    """Las k mejores y las k peores combinaciones de cada eBOE con N ≥ n_minimo.
 
     Ordena por eficiencia media (a igual media, la de más N primero). Si un eBOE tiene menos de
     2k combinaciones, las peores no repiten las que ya están entre las mejores. Agrega las
     columnas grupo ("Mejores" o "Peores") y puesto (1 = la mejor, o la peor).
     """
     partes = []
-    for _, sub in _representativas(combos).groupby("eboe", sort=True):
+    for _, sub in _con_n_minimo(combos, n_minimo).groupby("eboe", sort=True):
         orden = sub.sort_values(["media", "n"], ascending=[False, False])
         mejores = orden.head(k).assign(grupo="Mejores")
         peores = orden.drop(mejores.index).sort_values(["media", "n"], ascending=[True, False]).head(k)
@@ -92,16 +99,16 @@ def grilla(combos: pd.DataFrame, eboe) -> tuple[list[int], list[int], np.ndarray
     return mtph, PROGRAMAS, eficiencia, n
 
 
-def frase_programa(combos: pd.DataFrame, eboe) -> str:
-    """Mejor y peor combinación representativa de un eBOE, en una frase.
+def frase_programa(combos: pd.DataFrame, eboe, n_minimo: int = N_MINIMO_RANKING) -> str:
+    """Mejor y peor combinación de un eBOE entre las que tienen N ≥ n_minimo, en una frase.
 
     Ejemplo: "El eBOE 2 rinde mejor con N4 a 10 MTPH (84,5 %, N 37) y peor con N7 a 13 MTPH
     (74,1 %, N 22)."
     """
-    sub = _representativas(combos)
+    sub = _con_n_minimo(combos, n_minimo)
     sub = sub[sub["eboe"] == eboe]
     if sub.empty:
-        return f"El eBOE {eboe} no tiene combinaciones de programa y MTPH con N ≥ {N_MINIMO}."
+        return f"El eBOE {eboe} no tiene combinaciones de programa y MTPH con N ≥ {n_minimo}."
 
     def texto(fila):
         return f"{fila['programa']} a {fila['mtph']} MTPH ({numero(fila['media'], 1)} %, N {fila['n']})"
@@ -109,7 +116,7 @@ def frase_programa(combos: pd.DataFrame, eboe) -> str:
     orden = sub.sort_values(["media", "n"], ascending=[False, False])
     mejor, peor = orden.iloc[0], orden.iloc[-1]
     if len(orden) == 1:
-        return f"El eBOE {eboe} tiene una sola combinación con N ≥ {N_MINIMO}: {texto(mejor)}."
+        return f"El eBOE {eboe} tiene una sola combinación con N ≥ {n_minimo}: {texto(mejor)}."
     return f"El eBOE {eboe} rinde mejor con {texto(mejor)} y peor con {texto(peor)}."
 
 

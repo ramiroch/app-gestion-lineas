@@ -18,7 +18,7 @@ from core.comparaciones import comparar_grupos, frase_resultado
 from core.estadistica import limites_iqr, media_ponderada_por_turno, resumen_descriptivo
 from core.formato import numero, texto_p
 from core.parametros import ParametrosIncompletos
-from core.programa import (N_MINIMO, combinaciones, de_combinaciones, frase_programa, grilla,
+from core.programa import (N_MINIMO, N_MINIMO_RANKING, combinaciones, de_combinaciones, frase_programa, grilla,
                            mejores_y_peores)
 from core.regresion import frase_pendiente, regresiones_por_grupo
 from filtros import (barra_filtros, filtros_elegidos, planta_elegida, tabla_emulsion_planta, tabla_planta,
@@ -327,7 +327,7 @@ def tabla_ranking(ranking: pd.DataFrame) -> pd.DataFrame:
 def pestana_programa(datos: pd.DataFrame) -> None:
     st.caption("Respeta todos los filtros de la barra. Eficiencia = promedio simple de los pares de cada "
                f"combinación de eBOE, programa y MTPH. Las combinaciones con N < {N_MINIMO} se ven tenues y no "
-               "entran en la superficie, el ranking ni las frases.")
+               f"entran en la superficie; el ranking y las frases usan solo las que tienen N ≥ {N_MINIMO_RANKING}.")
     try:
         emulsion = filtrar(tabla_emulsion_planta(planta_elegida()), filtros_elegidos())
     except ParametrosIncompletos:
@@ -372,10 +372,10 @@ def pestana_programa(datos: pd.DataFrame) -> None:
         st.caption(f"Solo celdas con N ≥ {N_MINIMO}; las vacías quedan sin color. En el contorno, los puntos "
                    "marcan las celdas con datos: entre ellas el color es interpolado.")
 
-    st.subheader(f"Mejores y peores combinaciones (N ≥ {N_MINIMO})")
+    st.subheader(f"Mejores y peores combinaciones (solo combinaciones con N ≥ {N_MINIMO_RANKING})")
     ranking = mejores_y_peores(combos)
     if ranking.empty:
-        st.info(f"No hay combinaciones con N ≥ {N_MINIMO}.")
+        st.info(f"No hay combinaciones con N ≥ {N_MINIMO_RANKING}.")
         return
     eboes = sorted(ranking["eboe"].unique())
     for columna, eboe in zip(st.columns(len(eboes)), eboes):

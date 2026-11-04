@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 from scipy import stats
 
-from core.programa import (combinaciones, de_combinaciones, frase_programa, grilla, mejores_y_peores,
+from core.programa import (N_MINIMO_RANKING, combinaciones, de_combinaciones, frase_programa, grilla, mejores_y_peores,
                            numero_programa)
 
 
@@ -46,12 +46,12 @@ def test_combinaciones(pares):
 
 
 def test_mejores_y_peores_sin_repetir(pares):
-    tabla = mejores_y_peores(combinaciones(pares), k=5)
+    tabla = mejores_y_peores(combinaciones(pares), k=5, n_minimo=3)
     eboe2 = tabla[tabla["eboe"] == 2]
 
     # eBOE 2 tiene 2 combinaciones representativas (N5 tiene N 2): N4 es la mejor y N7 la peor
     assert eboe2[["grupo", "programa", "puesto"]].values.tolist() == [["Mejores", "N4", 1], ["Mejores", "N7", 2]]
-    assert mejores_y_peores(combinaciones(pares), k=1)[["eboe", "grupo", "programa"]].values.tolist() == [
+    assert mejores_y_peores(combinaciones(pares), k=1, n_minimo=3)[["eboe", "grupo", "programa"]].values.tolist() == [
         [1, "Mejores", "N3"], [2, "Mejores", "N4"], [2, "Peores", "N7"]]
 
 
@@ -67,10 +67,25 @@ def test_grilla_solo_celdas_representativas(pares):
 def test_frase_programa(pares):
     combos = combinaciones(pares)
 
-    assert frase_programa(combos, 2) == ("El eBOE 2 rinde mejor con N4 a 10 MTPH (85,0 %, N 3) "
+    assert frase_programa(combos, 2, n_minimo=3) == ("El eBOE 2 rinde mejor con N4 a 10 MTPH (85,0 %, N 3) "
                                          "y peor con N7 a 13 MTPH (74,0 %, N 3).")
-    assert frase_programa(combos, 1) == "El eBOE 1 tiene una sola combinación con N ≥ 3: N3 a 12 MTPH (82,0 %, N 3)."
-    assert frase_programa(combos, 9) == "El eBOE 9 no tiene combinaciones de programa y MTPH con N ≥ 3."
+    assert frase_programa(combos, 1, n_minimo=3) == "El eBOE 1 tiene una sola combinación con N ≥ 3: N3 a 12 MTPH (82,0 %, N 3)."
+    assert frase_programa(combos, 9, n_minimo=3) == "El eBOE 9 no tiene combinaciones de programa y MTPH con N ≥ 3."
+
+
+def test_ranking_y_frase_usan_n_minimo_10_por_defecto():
+    filas = [(1, "N4", 10.0, 80.0 + i % 3) for i in range(12)]          # N 12: entra
+    filas += [(1, "N7", 13.0, 70.0 + i % 3) for i in range(10)]         # N 10: entra (justo)
+    filas += [(1, "N9", 11.0, 95.0)] * 9                               # N 9: no entra, aunque es la mejor
+    combos = combinaciones(_pares(filas))
+
+    assert N_MINIMO_RANKING == 10
+    assert set(mejores_y_peores(combos)["programa"]) == {"N4", "N7"}
+    assert frase_programa(combos, 1) == ("El eBOE 1 rinde mejor con N4 a 10 MTPH (81,0 %, N 12) "
+                                         "y peor con N7 a 13 MTPH (70,9 %, N 10).")
+    assert combos.set_index("programa").loc["N9", "representativa"]      # en las burbujas sí se ve normal
+    assert frase_programa(combinaciones(_pares(filas[-9:])), 1) == \
+        "El eBOE 1 no tiene combinaciones de programa y MTPH con N ≥ 10."
 
 
 def test_de_combinaciones(pares):
