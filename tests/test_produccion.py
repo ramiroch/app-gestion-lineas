@@ -2,12 +2,13 @@
 
 from datetime import date, time
 
+import pandas as pd
 import pytest
 
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
 from core.models import Cliente, Planta, Proceso, RegistroProduccion, Turno
-from core.produccion import toneladas_turno
+from core.produccion import toneladas_por_turno, toneladas_turno
 
 
 @pytest.fixture
@@ -36,3 +37,9 @@ def test_turno_compartido_por_dos_procesos_suma_las_toneladas(sesion):
     assert toneladas_turno(sesion, planta.id, dia, turno_n.id) == pytest.approx(119.0)
     assert toneladas_turno(sesion, planta.id, dia, turno_m.id) is None          # sin dato
     assert toneladas_turno(sesion, planta.id, date(2025, 9, 18), turno_n.id) is None   # sin registro
+
+    tabla = toneladas_por_turno(sesion, planta.id)
+    assert len(tabla) == 1                                                       # el turno M no tiene dato
+    fila = tabla.iloc[0]
+    assert (fila["fecha_produccion"], fila["turno"]) == (pd.Timestamp(dia), "N")
+    assert fila["fruta_t"] == pytest.approx(119.0)

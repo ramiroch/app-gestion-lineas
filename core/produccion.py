@@ -2,10 +2,11 @@
 
 from datetime import date
 
-from sqlalchemy import select
+import pandas as pd
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from core.models import RegistroProduccion
+from core.models import RegistroProduccion, Turno
 
 
 def toneladas_turno(sesion: Session, planta_id: int, fecha_produccion: date, turno_id: int) -> float | None:
@@ -22,3 +23,19 @@ def toneladas_turno(sesion: Session, planta_id: int, fecha_produccion: date, tur
             RegistroProduccion.turno_id == turno_id)).all()
     con_dato = [valor for valor in valores if valor is not None]
     return sum(con_dato) if con_dato else None
+
+
+def toneladas_por_turno(sesion: Session, planta_id: int) -> pd.DataFrame:
+    """Fruta procesada (t) de cada turno de la planta, para ponderar promedios.
+
+    Columnas: fecha_produccion (fecha de pandas), turno (nombre) y fruta_t, sumando los
+    procesos de cada turno como toneladas_turno(). Los turnos sin dato no aparecen.
+    """
+    filas = sesion.execute(
+        select(RegistroProduccion.fecha_produccion, Turno.nombre, func.sum(RegistroProduccion.fruta_t))
+        .join(Turno, RegistroProduccion.turno_id == Turno.id)
+        .where(RegistroProduccion.planta_id == planta_id, RegistroProduccion.fruta_t.is_not(None))
+        .group_by(RegistroProduccion.fecha_produccion, Turno.nombre)).all()
+    tabla = pd.DataFrame(filas, columns=["fecha_produccion", "turno", "fruta_t"])
+    tabla["fecha_produccion"] = pd.to_datetime(tabla["fecha_produccion"])
+    return tabla
