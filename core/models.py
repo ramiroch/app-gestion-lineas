@@ -5,7 +5,7 @@ RangoReferencia. Datos de planta: AnalisisScott, LecturaOperacion y RegistroProd
 
 Cada clase es una tabla de la base. Las relaciones son "uno a muchos":
 un cliente tiene muchas plantas, una planta muchas líneas, etc.
-Regla: se guardan los datos crudos; los resultados (aceite %, kg/t, eficiencia,
+Regla: se guardan los datos crudos; los resultados (aceite %, kg/MT, eficiencia,
 turno, fecha de producción) se calculan, nunca se guardan.
 """
 
@@ -71,7 +71,7 @@ class Planta(Base):
     distintos países. Parámetros de cálculo (opcionales, sin valor por defecto: cada
     planta tiene los suyos; los cálculos los leen con core/parametros.py):
     - blanco_ml: blanco de la titulación Scott, en mL.
-    - factor_aceite_fruta: aceite en fruta (kg/t) = (mL − blanco) × N × factor / g.
+    - factor_aceite_fruta: aceite en fruta (kg/MT) = (mL − blanco) × N × factor / g.
     - factor_aceite_emulsion: aceite en emulsión (%) = (mL − blanco) × N × factor / g.
     - hora_inicio_dia: hora en que empieza el día de producción.
     """
@@ -234,7 +234,7 @@ class AnalisisScott(Auditoria, Base):
     """Análisis de aceite por titulación Scott: solo datos crudos, nunca el resultado.
 
     El resultado se calcula: (vol_ml − blanco_ml) × normalidad × factor / peso_muestra_g,
-    con el factor de la planta según el punto (fruta en kg/t o emulsión en %).
+    con el factor de la planta según el punto (fruta en kg/MT o emulsión en %).
     Datos crudos: peso_muestra_g (g), vol_ml (mL de titulante), blanco_ml (mL),
     normalidad (N del BrO3, ≈ 0,100 en fruta de entrada y ≈ 0,010 en salida).
     Opcionales de fruta: peso_fruta_kg, n_frutos, calidad, rallado.

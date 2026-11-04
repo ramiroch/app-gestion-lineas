@@ -27,7 +27,7 @@ def porcentaje(fraccion, decimales: int = 1) -> str:
 
 
 def kg_t(valor) -> str:
-    return "—" if valor is None else f"{numero(valor)} kg/t"
+    return "—" if valor is None else f"{numero(valor)} kg/MT"
 
 
 def tarjeta(columna, titulo: str, resultado: dict, formato) -> None:
@@ -86,7 +86,7 @@ def pestana_periodo(datos: pd.DataFrame) -> None:
     st.caption("Caja: Q1 a Q3 con la mediana. Bigotes: hasta el último valor dentro de los límites IQR. "
                "Círculos abiertos: outliers (se marcan, no se borran). El N de cada caja está en su tooltip.")
 
-    st.subheader("Estadística del aceite en fruta de Salida por eBOE (kg/t)")
+    st.subheader("Estadística del aceite en fruta de Salida por eBOE (kg/MT)")
     filas, grupos = [], {}
     for eboe, valores in salidas.groupby("eboe")["aceite_fruta"]:
         r = resumen_descriptivo(valores)
@@ -100,7 +100,7 @@ def pestana_periodo(datos: pd.DataFrame) -> None:
     else:
         st.info("No hay muestras de Salida con estos filtros.")
 
-    st.subheader("Límites de outliers por IQR (kg/t)")
+    st.subheader("Límites de outliers por IQR (kg/MT)")
     filas, grupos = [], {}
     for (eboe, lugar), valores in datos.groupby(["eboe", "lugar"])["aceite_fruta"]:
         lim = limites_iqr(valores)
@@ -258,7 +258,7 @@ def pestana_temporadas() -> None:
     pares = entradas.dropna(subset=["eficiencia_par"]).assign(eficiencia_pct=lambda d: d["eficiencia_par"] * 100)
 
     bloque_temporadas("Aceite en fruta de entrada", entradas, "aceite_fruta", "El aceite en fruta de entrada",
-                      "el", "kg/t", "kg/t", "Aceite en fruta entrada (kg/t)", 2)
+                      "el", "kg/MT", "kg/MT", "Aceite en fruta entrada (kg/MT)", 2)
     bloque_temporadas("Eficiencia eBOE", pares, "eficiencia_pct", "La eficiencia", "la", "%", "puntos",
                       "Eficiencia eBOE (%)", 1)
     try:

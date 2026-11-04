@@ -2,7 +2,7 @@
 
 Un par es el análisis de fruta entrada y el de fruta salida del mismo eBOE y la misma
 fecha_hora (así los carga el importador). Con cada par se calcula la eficiencia
-(1 − salida/entrada) y el rendimiento (entrada − salida, kg/t) con core.calculos.
+(1 − salida/entrada) y el rendimiento (entrada − salida, kg/MT) con core.calculos.
 """
 
 from collections import defaultdict
@@ -26,7 +26,7 @@ def resumen_eboe_por_temporada(sesion: Session, planta_id: int, eficiencia_minim
 
     Devuelve una lista ordenada por temporada y eBOE; cada elemento tiene:
     temporada, eboe (número), codigo, pares (N), eficiencia_media (fracción),
-    rendimiento_medio (kg/t), aceite_entrada_medio (kg/t), fraccion_bajo_minimo
+    rendimiento_medio (kg/MT), aceite_entrada_medio (kg/MT), fraccion_bajo_minimo
     (fracción de pares con eficiencia < eficiencia_minima) y descartados (pares con
     aceite de entrada 0, en los que no se puede calcular la eficiencia).
     """

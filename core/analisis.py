@@ -98,7 +98,7 @@ def tabla_analisis(sesion: Session, planta_id: int) -> pd.DataFrame:
     """Una fila por análisis de fruta (entrada o salida) de los eBOE de la planta.
 
     Columnas (COLUMNAS): fecha_produccion y turno se calculan con core.turnos;
-    aceite_fruta (kg/t) con core.calculos desde los datos crudos; eficiencia_par
+    aceite_fruta (kg/MT) con core.calculos desde los datos crudos; eficiencia_par
     (fracción) va en las dos filas del par entrada/salida del mismo eBOE y la misma
     fecha_hora, y queda vacía si falta una de las dos; programa y tph salen de la lectura
     de operación del mismo eBOE y fecha_hora (si la hay).

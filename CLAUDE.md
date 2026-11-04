@@ -114,3 +114,4 @@ pytest                          # correr las pruebas
 
 ## Gráficos
 Plotly, estilo sobrio: línea de datos oscura, límites de control punteados en gris, puntos fuera de control resaltados con forma y color (rojo para regla 1, naranja para el resto), tooltip con fecha, turno y analista. Nunca dos ejes Y en un mismo gráfico.
+Unidades: kg/MT para aceite en fruta y MTPH para caudal de fruta.

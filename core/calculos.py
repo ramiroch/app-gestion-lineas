@@ -23,7 +23,7 @@ def _validar_titulacion(vol_ml: float, blanco_ml: float, normalidad: float, peso
 
 def aceite_en_fruta(planta: Planta, vol_ml: float, blanco_ml: float, normalidad: float,
                     peso_muestra_g: float) -> float:
-    """Aceite en fruta en kg/t.
+    """Aceite en fruta en kg/MT.
 
     Fórmula: (vol_ml − blanco_ml) × normalidad × factor_aceite_fruta / peso_muestra_g.
     vol_ml y blanco_ml en mL de titulante; normalidad del BrO3; peso de la muestra en g.
@@ -47,7 +47,7 @@ def aceite_en_emulsion(planta: Planta, vol_ml: float, blanco_ml: float, normalid
 def eficiencia_eboe(aceite_entrada: float, aceite_salida: float) -> float:
     """Eficiencia del eBOE como fracción (0,85 = 85 %).
 
-    Fórmula: 1 − aceite_salida / aceite_entrada, con aceite en fruta (kg/t) de la
+    Fórmula: 1 − aceite_salida / aceite_entrada, con aceite en fruta (kg/MT) de la
     entrada y la salida del mismo eBOE y la misma hora. Es la remoción del BOE del manual Brown.
     """
     if aceite_entrada is None or aceite_entrada <= 0:
@@ -58,7 +58,7 @@ def eficiencia_eboe(aceite_entrada: float, aceite_salida: float) -> float:
 
 
 def rendimiento_eboe(aceite_entrada: float, aceite_salida: float) -> float:
-    """Rendimiento del eBOE en kg/t: aceite_entrada − aceite_salida (aceite en fruta, kg/t)."""
+    """Rendimiento del eBOE en kg/MT: aceite_entrada − aceite_salida (aceite en fruta, kg/MT)."""
     if aceite_entrada is None or aceite_salida is None:
         raise ValueError("Faltan el aceite en fruta de entrada o el de salida.")
     return aceite_entrada - aceite_salida

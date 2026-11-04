@@ -22,7 +22,7 @@ PALETA = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#62
 COLORES = {"Entrada": PALETA[0], "Salida": PALETA[1]}
 COLOR_SERIE = "#2a78d6"     # una sola serie (boxplot por temporada): color 1 de la paleta
 COLOR_DATOS = "#2b2f36"     # medias e intervalos: oscuro, como pide CLAUDE.md
-TITULO_ACEITE = "Aceite en fruta (kg/t)"
+TITULO_ACEITE = "Aceite en fruta (kg/MT)"
 ALTURA = 450
 ALTURA_CHICA = 380          # dos gráficos lado a lado
 
@@ -75,7 +75,7 @@ def histograma_grupos(datos: pd.DataFrame, variable: str, grupo: str, titulo_x: 
 
 def histograma(datos: pd.DataFrame) -> go.Figure:
     """Histograma de aceite en fruta, Entrada y Salida superpuestos, con su curva normal."""
-    return histograma_grupos(datos, "aceite_fruta", "lugar", TITULO_ACEITE, "kg/t", colores=COLORES)
+    return histograma_grupos(datos, "aceite_fruta", "lugar", TITULO_ACEITE, "kg/MT", colores=COLORES)
 
 
 def _texto_caja(titulo: str, lim: dict, mediana: float, decimales: int) -> str:
@@ -128,7 +128,7 @@ def boxplot(datos: pd.DataFrame) -> go.Figure:
     figura = go.Figure()
     for lugar in LUGARES:
         _cajas(figura, datos[datos["lugar"] == lugar], "aceite_fruta", "eboe", lambda e: f"eBOE {e}",
-               lugar, COLORES[lugar], "kg/t", offsetgroup=lugar)
+               lugar, COLORES[lugar], "kg/MT", offsetgroup=lugar)
     figura.update_layout(boxmode="group", scattermode="group", yaxis_title=TITULO_ACEITE,
                          xaxis=dict(type="category", categoryorder="category ascending"))
     return estilo(figura)

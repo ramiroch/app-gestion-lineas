@@ -487,7 +487,7 @@ def _cargar_fila_boe(numero: int, datos: dict, archivo: str, blanco: float, punt
                                 AnalisisScott, campos, "análisis de emulsión", numero, reporte)
 
         if all(datos.get(c) is None for c in MEDICIONES_OPERACION):
-            reporte.agregar("BOE", numero, "aviso", "Sin datos de operación (programa, flip gate, t/h, "
+            reporte.agregar("BOE", numero, "aviso", "Sin datos de operación (programa, flip gate, MTPH, "
                                                     "caudal): no se carga la lectura.")
         else:
             equipo = eboe["equipo"]

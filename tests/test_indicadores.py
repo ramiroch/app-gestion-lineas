@@ -17,7 +17,7 @@ from core.indicadores import resumen_eboe_por_temporada
 from core.models import AnalisisScott, Cliente, Equipo, Linea, Planta, Proceso, PuntoMuestreo
 
 DOC = Path(__file__).resolve().parent.parent / "docs" / "mapeo_ledesma.md"
-TOLERANCIA_MEDIAS = 0.1      # puntos de eficiencia; kg/t en rendimiento y aceite
+TOLERANCIA_MEDIAS = 0.1      # puntos de eficiencia; kg/MT en rendimiento y aceite
 TOLERANCIA_PORCENTAJE = 0.5  # puntos: la tabla redondea el % de pares < 80 % a enteros
 TOLERANCIA_PARES = 5
 
@@ -37,7 +37,7 @@ def _analisis(punto, proceso, fecha_hora, vol_ml):
 
 
 def test_resumen_con_numeros_inventados(sesion):
-    # factor 70, blanco 0, N 0,1 y 10 g → aceite = vol × 0,7 kg/t
+    # factor 70, blanco 0, N 0,1 y 10 g → aceite = vol × 0,7 kg/MT
     planta = Planta(nombre="Planta Norte", pais="Argentina", factor_aceite_fruta=70.0,
                     cliente=Cliente(nombre="CLIENTE A", pais="Argentina"))
     equipo = Equipo(codigo="PN-BOE-01", nombre="eBOE 1", tipo="BOE", numero=1,

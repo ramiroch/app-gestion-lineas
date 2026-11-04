@@ -27,7 +27,7 @@ def sesion():
 def planta(sesion):
     """Planta con 2 eBOE, turnos M/T/N y día de producción desde las 05:00.
 
-    Con factor 70, blanco 0, N 0,1 y 10 g, el aceite en fruta es vol × 0,7 kg/t; con factor
+    Con factor 70, blanco 0, N 0,1 y 10 g, el aceite en fruta es vol × 0,7 kg/MT; con factor
     3,5, el aceite en emulsión es vol × 0,035 %.
     """
     planta = Planta(nombre="Planta Norte", pais="Argentina", factor_aceite_fruta=70.0, factor_aceite_emulsion=3.5,
