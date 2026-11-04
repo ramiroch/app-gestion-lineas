@@ -164,6 +164,7 @@ def test_pares_con_emulsion(sesion, planta):
     # 2 pares completos: eBOE 1 (2025, con emulsión) y eBOE 2 (2026, sin emulsión)
     assert pares["eboe"].tolist() == [1, 2]
     assert pares["eficiencia_pct"].tolist() == pytest.approx([90.0, 75.0])          # 1 − 0,7/7 y 1 − 2,1/8,4
+    assert pares["aceite_salida"].tolist() == pytest.approx([0.7, 2.1])
     assert pares["aceite_emulsion"].iloc[0] == pytest.approx(0.175)
     assert pd.isna(pares["aceite_emulsion"].iloc[1])
     assert pares["caudal_fase_pesada"].iloc[0] == 9.5

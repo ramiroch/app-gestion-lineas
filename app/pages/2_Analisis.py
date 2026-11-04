@@ -4,6 +4,8 @@ Pestaña Período: análisis 1 a 4 de la sección 9 de docs/mapeo_ledesma.md (hi
 estadística de Salida y límites IQR), con todos los filtros.
 Pestaña Temporadas: análisis 8 a 10 (ANOVA, Tukey, intervalos al 95 % y boxplot por temporada);
 ignora fechas y procesos, y respeta eBOE, turno y programa.
+Pestaña Programa y MTPH: análisis 6 y 7 (burbujas, superficie y contorno), con todos los filtros y
+filtrado cruzado al hacer clic en una burbuja.
 Solo muestra: la estadística está en core/, los gráficos en app/graficos.py y los datos
 filtrados vienen de app/filtros.py.
 """
@@ -16,10 +18,13 @@ from core.comparaciones import comparar_grupos, frase_resultado
 from core.estadistica import limites_iqr, media_ponderada_por_turno, resumen_descriptivo
 from core.formato import numero, texto_p
 from core.parametros import ParametrosIncompletos
+from core.programa import (N_MINIMO, combinaciones, de_combinaciones, frase_programa, grilla,
+                           mejores_y_peores)
 from core.regresion import frase_pendiente, regresiones_por_grupo
 from filtros import (barra_filtros, filtros_elegidos, planta_elegida, tabla_emulsion_planta, tabla_planta,
                      toneladas_planta)
-from graficos import boxplot, boxplot_temporadas, dispersion_por_eboe, histograma, histograma_grupos, intervalos
+from graficos import (boxplot, boxplot_temporadas, burbujas, contorno, dispersion_por_eboe, histograma,
+                      histograma_grupos, intervalos, superficie)
 
 
 def porcentaje(fraccion, decimales: int = 1) -> str:
@@ -278,6 +283,106 @@ def pestana_temporadas() -> None:
     st.caption("Promedios simples por muestra: el ANOVA compara muestras, no se pondera por toneladas.")
 
 
+# ---------------------------------------------------------------- pestaña Programa y MTPH
+
+CLAVE_VERSION_BURBUJAS = "_version_burbujas"   # cambiarla crea un gráfico nuevo, sin selección
+
+
+def quitar_seleccion() -> None:
+    st.session_state[CLAVE_VERSION_BURBUJAS] = st.session_state.get(CLAVE_VERSION_BURBUJAS, 0) + 1
+
+
+def combinaciones_elegidas(evento, claves: list[list[tuple]]) -> list[tuple]:
+    """(eboe, programa, mtph) de las burbujas elegidas con clic, recuadro o lazo."""
+    elegidas = []
+    for punto in evento.selection.points if evento else []:
+        traza, indice = punto.get("curve_number"), punto.get("point_index", punto.get("point_number"))
+        if traza is not None and indice is not None and traza < len(claves) and indice < len(claves[traza]):
+            elegidas.append(claves[traza][indice])
+    return sorted(set(elegidas))
+
+
+def tabla_muestras(muestras: pd.DataFrame) -> pd.DataFrame:
+    return pd.DataFrame({
+        "Fecha": muestras["fecha_hora"].dt.strftime("%d/%m/%Y %H:%M"), "Turno": muestras["turno"],
+        "eBOE": muestras["eboe"], "Programa": muestras["programa"],
+        "MTPH": muestras["tph"].map(lambda v: numero(v, 0)),
+        "Aceite entrada (kg/MT)": muestras["aceite_fruta"].map(numero),
+        "Aceite salida (kg/MT)": muestras["aceite_salida"].map(numero),
+        "Eficiencia (%)": muestras["eficiencia_pct"].map(lambda v: numero(v, 1)),
+        "Aceite en emulsión (%)": muestras["aceite_emulsion"].map(numero),
+    })
+
+
+def tabla_ranking(ranking: pd.DataFrame) -> pd.DataFrame:
+    singular = {"Mejores": "Mejor", "Peores": "Peor"}
+    return pd.DataFrame({
+        "Puesto": [f"{singular[g]} {p}" for g, p in zip(ranking["grupo"], ranking["puesto"])],
+        "Programa": ranking["programa"], "MTPH": ranking["mtph"], "N": ranking["n"],
+        "Eficiencia (%)": ranking["media"].map(lambda v: numero(v, 1)),
+        "IC 95 %": [f"{numero(a, 1)} a {numero(b, 1)}" for a, b in zip(ranking["ic_inf"], ranking["ic_sup"])],
+    })
+
+
+def pestana_programa(datos: pd.DataFrame) -> None:
+    st.caption("Respeta todos los filtros de la barra. Eficiencia = promedio simple de los pares de cada "
+               f"combinación de eBOE, programa y MTPH. Las combinaciones con N < {N_MINIMO} se ven tenues y no "
+               "entran en la superficie, el ranking ni las frases.")
+    try:
+        emulsion = filtrar(tabla_emulsion_planta(planta_elegida()), filtros_elegidos())
+    except ParametrosIncompletos:
+        emulsion = pd.DataFrame(columns=["eboe", "fecha_hora", "aceite_emulsion"])
+    pares = pares_con_emulsion(datos, emulsion)
+    combos = combinaciones(pares)
+    if combos.empty:
+        st.info("No hay pares con programa y MTPH con estos filtros.")
+        return
+
+    st.subheader("Eficiencia según MTPH y programa")
+    figura, claves = burbujas(combos)
+    evento = st.plotly_chart(figura, width="stretch", on_select="rerun", selection_mode=("points", "box", "lasso"),
+                             key=f"burbujas_{st.session_state.get(CLAVE_VERSION_BURBUJAS, 0)}")
+    st.caption(f"Tamaño = N de pares ({numero(combos['n'].sum(), 0)} en total). Hacé clic en una burbuja "
+               "(Shift+clic, recuadro o lazo para varias) para ver sus muestras y filtrar el resto de la pestaña.")
+
+    elegidas = combinaciones_elegidas(evento, claves)
+    if elegidas:
+        muestras = de_combinaciones(pares, elegidas)
+        nombres = ", ".join(f"eBOE {e} · {p} a {m} MTPH" for e, p, m in elegidas)
+        st.markdown(f"**Muestras de {nombres}** (N {numero(len(muestras), 0)})")
+        st.dataframe(tabla_muestras(muestras), hide_index=True)
+        st.button("Quitar selección", on_click=quitar_seleccion)
+        st.info("El resto de la pestaña muestra solo las combinaciones elegidas.")
+        combos = combinaciones(muestras)
+
+    st.subheader("Resumen por eBOE")
+    for eboe in sorted(combos["eboe"].unique()):
+        st.markdown("- " + frase_programa(combos, eboe))
+
+    st.subheader("Superficie y contorno")
+    opciones = [f"eBOE {e}" for e in sorted(combos["eboe"].unique())]
+    eboe = int(st.selectbox("eBOE", opciones, key="programa_eboe").removeprefix("eBOE "))
+    mtph, programas, eficiencia, n = grilla(combos, eboe)
+    if len(mtph) < 2 or (~pd.isna(eficiencia)).any(axis=0).sum() < 2:
+        st.info(f"Para la superficie hacen falta al menos 2 MTPH y 2 programas con N ≥ {N_MINIMO} en el eBOE {eboe}.")
+    else:
+        izquierda, derecha = st.columns(2)
+        izquierda.plotly_chart(superficie(mtph, programas, eficiencia, n, eboe), width="stretch")
+        derecha.plotly_chart(contorno(mtph, programas, eficiencia, n, eboe), width="stretch")
+        st.caption(f"Solo celdas con N ≥ {N_MINIMO}; las vacías quedan sin color. En el contorno, los puntos "
+                   "marcan las celdas con datos: entre ellas el color es interpolado.")
+
+    st.subheader(f"Mejores y peores combinaciones (N ≥ {N_MINIMO})")
+    ranking = mejores_y_peores(combos)
+    if ranking.empty:
+        st.info(f"No hay combinaciones con N ≥ {N_MINIMO}.")
+        return
+    eboes = sorted(ranking["eboe"].unique())
+    for columna, eboe in zip(st.columns(len(eboes)), eboes):
+        columna.markdown(f"**eBOE {eboe}**")
+        columna.dataframe(tabla_ranking(ranking[ranking["eboe"] == eboe]), hide_index=True)
+
+
 # ---------------------------------------------------------------- página
 
 st.set_page_config(page_title="Análisis", layout="wide")
@@ -287,8 +392,10 @@ datos = barra_filtros()
 if filtros_elegidos() is None:      # la planta no tiene análisis: la barra ya lo avisó
     st.stop()
 
-periodo, temporadas = st.tabs(["Período", "Temporadas"])
+periodo, temporadas, programa = st.tabs(["Período", "Temporadas", "Programa y MTPH"])
 with periodo:
     pestana_periodo(datos)
 with temporadas:
     pestana_temporadas()
+with programa:
+    pestana_programa(datos)

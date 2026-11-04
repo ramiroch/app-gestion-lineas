@@ -7,12 +7,14 @@ exportar a PNG desde un script (fig.write_image, con kaleido).
 
 import math
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from core.estadistica import ancho_de_clase, cuartiles, curva_normal, es_outlier_iqr, limites_iqr, resumen_descriptivo
 from core.formato import numero
+from core.programa import numero_programa
 from core.regresion import recta
 
 LUGARES = ("Entrada", "Salida")
@@ -24,6 +26,10 @@ COLOR_SERIE = "#2a78d6"     # una sola serie (boxplot por temporada): color 1 de
 COLOR_DATOS = "#2b2f36"     # medias e intervalos: oscuro, como pide CLAUDE.md
 TITULO_ACEITE = "Aceite en fruta (kg/MT)"
 ALTURA = 450
+# Escala secuencial de un solo azul (claro → oscuro) para datos ordenados: programa N0 a N9 y eficiencia.
+AZULES = ["#86b6ef", "#6da7ec", "#5598e7", "#3987e5", "#2a78d6", "#256abf", "#1c5cab", "#184f95", "#104281", "#0d366b"]
+ESCALA_AZUL = [[i / (len(AZULES) - 1), color] for i, color in enumerate(AZULES)]
+GRIS = "#8a8f98"
 ALTURA_CHICA = 380          # dos gráficos lado a lado
 
 
@@ -226,3 +232,82 @@ def dispersion_por_eboe(datos: pd.DataFrame, x: str, y: str, regresiones: pd.Dat
     estilo(figura)
     figura.update_layout(margin=dict(t=80), legend=dict(y=1.14))   # leyenda arriba de los títulos de panel
     return figura
+
+
+def burbujas(combos: pd.DataFrame) -> tuple[go.Figure, list[list[tuple]]]:
+    """Burbujas de eficiencia media vs MTPH, un panel por eBOE (mismo eje Y), color por programa
+    (azul claro N0 → oscuro N9) y tamaño por N de pares.
+
+    combos es core.programa.combinaciones(). Las combinaciones con N < 3 van tenues y con aviso en
+    el tooltip. Devuelve la figura y, por cada traza, la lista de (eboe, programa, mtph) de cada
+    burbuja, para saber qué combinación eligió el usuario al hacer clic.
+    """
+    eboes = sorted(combos["eboe"].unique())
+    programas = sorted(combos["programa"].unique(), key=lambda p: (numero_programa(p) is None, numero_programa(p), p))
+    figura = make_subplots(rows=1, cols=max(len(eboes), 1), shared_yaxes=True, horizontal_spacing=0.03,
+                           subplot_titles=[f"eBOE {e}" for e in eboes])
+    escala = 2 * combos["n"].max() / 40 ** 2 if len(combos) else 1      # burbuja más grande ≈ 40 px
+    claves, en_leyenda = [], set()
+    for columna, eboe in enumerate(eboes, start=1):
+        for programa in programas:
+            sub = combos[(combos["eboe"] == eboe) & (combos["programa"] == programa)]
+            if sub.empty:
+                continue
+            num = numero_programa(programa)
+            avisos = ["" if r else "<br><b>⚠ N < 3: poco representativa</b>" for r in sub["representativa"]]
+            ics = ["—" if pd.isna(a) else f"{numero(a, 1)} a {numero(b, 1)} %" for a, b in zip(sub["ic_inf"], sub["ic_sup"])]
+            figura.add_scatter(
+                row=1, col=columna, x=sub["mtph"], y=sub["media"], mode="markers", name=programa,
+                legendgroup=programa, showlegend=programa not in en_leyenda,
+                marker=dict(size=sub["n"], sizemode="area", sizeref=escala, sizemin=4,
+                            color=AZULES[num] if num is not None else GRIS,
+                            opacity=[0.85 if r else 0.2 for r in sub["representativa"]],
+                            line=dict(color="white", width=1)),
+                customdata=list(zip(sub["n"], sub["media"].map(lambda v: numero(v, 1)), ics, avisos)),
+                hovertemplate=f"<b>eBOE {eboe} · {programa} a %{{x}} MTPH</b><br>Eficiencia %{{customdata[1]}} %"
+                              "<br>IC 95 %: %{customdata[2]}<br>N %{customdata[0]} pares%{customdata[3]}<extra></extra>")
+            en_leyenda.add(programa)
+            claves.append([(eboe, programa, int(m)) for m in sub["mtph"]])
+        figura.update_xaxes(title_text="MTPH", row=1, col=columna)
+    figura.update_xaxes(matches="x")
+    figura.update_yaxes(title_text="Eficiencia eBOE (%)", row=1, col=1)
+    figura.update_annotations(font_size=12)
+    estilo(figura)
+    figura.update_layout(margin=dict(t=80), legend=dict(y=1.14, title_text="Programa", itemsizing="constant"),
+                         dragmode="select")
+    return figura, claves
+
+
+def superficie(mtph: list, programas: list, eficiencia, n, eboe) -> go.Figure:
+    """Superficie 3D de eficiencia media según programa (0 a 9) y MTPH; las celdas sin N ≥ 3 quedan vacías."""
+    figura = go.Figure(go.Surface(
+        x=programas, y=mtph, z=eficiencia, customdata=n, colorscale=ESCALA_AZUL,
+        colorbar=dict(title=dict(text="%"), thickness=12),
+        hovertemplate="<b>N%{x} a %{y} MTPH</b><br>Eficiencia %{z:.1f} %<br>N %{customdata} pares<extra></extra>"))
+    figura.update_layout(title=dict(text=f"Superficie · eBOE {eboe}", font_size=14), scene=dict(
+        xaxis=dict(title="Programa", tickvals=programas, ticktext=[f"N{p}" for p in programas]),
+        yaxis=dict(title="MTPH"), zaxis=dict(title="Eficiencia (%)"),
+        aspectratio=dict(x=1.2, y=1.0, z=0.8),
+        camera=dict(eye=dict(x=1.2, y=-1.6, z=1.4), center=dict(x=0, y=0, z=-0.15))), margin=dict(l=0, r=0, t=40, b=0))
+    return estilo(figura)
+
+
+def contorno(mtph: list, programas: list, eficiencia, n, eboe) -> go.Figure:
+    """Contorno de eficiencia media según programa y MTPH. Los puntos marcan las celdas con datos
+    (N ≥ 3): el contorno interpola entre ellas."""
+    figura = go.Figure(go.Contour(
+        x=programas, y=mtph, z=eficiencia, customdata=n, colorscale=ESCALA_AZUL, connectgaps=False,
+        contours=dict(showlabels=True, labelfont=dict(size=10, color="white")),
+        colorbar=dict(title=dict(text="%"), thickness=12),
+        hovertemplate="<b>N%{x} a %{y} MTPH</b><br>Eficiencia %{z:.1f} %<extra></extra>"))
+    filas, columnas = np.where(~np.isnan(np.asarray(eficiencia, dtype=float)))
+    figura.add_scatter(
+        x=[programas[j] for j in columnas], y=[mtph[i] for i in filas], mode="markers", showlegend=False,
+        marker=dict(size=6, color=COLOR_DATOS, line=dict(color="white", width=1)),
+        customdata=[[numero(eficiencia[i][j], 1), int(n[i][j])] for i, j in zip(filas, columnas)],
+        hovertemplate="<b>N%{x} a %{y} MTPH</b><br>Eficiencia %{customdata[0]} %<br>N %{customdata[1]} pares"
+                      "<extra></extra>")
+    figura.update_layout(title=dict(text=f"Contorno · eBOE {eboe}", font_size=14),
+                         xaxis=dict(title="Programa", tickvals=programas, ticktext=[f"N{p}" for p in programas]),
+                         yaxis=dict(title="MTPH"))
+    return estilo(figura)

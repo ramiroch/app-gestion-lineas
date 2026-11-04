@@ -157,12 +157,16 @@ def pares_con_emulsion(fruta: pd.DataFrame, emulsion: pd.DataFrame) -> pd.DataFr
     """Un renglón por par entrada/salida con su eficiencia, el caudal y el aceite en emulsión.
 
     fruta y emulsion son tabla_analisis() y tabla_emulsion() (ya filtradas). Se toman las filas de
-    Entrada con eficiencia_par y se les agrega aceite_emulsion del análisis de emulsión del mismo
-    eBOE y fecha_hora (vacío si no hay). eficiencia_pct = eficiencia_par × 100 (puntos de %).
+    Entrada con eficiencia_par y se les agrega aceite_salida (kg/MT, de la fila de Salida del mismo
+    eBOE y fecha_hora) y aceite_emulsion (del análisis de emulsión del mismo eBOE y fecha_hora; vacío
+    si no hay). aceite_fruta sigue siendo el de entrada. eficiencia_pct = eficiencia_par × 100.
     """
     pares = fruta[(fruta["lugar"] == "Entrada") & fruta["eficiencia_par"].notna()]
+    salidas = fruta.loc[fruta["lugar"] == "Salida", ["eboe", "fecha_hora", "aceite_fruta"]].rename(
+        columns={"aceite_fruta": "aceite_salida"})
     licor = emulsion[["eboe", "fecha_hora", "aceite_emulsion"]]
-    unidos = pares.merge(licor, on=["eboe", "fecha_hora"], how="left", validate="one_to_one")
+    unidos = (pares.merge(salidas, on=["eboe", "fecha_hora"], how="left", validate="one_to_one")
+              .merge(licor, on=["eboe", "fecha_hora"], how="left", validate="one_to_one"))
     return unidos.assign(eficiencia_pct=unidos["eficiencia_par"] * 100)
 
 
