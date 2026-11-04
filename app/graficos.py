@@ -332,3 +332,30 @@ def contorno(mtph: list, programas: list, eficiencia, n, eboe) -> go.Figure:
                          xaxis=dict(title="Programa", tickvals=programas, ticktext=[f"N{p}" for p in programas]),
                          yaxis=dict(title="MTPH"))
     return estilo(figura)
+
+
+def barras_uso(uso: pd.DataFrame) -> go.Figure:
+    """% de pares en cada programa (N0 a N9), un panel por eBOE con el mismo eje Y.
+
+    uso es core.programa.uso_de_programas(). Mismos azules por programa que las burbujas.
+    """
+    eboes = sorted(uso["eboe"].unique())
+    categorias = [f"N{p}" for p in range(10)]
+    figura = make_subplots(rows=1, cols=max(len(eboes), 1), shared_yaxes=True, horizontal_spacing=0.03,
+                           subplot_titles=[f"eBOE {e} · N {numero(uso.loc[uso['eboe'] == e, 'n'].sum(), 0)}"
+                                           for e in eboes])
+    for columna, eboe in enumerate(eboes, start=1):
+        sub = uso[uso["eboe"] == eboe]
+        figura.add_bar(
+            row=1, col=columna, x=sub["programa"], y=sub["porcentaje"], showlegend=False,
+            marker=dict(color=[AZULES[int(n)] if pd.notna(n) else GRIS for n in sub["programa_num"]],
+                        line=dict(color="white", width=2)),
+            customdata=list(zip(sub["porcentaje"].map(lambda v: numero(v, 1)), sub["n"].map(lambda v: numero(v, 0)),
+                                sub["n_eboe"].map(lambda v: numero(v, 0)))),
+            hovertemplate=f"<b>eBOE {eboe} · %{{x}}</b><br>%{{customdata[0]}} % de los pares"
+                          "<br>N %{customdata[1]} de %{customdata[2]}<extra></extra>")
+        figura.update_xaxes(categoryorder="array", categoryarray=categorias, title_text="Programa", row=1, col=columna)
+    figura.update_yaxes(title_text="% de pares", row=1, col=1)
+    figura.update_annotations(font_size=12)
+    figura.update_layout(bargap=0.15)
+    return estilo(figura, ALTURA_CHICA)

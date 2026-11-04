@@ -19,6 +19,9 @@ from core.formato import numero
 N_MINIMO = 3
 N_MINIMO_RANKING = 10
 PROGRAMAS = list(range(10))      # N0 a N9
+RALLADOS = ["Ok", "Poco rallada", "Sobre rallada"]     # rallado de la fruta de salida
+VENTANA_USO = 3                  # programas consecutivos que se buscan en la frase de uso
+PROGRAMAS_ALTOS = (8, 9)         # contra los que se compara el sobre rallado
 
 
 def numero_programa(programa) -> int | None:
@@ -127,3 +130,79 @@ def de_combinaciones(pares: pd.DataFrame, claves) -> pd.DataFrame:
     marca = [(e, p, int(m)) in elegidas if pd.notna(m) else False
              for e, p, m in zip(pares["eboe"], pares["programa"], mtph)]
     return pares[marca].reset_index(drop=True)
+
+
+def _rango(numeros) -> str:
+    """[2, 3, 4] → "N2–N4"; [8] → "N8"."""
+    numeros = sorted(numeros)
+    return f"N{numeros[0]}" if len(numeros) == 1 else f"N{numeros[0]}–N{numeros[-1]}"
+
+
+def uso_de_programas(pares: pd.DataFrame) -> pd.DataFrame:
+    """Cuánto se usa cada programa: % de pares de cada eBOE en cada programa.
+
+    Devuelve eboe, programa, programa_num, n, n_eboe (pares del eBOE con programa) y porcentaje
+    (n / n_eboe × 100), ordenado por eBOE y número de programa.
+    """
+    datos = pares.dropna(subset=["eboe", "programa"])
+    uso = datos.groupby(["eboe", "programa"]).size().rename("n").reset_index()
+    uso["programa_num"] = uso["programa"].map(numero_programa)
+    uso["n_eboe"] = uso.groupby("eboe")["n"].transform("sum")
+    uso["porcentaje"] = uso["n"] / uso["n_eboe"] * 100
+    return uso.sort_values(["eboe", "programa_num", "programa"], ignore_index=True)[
+        ["eboe", "programa", "programa_num", "n", "n_eboe", "porcentaje"]]
+
+
+def rallado_por_programa(pares: pd.DataFrame) -> pd.DataFrame:
+    """% de rallado de la fruta de salida (Ok, Poco rallada, Sobre rallada) por eBOE y programa.
+
+    Usa los pares con rallado_salida cargado; n es esa cantidad. Devuelve eboe, programa,
+    programa_num, n, pct_ok, pct_poco y pct_sobre.
+    """
+    datos = pares.dropna(subset=["eboe", "programa", "rallado_salida"])
+    filas = []
+    for (eboe, programa), sub in datos.groupby(["eboe", "programa"], sort=True):
+        conteo = sub["rallado_salida"].value_counts()
+        n = len(sub)
+        filas.append({"eboe": eboe, "programa": programa, "programa_num": numero_programa(programa), "n": n,
+                      "pct_ok": conteo.get("Ok", 0) / n * 100,
+                      "pct_poco": conteo.get("Poco rallada", 0) / n * 100,
+                      "pct_sobre": conteo.get("Sobre rallada", 0) / n * 100})
+    tabla = pd.DataFrame(filas, columns=["eboe", "programa", "programa_num", "n", "pct_ok", "pct_poco", "pct_sobre"])
+    return tabla.sort_values(["eboe", "programa_num", "programa"], ignore_index=True)
+
+
+def frase_uso(pares: pd.DataFrame, eboe) -> str:
+    """Uso de programas y sobre rallado de un eBOE, en una frase.
+
+    Busca los VENTANA_USO programas consecutivos más usados y compara su % de sobre rallado con el de
+    PROGRAMAS_ALTOS (si la ventana no los incluye). "Del tiempo" = % de pares (≈ una muestra por hora).
+    Ejemplo: "El eBOE 2 trabaja el 62 % del tiempo en N2–N4; en N8–N9 el sobre rallado es 3,0 % (N 40)
+    contra 2,0 % (N 900) en N2–N4."
+    """
+    del_eboe = pares[pares["eboe"] == eboe]
+    uso = uso_de_programas(del_eboe).dropna(subset=["programa_num"])
+    if uso.empty:
+        return f"El eBOE {eboe} no tiene pares con programa."
+    porcentajes = dict(zip(uso["programa_num"].astype(int), uso["porcentaje"]))
+    ventanas = [list(range(inicio, inicio + VENTANA_USO)) for inicio in range(len(PROGRAMAS) - VENTANA_USO + 1)]
+    ventana = max(ventanas, key=lambda v: (sum(porcentajes.get(p, 0) for p in v), -v[0]))
+    texto = (f"El eBOE {eboe} trabaja el {numero(sum(porcentajes.get(p, 0) for p in ventana), 0)} % "
+             f"del tiempo en {_rango(ventana)}")
+    if set(ventana) & set(PROGRAMAS_ALTOS):
+        return texto + "."
+
+    con_rallado = del_eboe.dropna(subset=["rallado_salida"]).assign(
+        num=lambda d: d["programa"].map(numero_programa))
+
+    def sobre(numeros):
+        sub = con_rallado[con_rallado["num"].isin(numeros)]
+        return len(sub), ((sub["rallado_salida"] == "Sobre rallada").mean() * 100 if len(sub) else None)
+
+    n_altos, pct_altos = sobre(PROGRAMAS_ALTOS)
+    n_ventana, pct_ventana = sobre(ventana)
+    if not n_altos or not n_ventana:
+        return texto + f"; no hay pares con rallado cargado en {_rango(PROGRAMAS_ALTOS)} para comparar."
+    return (f"{texto}; en {_rango(PROGRAMAS_ALTOS)} el sobre rallado es {numero(pct_altos, 1)} % "
+            f"(N {numero(n_altos, 0)}) contra {numero(pct_ventana, 1)} % (N {numero(n_ventana, 0)}) "
+            f"en {_rango(ventana)}.")

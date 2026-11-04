@@ -44,15 +44,15 @@ def planta(sesion):
     p2025 = Proceso(numero=7, temporada=2025, planta=planta)
     p2026 = Proceso(numero=7, temporada=2026, planta=planta)   # mismo número, otra temporada
 
-    def analisis(eboe, tipo, proceso, fecha_hora, vol_ml):
+    def analisis(eboe, tipo, proceso, fecha_hora, vol_ml, **extra):
         return AnalisisScott(punto_muestreo=puntos[(eboe, tipo)], proceso=proceso, fecha_hora=fecha_hora,
                              analista="Prueba", peso_muestra_g=10.0, vol_ml=vol_ml, blanco_ml=0.0,
-                             normalidad=0.1, cargado_por="prueba")
+                             normalidad=0.1, cargado_por="prueba", **extra)
 
     manana, madrugada = datetime(2025, 6, 10, 8, 0), datetime(2025, 6, 11, 2, 0)   # madrugada → día 10, turno N
     sesion.add_all([
         planta,
-        analisis(1, "fruta entrada", p2025, manana, 10.0), analisis(1, "fruta salida", p2025, manana, 1.0),
+        analisis(1, "fruta entrada", p2025, manana, 10.0), analisis(1, "fruta salida", p2025, manana, 1.0, rallado="Poco rallada"),
         analisis(1, "emulsión", p2025, manana, 5.0),                               # no es fruta: no entra
         LecturaOperacion(equipo=puntos[(1, "fruta entrada")].equipo, fecha_hora=manana, programa="N3",
                          tph=18.0, caudal_fase_pesada=9.5, cargado_por="prueba"),
@@ -165,6 +165,7 @@ def test_pares_con_emulsion(sesion, planta):
     assert pares["eboe"].tolist() == [1, 2]
     assert pares["eficiencia_pct"].tolist() == pytest.approx([90.0, 75.0])          # 1 − 0,7/7 y 1 − 2,1/8,4
     assert pares["aceite_salida"].tolist() == pytest.approx([0.7, 2.1])
+    assert pares["rallado_salida"].iloc[0] == "Poco rallada" and pd.isna(pares["rallado_salida"].iloc[1])
     assert pares["aceite_emulsion"].iloc[0] == pytest.approx(0.175)
     assert pd.isna(pares["aceite_emulsion"].iloc[1])
     assert pares["caudal_fase_pesada"].iloc[0] == 9.5

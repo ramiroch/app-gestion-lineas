@@ -7,8 +7,8 @@ import pandas as pd
 import pytest
 from scipy import stats
 
-from core.programa import (N_MINIMO_RANKING, combinaciones, de_combinaciones, frase_programa, grilla, mejores_y_peores,
-                           numero_programa)
+from core.programa import (N_MINIMO_RANKING, combinaciones, de_combinaciones, frase_programa, frase_uso, grilla,
+                           mejores_y_peores, numero_programa, rallado_por_programa, uso_de_programas)
 
 
 def _pares(filas):
@@ -100,3 +100,47 @@ def test_sin_datos():
     vacio = combinaciones(_pares([]))
     assert vacio.empty and mejores_y_peores(vacio).empty
     assert grilla(vacio, 1)[0] == []
+
+
+def _uso():
+    """eBOE 2: 60 pares en N2–N4 (20 c/u), 10 en N8, 10 en N9, 20 en N6 → 100 pares.
+    Rallado de salida: en N2–N4, 2 sobre rallados de 60; en N8–N9, 3 de 20 (1 sin rallado cargado)."""
+    filas = []
+    for programa, cantidad in (("N2", 20), ("N3", 20), ("N4", 20), ("N6", 20), ("N8", 10), ("N9", 10)):
+        filas += [{"eboe": 2, "programa": programa, "rallado_salida": "Poco rallada"} for _ in range(cantidad)]
+    datos = pd.DataFrame(filas)
+    datos.loc[[0, 25], "rallado_salida"] = "Sobre rallada"              # N2 y N3
+    datos.loc[[80, 81, 95], "rallado_salida"] = "Sobre rallada"         # N8, N8, N9
+    datos.loc[[1, 2, 3], "rallado_salida"] = "Ok"
+    datos.loc[96, "rallado_salida"] = None                               # N9 sin rallado
+    return datos
+
+
+def test_uso_de_programas():
+    uso = uso_de_programas(_uso()).set_index("programa")
+
+    assert uso["porcentaje"].to_dict() == pytest.approx({"N2": 20, "N3": 20, "N4": 20, "N6": 20, "N8": 10, "N9": 10})
+    assert uso["n_eboe"].unique().tolist() == [100]
+    assert list(uso.index) == ["N2", "N3", "N4", "N6", "N8", "N9"]          # en orden de programa
+
+
+def test_rallado_por_programa():
+    rallado = rallado_por_programa(_uso()).set_index("programa")
+
+    assert rallado.loc["N2", "n"] == 20
+    assert (rallado.loc["N2", "pct_sobre"], rallado.loc["N2", "pct_ok"], rallado.loc["N2", "pct_poco"]) == \
+        pytest.approx((5, 15, 80))
+    assert rallado.loc["N9", "n"] == 9                                       # el que no tiene rallado no cuenta
+    assert rallado.loc["N9", "pct_sobre"] == pytest.approx(100 / 9)
+
+
+def test_frase_uso():
+    assert frase_uso(_uso(), 2) == ("El eBOE 2 trabaja el 60 % del tiempo en N2–N4; en N8–N9 el sobre rallado "
+                                    "es 15,8 % (N 19) contra 3,3 % (N 60) en N2–N4.")
+    assert frase_uso(_uso(), 7) == "El eBOE 7 no tiene pares con programa."
+
+
+def test_frase_uso_ventana_con_programas_altos():
+    datos = pd.DataFrame({"eboe": [1] * 10, "programa": ["N8"] * 6 + ["N9"] * 4, "rallado_salida": ["Ok"] * 10})
+
+    assert frase_uso(datos, 1) == "El eBOE 1 trabaja el 100 % del tiempo en N7–N9."

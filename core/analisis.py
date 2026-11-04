@@ -22,7 +22,7 @@ TIPO_EBOE = "BOE"
 LUGARES = {"fruta entrada": "Entrada", "fruta salida": "Salida"}
 COLUMNAS = ["analisis_id", "fecha_hora", "fecha_produccion", "turno", "temporada", "proceso_id",
             "proceso", "eboe", "lugar", "analista", "aceite_fruta", "eficiencia_par", "programa", "tph",
-            "caudal_fase_pesada"]
+            "caudal_fase_pesada", "rallado"]
 TIPO_EMULSION = "emulsión"
 COLUMNAS_EMULSION = ["analisis_id", "fecha_hora", "fecha_produccion", "turno", "temporada", "proceso_id",
                      "proceso", "eboe", "analista", "aceite_emulsion", "brix", "ph", "programa", "tph",
@@ -98,7 +98,8 @@ def tabla_analisis(sesion: Session, planta_id: int) -> pd.DataFrame:
     """Una fila por análisis de fruta (entrada o salida) de los eBOE de la planta.
 
     Columnas (COLUMNAS): fecha_produccion y turno se calculan con core.turnos;
-    aceite_fruta (kg/MT) con core.calculos desde los datos crudos; eficiencia_par
+    aceite_fruta (kg/MT) con core.calculos desde los datos crudos; rallado tal como se cargó (se
+    registra en la Salida: Ok, Poco rallada, Sobre rallada); eficiencia_par
     (fracción) va en las dos filas del par entrada/salida del mismo eBOE y la misma
     fecha_hora, y queda vacía si falta una de las dos; programa y tph salen de la lectura
     de operación del mismo eBOE y fecha_hora (si la hay).
@@ -107,6 +108,7 @@ def tabla_analisis(sesion: Session, planta_id: int) -> pd.DataFrame:
     for fila in filas:
         a = fila.pop("_analisis")
         fila["lugar"] = LUGARES[a.punto_muestreo.tipo]
+        fila["rallado"] = a.rallado
         fila["aceite_fruta"] = aceite_en_fruta(planta, a.vol_ml, a.blanco_ml, a.normalidad, a.peso_muestra_g)
     tabla = _a_tabla(filas, COLUMNAS)
     tabla["eficiencia_par"] = _eficiencias_de_pares(tabla)
@@ -157,13 +159,13 @@ def pares_con_emulsion(fruta: pd.DataFrame, emulsion: pd.DataFrame) -> pd.DataFr
     """Un renglón por par entrada/salida con su eficiencia, el caudal y el aceite en emulsión.
 
     fruta y emulsion son tabla_analisis() y tabla_emulsion() (ya filtradas). Se toman las filas de
-    Entrada con eficiencia_par y se les agrega aceite_salida (kg/MT, de la fila de Salida del mismo
-    eBOE y fecha_hora) y aceite_emulsion (del análisis de emulsión del mismo eBOE y fecha_hora; vacío
+    Entrada con eficiencia_par y se les agrega aceite_salida (kg/MT) y rallado_salida, de la fila de
+    Salida del mismo eBOE y fecha_hora, y aceite_emulsion (del análisis de emulsión del mismo eBOE y fecha_hora; vacío
     si no hay). aceite_fruta sigue siendo el de entrada. eficiencia_pct = eficiencia_par × 100.
     """
     pares = fruta[(fruta["lugar"] == "Entrada") & fruta["eficiencia_par"].notna()]
-    salidas = fruta.loc[fruta["lugar"] == "Salida", ["eboe", "fecha_hora", "aceite_fruta"]].rename(
-        columns={"aceite_fruta": "aceite_salida"})
+    salidas = fruta.loc[fruta["lugar"] == "Salida", ["eboe", "fecha_hora", "aceite_fruta", "rallado"]].rename(
+        columns={"aceite_fruta": "aceite_salida", "rallado": "rallado_salida"})
     licor = emulsion[["eboe", "fecha_hora", "aceite_emulsion"]]
     unidos = (pares.merge(salidas, on=["eboe", "fecha_hora"], how="left", validate="one_to_one")
               .merge(licor, on=["eboe", "fecha_hora"], how="left", validate="one_to_one"))

@@ -18,12 +18,12 @@ from core.comparaciones import comparar_grupos, frase_resultado
 from core.estadistica import limites_iqr, media_ponderada_por_turno, resumen_descriptivo
 from core.formato import numero, texto_p
 from core.parametros import ParametrosIncompletos
-from core.programa import (N_MINIMO, N_MINIMO_RANKING, combinaciones, de_combinaciones, frase_programa, grilla,
-                           mejores_y_peores)
+from core.programa import (N_MINIMO, N_MINIMO_RANKING, combinaciones, de_combinaciones, frase_programa, frase_uso,
+                           grilla, mejores_y_peores, rallado_por_programa, uso_de_programas)
 from core.regresion import frase_pendiente, regresiones_por_grupo
 from filtros import (barra_filtros, filtros_elegidos, planta_elegida, tabla_emulsion_planta, tabla_planta,
                      toneladas_planta)
-from graficos import (boxplot, boxplot_temporadas, burbujas, combinaciones_de_puntos, contorno, dispersion_por_eboe, histograma,
+from graficos import (barras_uso, boxplot, boxplot_temporadas, burbujas, combinaciones_de_puntos, contorno, dispersion_por_eboe, histograma,
                       histograma_grupos, intervalos, superficie)
 
 
@@ -292,15 +292,15 @@ def quitar_seleccion() -> None:
     st.session_state[CLAVE_VERSION_BURBUJAS] = st.session_state.get(CLAVE_VERSION_BURBUJAS, 0) + 1
 
 
-def puntos_elegidos(evento, clave: str) -> tuple[list[dict], dict]:
-    """Puntos elegidos en el gráfico de burbujas y la selección cruda (para depurar).
+def puntos_elegidos(evento, clave: str) -> list[dict]:
+    """Puntos elegidos en el gráfico de burbujas.
 
     Se leen del valor que devuelve st.plotly_chart; si viene vacío, de st.session_state[clave].
     """
     seleccion = (evento or {}).get("selection") or {}
     if not seleccion.get("points") and clave in st.session_state:
         seleccion = (st.session_state[clave] or {}).get("selection") or {}
-    return list(seleccion.get("points") or []), dict(seleccion)
+    return list(seleccion.get("points") or [])
 
 
 def tabla_muestras(muestras: pd.DataFrame) -> pd.DataFrame:
@@ -348,12 +348,8 @@ def pestana_programa(datos: pd.DataFrame) -> None:
                "sus muestras y filtrar el resto de la pestaña. Para elegir varias: Shift+clic, o las herramientas "
                "de recuadro y lazo de la barra del gráfico (arriba a la derecha).")
 
-    puntos, seleccion_cruda = puntos_elegidos(evento, clave)
-    elegidas = combinaciones_de_puntos(puntos, claves)
+    elegidas = combinaciones_de_puntos(puntos_elegidos(evento, clave), claves)
     st.button("Quitar selección", on_click=quitar_seleccion, disabled=not elegidas)
-    with st.expander("Depuración (provisorio)"):
-        st.write(f"Key del gráfico: `{clave}` · puntos recibidos: {len(puntos)} · combinaciones: {elegidas}")
-        st.json(seleccion_cruda, expanded=False)
     if elegidas:
         muestras = de_combinaciones(pares, elegidas)
         nombres = ", ".join(f"eBOE {e} · {p} a {m} MTPH" for e, p, m in elegidas)
@@ -390,6 +386,38 @@ def pestana_programa(datos: pd.DataFrame) -> None:
         columna.dataframe(tabla_ranking(ranking[ranking["eboe"] == eboe]), hide_index=True)
 
 
+def bloque_uso_programas(datos: pd.DataFrame) -> None:
+    """Cuánto se usa cada programa y cómo sale rallada la fruta en cada uno, por eBOE."""
+    st.subheader("Uso de programas")
+    st.caption("Con los filtros de la barra (no con la selección de burbujas). \"Del tiempo\" = % de pares "
+               "entrada/salida, que son aproximadamente una muestra por hora. El rallado es el de la fruta de salida.")
+    pares = pares_con_emulsion(datos, pd.DataFrame(columns=["eboe", "fecha_hora", "aceite_emulsion"]))
+    uso = uso_de_programas(pares)
+    if uso.empty:
+        st.info("No hay pares con programa con estos filtros.")
+        return
+    for eboe in sorted(uso["eboe"].unique()):
+        st.markdown("- " + frase_uso(pares, eboe))
+    st.plotly_chart(barras_uso(uso), width="stretch")
+
+    st.markdown("##### Rallado de la fruta de salida por programa")
+    rallado = rallado_por_programa(pares)
+    if rallado.empty:
+        st.info("No hay pares con rallado cargado con estos filtros.")
+        return
+    eboes = sorted(rallado["eboe"].unique())
+    for columna, eboe in zip(st.columns(len(eboes)), eboes):
+        sub = rallado[rallado["eboe"] == eboe]
+        columna.markdown(f"**eBOE {eboe}** · N {numero(sub['n'].sum(), 0)}")
+        columna.dataframe(pd.DataFrame({
+            "Programa": sub["programa"], "N": sub["n"].map(lambda v: numero(v, 0)),
+            "% Ok": sub["pct_ok"].map(lambda v: numero(v, 1)),
+            "% Poco rallada": sub["pct_poco"].map(lambda v: numero(v, 1)),
+            "% Sobre rallada": sub["pct_sobre"].map(lambda v: numero(v, 1)),
+        }), hide_index=True)
+    avisar_n_chico({f"eBOE {f['eboe']} {f['programa']}": f["n"] for f in rallado.to_dict("records")})
+
+
 # ---------------------------------------------------------------- página
 
 st.set_page_config(page_title="Análisis", layout="wide")
@@ -406,3 +434,4 @@ with temporadas:
     pestana_temporadas()
 with programa:
     pestana_programa(datos)
+    bloque_uso_programas(datos)
