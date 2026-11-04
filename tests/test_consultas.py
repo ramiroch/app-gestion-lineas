@@ -5,10 +5,10 @@ from datetime import time
 import pytest
 from sqlalchemy import select
 
-from core.consultas import detalle_planta, filas_equipos, listar_clientes, listar_plantas
+from core.consultas import detalle_planta, filas_equipos, listar_clientes, listar_plantas, rango_referencia
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
-from core.models import Cliente, Equipo, Linea, Planta, PuntoMuestreo
+from core.models import Cliente, Equipo, Linea, Planta, PuntoMuestreo, RangoReferencia
 
 
 @pytest.fixture
@@ -89,3 +89,19 @@ def test_filas_equipos_pone_los_puntos_debajo_de_su_equipo(sesion):
     ]
     assert filas[0]["modelo"] == "6107E" and filas[1]["modelo"] is None
     assert filas[1]["tipo"] == "fruta entrada"
+
+
+def test_rango_referencia():
+    motor = crear_motor("sqlite://")
+    crear_tablas(motor)
+    with crear_sesion(motor) as sesion:
+        planta = Planta(nombre="Planta Norte", pais="Argentina", cliente=Cliente(nombre="CLIENTE A", pais="Argentina"))
+        sesion.add_all([planta,
+                        RangoReferencia(planta=planta, variable="Eficiencia eBOE", minimo=80.0, maximo=90.0, unidad="%"),
+                        RangoReferencia(planta=planta, variable="°Brix emulsión", maximo=5.0)])
+        sesion.commit()
+
+        assert rango_referencia(sesion, planta.id, "eficiencia eboe") == {"minimo": 80.0, "maximo": 90.0,
+                                                                          "unidad": "%", "fuente": None}
+        assert rango_referencia(sesion, planta.id, "°Brix emulsión")["minimo"] is None
+        assert rango_referencia(sesion, planta.id, "Rendimiento eBOE") is None

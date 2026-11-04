@@ -380,3 +380,49 @@ def barras_uso(uso: pd.DataFrame) -> go.Figure:
     figura.update_annotations(font_size=12)
     figura.update_layout(bargap=0.15)
     return estilo(figura, ALTURA_CHICA)
+
+
+def columnas_mensuales(tabla: pd.DataFrame, eje: list[str], titulo_y: str, unidad: str, por_eboe: bool = True,
+                       rango_y: list | None = None, objetivo: dict | None = None) -> go.Figure:
+    """Columnas por mes de producción: agrupadas por eBOE (un color por máquina) o una por mes (planta).
+
+    tabla: core.mensual.por_mes_y_eboe() o eficiencia_proceso_por_mes() con la columna "valor".
+    eje: core.mensual.eje_de_meses() (incluye los huecos entre temporadas). Valor sobre cada columna
+    con 1 decimal; N en el tooltip; los meses con N < 3 van tenues y con aviso. rango_y fija el eje Y
+    (para que paneles comparables tengan la misma escala). objetivo: {"minimo", "maximo"} → banda gris.
+    """
+    figura = go.Figure()
+    grupos = sorted(tabla["eboe"].unique()) if por_eboe else [None]
+    for grupo in grupos:
+        sub = (tabla[tabla["eboe"] == grupo] if grupo is not None else tabla).dropna(subset=["valor"])
+        if sub.empty:
+            continue
+        nombre = f"eBOE {grupo}" if grupo is not None else "Planta"
+        color = PALETA[(int(grupo) - 1) % len(PALETA)] if grupo is not None else PALETA[0]
+        chicos = (sub["n"] < 3).tolist()
+        figura.add_bar(
+            x=sub["etiqueta"], y=sub["valor"], name=nombre, showlegend=por_eboe,
+            marker=dict(color=color, opacity=[0.3 if c else 1 for c in chicos], line=dict(color="white", width=1)),
+            text=sub["valor"].map(lambda v: numero(v, 1)), textposition="outside", cliponaxis=False,
+            textfont=dict(size=10),
+            customdata=list(zip(sub["n"].map(lambda n: numero(n, 0)),
+                                ["<br><b>⚠ N < 3: poco representativo</b>" if c else "" for c in chicos],
+                                sub["valor"].map(lambda v: numero(v, 1)))),
+            hovertemplate=f"<b>{nombre} · %{{x}}</b><br>{titulo_y}: %{{customdata[2]}}<br>"
+                          "N %{customdata[0]}%{customdata[1]}<extra></extra>")
+    huecos = [e for e in eje if not e.strip()]
+    if huecos:      # Plotly solo dibuja categorías con algún dato: una traza invisible reserva el hueco
+        figura.add_scatter(x=huecos, y=[None] * len(huecos), mode="markers", showlegend=False, hoverinfo="skip")
+    if objetivo and objetivo.get("minimo") is not None and objetivo.get("maximo") is not None:
+        figura.add_hrect(y0=objetivo["minimo"], y1=objetivo["maximo"], fillcolor=GRIS, opacity=0.12, line_width=0,
+                         layer="below")
+        for limite in (objetivo["minimo"], objetivo["maximo"]):
+            figura.add_hline(y=limite, line=dict(color=GRIS, width=1, dash="dot"), layer="below")
+        figura.add_annotation(xref="paper", x=1, xanchor="right", y=objetivo["maximo"], yanchor="bottom",
+                              text=f"Objetivo {numero(objetivo['minimo'], 0)}–{numero(objetivo['maximo'], 0)} {unidad}",
+                              showarrow=False, font=dict(size=11, color=GRIS))
+    figura.update_layout(barmode="group", bargap=0.25, bargroupgap=0.05, yaxis_title=titulo_y,
+                         xaxis=dict(type="category", categoryorder="array", categoryarray=eje))
+    if rango_y:
+        figura.update_yaxes(range=rango_y)
+    return estilo(figura)

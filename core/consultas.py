@@ -7,7 +7,7 @@ así las páginas solo muestran datos y no dependen de la base.
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from core.models import Cliente, Equipo, Linea, Planta
+from core.models import Cliente, Equipo, Linea, Planta, RangoReferencia
 
 
 def listar_clientes(sesion: Session) -> list[dict]:
@@ -87,3 +87,17 @@ def filas_equipos(equipos: list[dict]) -> list[dict]:
                           "numero": None, "modelo": None, "numero_serie": None, "estado": None,
                           "es_punto": True})
     return filas
+
+
+def rango_referencia(sesion: Session, planta_id: int, variable: str) -> dict | None:
+    """Rango de referencia (objetivo) de una variable para la planta, de RangoReferencia.
+
+    Devuelve {"minimo", "maximo", "unidad", "fuente"} (mínimo o máximo pueden faltar) o None si la
+    planta no tiene esa variable cargada. La variable se compara sin distinguir mayúsculas.
+    """
+    rango = sesion.scalars(
+        select(RangoReferencia).where(RangoReferencia.planta_id == planta_id)
+        .where(RangoReferencia.variable.ilike(variable))).first()
+    if rango is None:
+        return None
+    return {"minimo": rango.minimo, "maximo": rango.maximo, "unidad": rango.unidad, "fuente": rango.fuente}
