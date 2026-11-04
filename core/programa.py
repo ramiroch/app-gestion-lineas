@@ -21,7 +21,8 @@ N_MINIMO_RANKING = 10
 PROGRAMAS = list(range(10))      # N0 a N9
 RALLADOS = ["Ok", "Poco rallada", "Sobre rallada"]     # rallado de la fruta de salida
 VENTANA_USO = 3                  # programas consecutivos que se buscan en la frase de uso
-PROGRAMAS_ALTOS = (8, 9)         # contra los que se compara el sobre rallado
+PROGRAMAS_ALTOS = (8, 9)         # contra los que se compara el % de rallado Ok
+LIMITE_SOBRE_RALLADO = 1.0       # % de sobre rallado a partir del cual se menciona en la frase
 
 
 def numero_programa(programa) -> int | None:
@@ -173,12 +174,13 @@ def rallado_por_programa(pares: pd.DataFrame) -> pd.DataFrame:
 
 
 def frase_uso(pares: pd.DataFrame, eboe) -> str:
-    """Uso de programas y sobre rallado de un eBOE, en una frase.
+    """Uso de programas y rallado de salida de un eBOE, en una frase.
 
-    Busca los VENTANA_USO programas consecutivos más usados y compara su % de sobre rallado con el de
-    PROGRAMAS_ALTOS (si la ventana no los incluye). "Del tiempo" = % de pares (≈ una muestra por hora).
-    Ejemplo: "El eBOE 2 trabaja el 62 % del tiempo en N2–N4; en N8–N9 el sobre rallado es 3,0 % (N 40)
-    contra 2,0 % (N 900) en N2–N4."
+    Busca los VENTANA_USO programas consecutivos más usados y compara su % de pares con rallado Ok
+    con el de PROGRAMAS_ALTOS (si la ventana no los incluye). El sobre rallado se menciona solo en los
+    programas donde supera LIMITE_SOBRE_RALLADO %. "Del tiempo" = % de pares (≈ una muestra por hora).
+    Ejemplo: "El eBOE 2 trabaja el 59 % del tiempo en N2–N4; en N8–N9 el rallado es Ok en el 72,7 % de
+    los pares (N 33), contra 12,0 % (N 472) en N2–N4."
     """
     del_eboe = pares[pares["eboe"] == eboe]
     uso = uso_de_programas(del_eboe).dropna(subset=["programa_num"])
@@ -187,22 +189,30 @@ def frase_uso(pares: pd.DataFrame, eboe) -> str:
     porcentajes = dict(zip(uso["programa_num"].astype(int), uso["porcentaje"]))
     ventanas = [list(range(inicio, inicio + VENTANA_USO)) for inicio in range(len(PROGRAMAS) - VENTANA_USO + 1)]
     ventana = max(ventanas, key=lambda v: (sum(porcentajes.get(p, 0) for p in v), -v[0]))
-    texto = (f"El eBOE {eboe} trabaja el {numero(sum(porcentajes.get(p, 0) for p in ventana), 0)} % "
+    frase = (f"El eBOE {eboe} trabaja el {numero(sum(porcentajes.get(p, 0) for p in ventana), 0)} % "
              f"del tiempo en {_rango(ventana)}")
-    if set(ventana) & set(PROGRAMAS_ALTOS):
-        return texto + "."
 
     con_rallado = del_eboe.dropna(subset=["rallado_salida"]).assign(
         num=lambda d: d["programa"].map(numero_programa))
 
-    def sobre(numeros):
+    def ok(numeros):
         sub = con_rallado[con_rallado["num"].isin(numeros)]
-        return len(sub), ((sub["rallado_salida"] == "Sobre rallada").mean() * 100 if len(sub) else None)
+        return len(sub), ((sub["rallado_salida"] == "Ok").mean() * 100 if len(sub) else None)
 
-    n_altos, pct_altos = sobre(PROGRAMAS_ALTOS)
-    n_ventana, pct_ventana = sobre(ventana)
-    if not n_altos or not n_ventana:
-        return texto + f"; no hay pares con rallado cargado en {_rango(PROGRAMAS_ALTOS)} para comparar."
-    return (f"{texto}; en {_rango(PROGRAMAS_ALTOS)} el sobre rallado es {numero(pct_altos, 1)} % "
-            f"(N {numero(n_altos, 0)}) contra {numero(pct_ventana, 1)} % (N {numero(n_ventana, 0)}) "
-            f"en {_rango(ventana)}.")
+    if not set(ventana) & set(PROGRAMAS_ALTOS):
+        n_altos, ok_altos = ok(PROGRAMAS_ALTOS)
+        n_ventana, ok_ventana = ok(ventana)
+        if n_altos and n_ventana:
+            frase += (f"; en {_rango(PROGRAMAS_ALTOS)} el rallado es Ok en el {numero(ok_altos, 1)} % de los pares "
+                      f"(N {numero(n_altos, 0)}), contra {numero(ok_ventana, 1)} % (N {numero(n_ventana, 0)}) "
+                      f"en {_rango(ventana)}")
+        else:
+            frase += f"; no hay pares con rallado cargado en {_rango(PROGRAMAS_ALTOS)} para comparar"
+
+    rallado = rallado_por_programa(del_eboe)
+    altos = rallado[rallado["pct_sobre"] > LIMITE_SOBRE_RALLADO]
+    if altos.empty:
+        return frase + "."
+    detalles = [f"{f['programa']} ({numero(f['pct_sobre'], 1)} %, N {numero(f['n'], 0)})" for f in altos.to_dict("records")]
+    lista = detalles[0] if len(detalles) == 1 else ", ".join(detalles[:-1]) + " y " + detalles[-1]
+    return f"{frase}. El sobre rallado supera el {numero(LIMITE_SOBRE_RALLADO, 0)} % en {lista}."

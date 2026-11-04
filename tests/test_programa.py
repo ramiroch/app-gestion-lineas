@@ -134,10 +134,25 @@ def test_rallado_por_programa():
     assert rallado.loc["N9", "pct_sobre"] == pytest.approx(100 / 9)
 
 
-def test_frase_uso():
-    assert frase_uso(_uso(), 2) == ("El eBOE 2 trabaja el 60 % del tiempo en N2–N4; en N8–N9 el sobre rallado "
-                                    "es 15,8 % (N 19) contra 3,3 % (N 60) en N2–N4.")
+def test_frase_uso_compara_ok_y_menciona_sobre_rallado_mayor_a_1():
+    # Ok: 3 de 60 en N2–N4 (5 %), 0 de 19 en N8–N9. Sobre rallado > 1 %: N2 y N3 (1 de 20), N8 (2 de 10), N9 (1 de 9).
+    assert frase_uso(_uso(), 2) == (
+        "El eBOE 2 trabaja el 60 % del tiempo en N2–N4; en N8–N9 el rallado es Ok en el 0,0 % de los pares "
+        "(N 19), contra 5,0 % (N 60) en N2–N4. El sobre rallado supera el 1 % en N2 (5,0 %, N 20), "
+        "N3 (5,0 %, N 20), N8 (20,0 %, N 10) y N9 (11,1 %, N 9).")
     assert frase_uso(_uso(), 7) == "El eBOE 7 no tiene pares con programa."
+
+
+def test_frase_uso_sin_sobre_rallado_no_lo_menciona():
+    datos = _uso()
+    datos.loc[datos["rallado_salida"] == "Sobre rallada", "rallado_salida"] = "Ok"
+    datos.loc[0, "rallado_salida"] = "Sobre rallada"                    # un solo sobre rallado,
+    datos.loc[0, "programa"] = "N6"                                      # en N6: 1 de 21 = 4,8 % → se menciona
+    frase = frase_uso(datos, 2)
+    assert frase.endswith("El sobre rallado supera el 1 % en N6 (4,8 %, N 21).")
+
+    datos.loc[0, "rallado_salida"] = "Ok"                                # sin sobre rallado: no se menciona
+    assert "sobre rallado" not in frase_uso(datos, 2)
 
 
 def test_frase_uso_ventana_con_programas_altos():
