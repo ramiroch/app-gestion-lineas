@@ -6,9 +6,11 @@ import pandas as pd
 import pytest
 
 from core.analisis import (ATAJO_MES, ATAJO_PERSONALIZADO, ATAJO_SEMANA, Filtros, analisis_filtrados,
-                           atajos, filtrar, opciones, rango_de_atajo, tabla_analisis)
+                           atajos, filtrar, filtros_sin_periodo, opciones, rango_de_atajo, tabla_analisis,
+                           tabla_emulsion)
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
+from core.parametros import ParametrosIncompletos
 from core.models import (AnalisisScott, Cliente, Equipo, LecturaOperacion, Linea, Planta, Proceso,
                          PuntoMuestreo, Turno)
 
@@ -25,9 +27,11 @@ def sesion():
 def planta(sesion):
     """Planta con 2 eBOE, turnos M/T/N y día de producción desde las 05:00.
 
-    Con factor 70, blanco 0, N 0,1 y 10 g, el aceite en fruta es vol × 0,7 kg/t.
+    Con factor 70, blanco 0, N 0,1 y 10 g, el aceite en fruta es vol × 0,7 kg/t; con factor
+    3,5, el aceite en emulsión es vol × 0,035 %.
     """
-    planta = Planta(nombre="Planta Norte", pais="Argentina", factor_aceite_fruta=70.0, hora_inicio_dia=time(5, 0),
+    planta = Planta(nombre="Planta Norte", pais="Argentina", factor_aceite_fruta=70.0, factor_aceite_emulsion=3.5,
+                    hora_inicio_dia=time(5, 0),
                     cliente=Cliente(nombre="CLIENTE A", pais="Argentina"))
     for nombre, inicio, fin in (("M", time(5), time(12, 59)), ("T", time(13), time(20, 59)), ("N", time(21), time(4, 59))):
         sesion.add(Turno(nombre=nombre, hora_inicio=inicio, hora_fin=fin, planta=planta))
@@ -51,7 +55,7 @@ def planta(sesion):
         analisis(1, "fruta entrada", p2025, manana, 10.0), analisis(1, "fruta salida", p2025, manana, 1.0),
         analisis(1, "emulsión", p2025, manana, 5.0),                               # no es fruta: no entra
         LecturaOperacion(equipo=puntos[(1, "fruta entrada")].equipo, fecha_hora=manana, programa="N3",
-                         tph=18.0, cargado_por="prueba"),
+                         tph=18.0, caudal_fase_pesada=9.5, cargado_por="prueba"),
         analisis(2, "fruta entrada", p2025, madrugada, 10.0),                      # sin salida: sin eficiencia
         analisis(2, "fruta entrada", p2026, datetime(2026, 7, 1, 15, 0), 12.0),
         analisis(2, "fruta salida", p2026, datetime(2026, 7, 1, 15, 0), 3.0),
@@ -67,7 +71,7 @@ def test_tabla_una_fila_por_analisis_de_fruta(sesion, planta):
     primera = tabla.iloc[0]
     assert (primera["eboe"], primera["lugar"], primera["turno"]) == (1, "Entrada", "M")
     assert primera["aceite_fruta"] == pytest.approx(7.0)
-    assert (primera["programa"], primera["tph"]) == ("N3", 18.0)
+    assert (primera["programa"], primera["tph"], primera["caudal_fase_pesada"]) == ("N3", 18.0, 9.5)
 
 
 def test_eficiencia_va_en_las_dos_filas_del_par(sesion, planta):
@@ -133,6 +137,35 @@ def test_planta_sin_analisis_da_tabla_vacia(sesion):
 
     assert tabla.empty and list(tabla.columns)[:3] == ["analisis_id", "fecha_hora", "fecha_produccion"]
     assert opciones(tabla)["ultima_fecha"] is None
+
+
+def test_tabla_emulsion_se_filtra_igual(sesion, planta):
+    emulsion = tabla_emulsion(sesion, planta.id)
+
+    assert len(emulsion) == 1
+    fila = emulsion.iloc[0]
+    assert fila["aceite_emulsion"] == pytest.approx(0.175)                # 5 × 0,1 × 3,5 / 10
+    assert (fila["eboe"], fila["turno"], fila["temporada"], fila["programa"]) == (1, "M", 2025, "N3")
+    assert len(filtrar(emulsion, Filtros(eboes=[1], turnos=["M"]))) == 1
+    assert len(filtrar(emulsion, Filtros(eboes=[2]))) == 0
+
+
+def test_emulsion_sin_factor_da_error_claro(sesion, planta):
+    planta.factor_aceite_emulsion = None
+    sesion.commit()
+
+    with pytest.raises(ParametrosIncompletos, match="emulsión"):
+        tabla_emulsion(sesion, planta.id)
+
+
+def test_filtros_sin_periodo_saca_fechas_y_procesos():
+    filtros = Filtros(desde=date(2026, 7, 1), hasta=date(2026, 10, 26), eboes=[1], turnos=["N"],
+                      procesos=[5], programas=["N3"])
+
+    sin_periodo = filtros_sin_periodo(filtros)
+
+    assert sin_periodo == Filtros(eboes=[1], turnos=["N"], programas=["N3"])
+    assert filtros.desde == date(2026, 7, 1)                                   # no cambia el original
 
 
 def test_planta_inexistente(sesion):

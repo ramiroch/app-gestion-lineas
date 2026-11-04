@@ -14,13 +14,15 @@ Para probarla sola: streamlit run app/filtros.py
 
 import streamlit as st
 
-from core.analisis import ATAJO_PERSONALIZADO, Filtros, atajos, filtrar, opciones, rango_de_atajo, tabla_analisis
+from core.analisis import (ATAJO_PERSONALIZADO, Filtros, atajos, filtrar, opciones, rango_de_atajo, tabla_analisis,
+                           tabla_emulsion)
 from core.consultas import listar_clientes, listar_plantas
 from core.db import crear_motor, crear_sesion
 from core.produccion import toneladas_por_turno
 
 PLANTA_POR_DEFECTO = "LEDESMA"
 CLAVE = "filtros"
+CLAVE_ACTUALES = "_filtros_actuales"   # Filtros armados en el último dibujo de la barra
 CAMPOS = ("atajo", "fechas", "eboes", "turnos", "procesos", "programas")   # todos menos la planta
 
 
@@ -35,6 +37,18 @@ def tabla_planta(planta_id: int):
     """Tabla de análisis de la planta, guardada en caché 10 minutos (leerla tarda unos segundos)."""
     with crear_sesion(motor()) as sesion:
         return tabla_analisis(sesion, planta_id)
+
+
+@st.cache_data(ttl=600, show_spinner="Leyendo los análisis de emulsión…")
+def tabla_emulsion_planta(planta_id: int):
+    """Tabla de análisis de emulsión de la planta, en caché 10 minutos."""
+    with crear_sesion(motor()) as sesion:
+        return tabla_emulsion(sesion, planta_id)
+
+
+def filtros_elegidos() -> Filtros | None:
+    """Filtros elegidos en la barra (llamar después de barra_filtros()); None si no hay datos."""
+    return st.session_state.get(CLAVE_ACTUALES)
 
 
 @st.cache_data(ttl=600)
@@ -73,6 +87,7 @@ def _limpiar() -> None:
 def _recargar() -> None:
     """Borra el caché para leer de nuevo la base (por ejemplo, después de importar datos)."""
     tabla_planta.clear()
+    tabla_emulsion_planta.clear()
     toneladas_planta.clear()
     plantas.clear()
 
@@ -114,6 +129,7 @@ def barra_filtros():
         _limpiar()
     guardado["planta"] = planta
 
+    st.session_state[CLAVE_ACTUALES] = None
     tabla = tabla_planta(plantas()[planta])
     if tabla.empty:
         barra.info("Esta planta todavía no tiene análisis cargados.")
@@ -147,6 +163,7 @@ def barra_filtros():
 
     filtros = Filtros(desde=desde, hasta=hasta, eboes=eboes, turnos=turnos,
                       procesos=[op["procesos"][p] for p in procesos], programas=programas)
+    st.session_state[CLAVE_ACTUALES] = filtros
     datos = filtrar(tabla, filtros)
 
     pares = int(((datos["lugar"] == "Entrada") & datos["eficiencia_par"].notna()).sum())

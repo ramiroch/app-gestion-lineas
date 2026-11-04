@@ -1,26 +1,32 @@
-"""Tabla de análisis de fruta de una planta y filtros de la barra global.
+"""Tablas de análisis de una planta (fruta y emulsión) y filtros de la barra global.
 
 tabla_analisis() lee la base y arma una fila por análisis de fruta entrada o salida de
-los eBOE, con lo que necesitan las páginas de análisis. filtrar() aplica los filtros
+los eBOE, con lo que necesitan las páginas de análisis; tabla_emulsion(), lo mismo para
+la emulsión. filtrar() aplica los filtros
 sobre esa tabla con pandas (sin volver a la base). Nada de esto depende de Streamlit:
 la página guarda la tabla en caché y llama a filtrar() cada vez que cambia un filtro.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
 import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from core.calculos import aceite_en_fruta, eficiencia_eboe
+from core.calculos import aceite_en_emulsion, aceite_en_fruta, eficiencia_eboe
 from core.models import AnalisisScott, Equipo, LecturaOperacion, Linea, Planta, PuntoMuestreo
 from core.turnos import fecha_produccion, turno_de
 
 TIPO_EBOE = "BOE"
 LUGARES = {"fruta entrada": "Entrada", "fruta salida": "Salida"}
 COLUMNAS = ["analisis_id", "fecha_hora", "fecha_produccion", "turno", "temporada", "proceso_id",
-            "proceso", "eboe", "lugar", "analista", "aceite_fruta", "eficiencia_par", "programa", "tph"]
+            "proceso", "eboe", "lugar", "analista", "aceite_fruta", "eficiencia_par", "programa", "tph",
+            "caudal_fase_pesada"]
+TIPO_EMULSION = "emulsión"
+COLUMNAS_EMULSION = ["analisis_id", "fecha_hora", "fecha_produccion", "turno", "temporada", "proceso_id",
+                     "proceso", "eboe", "analista", "aceite_emulsion", "brix", "ph", "programa", "tph",
+                     "caudal_fase_pesada"]
 ATAJO_MES = "Último mes"
 ATAJO_SEMANA = "Última semana"
 ATAJO_PERSONALIZADO = "Personalizado"
@@ -41,14 +47,12 @@ class Filtros:
     programas: list[str] = field(default_factory=list)
 
 
-def tabla_analisis(sesion: Session, planta_id: int) -> pd.DataFrame:
-    """Una fila por análisis de fruta (entrada o salida) de los eBOE de la planta.
+def _leer(sesion: Session, planta_id: int, tipos_punto) -> tuple[Planta, list[dict]]:
+    """Lee los análisis de los eBOE de la planta en esos tipos de punto de muestreo.
 
-    Columnas (COLUMNAS): fecha_produccion y turno se calculan con core.turnos;
-    aceite_fruta (kg/t) con core.calculos desde los datos crudos; eficiencia_par
-    (fracción) va en las dos filas del par entrada/salida del mismo eBOE y la misma
-    fecha_hora, y queda vacía si falta una de las dos; programa y tph salen de la lectura
-    de operación del mismo eBOE y fecha_hora (si la hay).
+    Devuelve la planta y una fila por análisis con las columnas comunes (fechas, turno,
+    temporada, proceso, eBOE, analista; programa, tph y caudal_fase_pesada (m³/h) de la
+    lectura del mismo eBOE y fecha_hora) más "_analisis" (el objeto, para calcular) y "_equipo_id".
     """
     planta = sesion.get(Planta, planta_id)
     if planta is None:
@@ -57,7 +61,7 @@ def tabla_analisis(sesion: Session, planta_id: int) -> pd.DataFrame:
     analisis = sesion.scalars(
         select(AnalisisScott)
         .join(AnalisisScott.punto_muestreo).join(PuntoMuestreo.equipo).join(Equipo.linea)
-        .where(Linea.planta_id == planta_id, Equipo.tipo == TIPO_EBOE, PuntoMuestreo.tipo.in_(LUGARES))
+        .where(Linea.planta_id == planta_id, Equipo.tipo == TIPO_EBOE, PuntoMuestreo.tipo.in_(tipos_punto))
         .options(selectinload(AnalisisScott.proceso),
                  selectinload(AnalisisScott.punto_muestreo).selectinload(PuntoMuestreo.equipo))
     ).all()
@@ -74,17 +78,55 @@ def tabla_analisis(sesion: Session, planta_id: int) -> pd.DataFrame:
             "fecha_produccion": fecha_produccion(planta, a.fecha_hora),
             "turno": turno_de(planta, a.fecha_hora).nombre,
             "temporada": a.proceso.temporada, "proceso_id": a.proceso_id, "proceso": a.proceso.numero,
-            "eboe": equipo.numero, "lugar": LUGARES[a.punto_muestreo.tipo], "analista": a.analista,
-            "aceite_fruta": aceite_en_fruta(planta, a.vol_ml, a.blanco_ml, a.normalidad, a.peso_muestra_g),
+            "eboe": equipo.numero, "analista": a.analista,
             "programa": lectura.programa if lectura else None,
             "tph": lectura.tph if lectura else None,
-            "_equipo_id": equipo.id,
+            "caudal_fase_pesada": lectura.caudal_fase_pesada if lectura else None,
+            "_analisis": a, "_equipo_id": equipo.id,
         })
-    tabla = pd.DataFrame(filas, columns=COLUMNAS + ["_equipo_id"])
+    return planta, filas
+
+
+def _a_tabla(filas: list[dict], columnas: list[str]) -> pd.DataFrame:
+    tabla = pd.DataFrame(filas, columns=columnas + ["_equipo_id"])
     for columna in ("fecha_hora", "fecha_produccion"):   # fechas de pandas, también con la tabla vacía
         tabla[columna] = pd.to_datetime(tabla[columna])
+    return tabla
+
+
+def tabla_analisis(sesion: Session, planta_id: int) -> pd.DataFrame:
+    """Una fila por análisis de fruta (entrada o salida) de los eBOE de la planta.
+
+    Columnas (COLUMNAS): fecha_produccion y turno se calculan con core.turnos;
+    aceite_fruta (kg/t) con core.calculos desde los datos crudos; eficiencia_par
+    (fracción) va en las dos filas del par entrada/salida del mismo eBOE y la misma
+    fecha_hora, y queda vacía si falta una de las dos; programa y tph salen de la lectura
+    de operación del mismo eBOE y fecha_hora (si la hay).
+    """
+    planta, filas = _leer(sesion, planta_id, LUGARES)
+    for fila in filas:
+        a = fila.pop("_analisis")
+        fila["lugar"] = LUGARES[a.punto_muestreo.tipo]
+        fila["aceite_fruta"] = aceite_en_fruta(planta, a.vol_ml, a.blanco_ml, a.normalidad, a.peso_muestra_g)
+    tabla = _a_tabla(filas, COLUMNAS)
     tabla["eficiencia_par"] = _eficiencias_de_pares(tabla)
     return tabla.drop(columns="_equipo_id").sort_values(["fecha_hora", "eboe", "lugar"], ignore_index=True)
+
+
+def tabla_emulsion(sesion: Session, planta_id: int) -> pd.DataFrame:
+    """Una fila por análisis de emulsión (licor) de los eBOE de la planta.
+
+    Columnas (COLUMNAS_EMULSION): las mismas de filtro que tabla_analisis() (fechas, turno,
+    temporada, proceso, eBOE, programa), así se filtra con filtrar(); aceite_emulsion (%)
+    con core.calculos.aceite_en_emulsion desde los datos crudos; brix y ph tal como se cargaron.
+    """
+    planta, filas = _leer(sesion, planta_id, [TIPO_EMULSION])
+    for fila in filas:
+        a = fila.pop("_analisis")
+        fila["aceite_emulsion"] = aceite_en_emulsion(planta, a.vol_ml, a.blanco_ml, a.normalidad, a.peso_muestra_g)
+        fila["brix"], fila["ph"] = a.brix, a.ph
+    tabla = _a_tabla(filas, COLUMNAS_EMULSION)
+    return tabla.drop(columns="_equipo_id").sort_values(["fecha_hora", "eboe"], ignore_index=True)
 
 
 def _eficiencias_de_pares(tabla: pd.DataFrame) -> pd.Series:
@@ -109,6 +151,15 @@ def filtrar(tabla: pd.DataFrame, filtros: Filtros) -> pd.DataFrame:
         if valores:
             seleccion &= tabla[columna].isin(valores)
     return tabla[seleccion].reset_index(drop=True)
+
+
+def filtros_sin_periodo(filtros: Filtros) -> Filtros:
+    """Copia de los filtros sin fechas ni procesos, para comparar temporadas.
+
+    Cada proceso pertenece a una sola temporada: si se dejara, no habría nada que comparar.
+    Se mantienen eBOE, turno y programa.
+    """
+    return replace(filtros, desde=None, hasta=None, procesos=[])
 
 
 def analisis_filtrados(sesion: Session, planta_id: int, filtros: Filtros) -> pd.DataFrame:
