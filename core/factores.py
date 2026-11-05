@@ -25,6 +25,7 @@ from core.comparaciones import comparar_grupos
 from core.estadistica import media_ponderada_por_turno
 from core.formato import numero, texto_p
 from core.programa import numero_programa
+from core.regresion import regresiones_por_grupo
 
 ALFA = 0.05
 FRUTOS_MAXIMO = 150         # frutos en 10 kg: más que esto es un error de carga
@@ -369,6 +370,112 @@ def frase_categoria(tabla: pd.DataFrame, factor: str, sujeto: str, unidad: str, 
     for temporada, detalle in partes[1:]:
         texto += f"; en {temporada}, {detalle}"
     return texto + "."
+
+
+# ---------------------------------------------------------------- efecto esponja
+
+def cortes_cuartiles(valores: pd.Series) -> list[float]:
+    """Los 3 cortes de los cuartiles (percentiles 25, 50 y 75)."""
+    valores = pd.to_numeric(valores, errors="coerce").dropna()
+    if len(valores) < 4:
+        raise ValueError("Hacen falta al menos 4 datos para los cuartiles.")
+    return [float(valores.quantile(q / 4)) for q in range(1, 4)]
+
+
+def asignar_cuartil(valores: pd.Series, cortes: list[float]) -> pd.Series:
+    """Cuartil (1 a 4) de cada valor; el corte entra en el cuartil de abajo."""
+    return pd.cut(valores, [-np.inf, *cortes, np.inf], labels=range(1, 5)).astype("Int64")
+
+
+def etiquetas_cuartiles(cortes: list[float], unidad: str = "%", decimales: int = 2) -> dict[int, str]:
+    """{1: "C1 (≤ 1,12 %)", 2: "C2 (1,12–1,52 %)", 3: …, 4: "C4 (> 1,93 %)"}."""
+    c = [numero(v, decimales) for v in cortes]
+    return {1: f"C1 (≤ {c[0]} {unidad})", 2: f"C2 ({c[0]}–{c[1]} {unidad})", 3: f"C3 ({c[1]}–{c[2]} {unidad})",
+            4: f"C4 (> {c[2]} {unidad})"}
+
+
+def esponja_por_cuartil(pares: pd.DataFrame, cortes: list[float], toneladas: pd.DataFrame) -> pd.DataFrame:
+    """Salida (kg/MT) y eficiencia (%) por cuartil de aceite en emulsión, eBOE y temporada.
+
+    Medias ponderadas por las toneladas del turno (simples si no hay producción). Columnas: cuartil,
+    etiqueta, temporada, eboe, n, emulsion (promedio simple del cuartil), salida y eficiencia.
+    """
+    datos = pares.dropna(subset=["aceite_emulsion"]).assign(
+        cuartil=lambda d: asignar_cuartil(d["aceite_emulsion"], cortes))
+    etiquetas = etiquetas_cuartiles(cortes)
+    filas = [{"cuartil": int(c), "etiqueta": etiquetas[int(c)], "temporada": t, "eboe": e, "n": len(sub),
+              "emulsion": float(sub["aceite_emulsion"].mean()),
+              "salida": media_ponderada_por_turno(sub, "residual", toneladas)["valor"],
+              "eficiencia": media_ponderada_por_turno(sub, "eficiencia_pct", toneladas)["valor"]}
+             for (c, t, e), sub in datos.groupby(["cuartil", "temporada", "eboe"], sort=True)]
+    return pd.DataFrame(filas, columns=["cuartil", "etiqueta", "temporada", "eboe", "n", "emulsion", "salida",
+                                        "eficiencia"])
+
+
+def pendientes_esponja(pares: pd.DataFrame) -> pd.DataFrame:
+    """Recta de la salida (kg/MT) en función del aceite en emulsión (%), por eBOE y temporada.
+
+    pendiente = kg/MT de salida por cada 1 % más de aceite en emulsión (core.regresion, con IC y p).
+    """
+    return regresiones_por_grupo(pares, "aceite_emulsion", "residual", ["eboe", "temporada"])
+
+
+def esponja_por_eboe(pares: pd.DataFrame, toneladas: pd.DataFrame) -> pd.DataFrame:
+    """Aceite en emulsión (%), salida (kg/MT) y eficiencia (%) promedio por eBOE y temporada.
+
+    Ponderados por las toneladas del turno; solo los pares con emulsión. Columnas: eboe, temporada, n,
+    emulsion, salida y eficiencia.
+    """
+    datos = pares.dropna(subset=["aceite_emulsion"])
+    filas = [{"eboe": e, "temporada": t, "n": len(sub),
+              **{nombre: media_ponderada_por_turno(sub, columna, toneladas)["valor"]
+                 for nombre, columna in (("emulsion", "aceite_emulsion"), ("salida", "residual"),
+                                         ("eficiencia", "eficiencia_pct"))}}
+             for (e, t), sub in datos.groupby(["eboe", "temporada"], sort=True)]
+    return pd.DataFrame(filas, columns=["eboe", "temporada", "n", "emulsion", "salida", "eficiencia"])
+
+
+def frase_esponja(pendientes: pd.DataFrame, por_eboe: pd.DataFrame, temporada, alfa: float = ALFA) -> str:
+    """¿La emulsión explica la diferencia entre eBOE? Dentro de una temporada.
+
+    Mira si la salida sube con la emulsión en cada eBOE (pendiente positiva y significativa) y si el eBOE
+    con más salida es también el de más emulsión. Lo que la emulsión explicaría de su diferencia =
+    pendiente del eBOE × (su emulsión − la de los otros).
+    Ejemplo: "En 2026, a más aceite en emulsión, más salida en los 3 eBOE; pero el eBOE 2 tiene la emulsión
+    más baja (1,40 % contra 1,60 % de los otros), así que no explica su diferencia de 0,40 kg/MT."
+    """
+    pend = pendientes[(pendientes["temporada"] == temporada)].dropna(subset=["pendiente"])
+    sub = por_eboe[por_eboe["temporada"] == temporada]
+    if len(sub) < 2 or pend.empty:
+        return f"En {temporada} no hay datos suficientes de emulsión en más de un eBOE."
+    suben = pend[(pend["pendiente"] > 0) & (pend["p"] < alfa)]
+    if len(suben) == len(pend):
+        inicio = f"En {temporada}, a más aceite en emulsión, más salida en los {len(pend)} eBOE"
+    elif suben.empty:
+        inicio = f"En {temporada}, la salida no sube con el aceite en emulsión en ningún eBOE"
+    else:
+        inicio = (f"En {temporada}, a más aceite en emulsión, más salida en {len(suben)} de los {len(pend)} eBOE "
+                  f"(eBOE {', '.join(str(int(e)) for e in suben['eboe'])})")
+    peor = sub.loc[sub["salida"].idxmax()]
+    otros = sub[sub["eboe"] != peor["eboe"]]
+    diferencia = peor["salida"] - otros["salida"].mean()
+    emulsion_otros = otros["emulsion"].mean()
+    if peor["emulsion"] == sub["emulsion"].max():
+        posicion = "más alta"
+    elif peor["emulsion"] == sub["emulsion"].min():
+        posicion = "más baja"
+    else:
+        posicion = "intermedia"
+    texto_emulsion = (f"el eBOE {int(peor['eboe'])}, el de más salida, tiene la emulsión {posicion} "
+                      f"({numero(peor['emulsion'], 2)} % contra {numero(emulsion_otros, 2)} % de los otros)")
+    fila_pend = pend[pend["eboe"] == peor["eboe"]]
+    explicada = (float(fila_pend["pendiente"].iloc[0]) * (peor["emulsion"] - emulsion_otros)
+                 if not fila_pend.empty and not suben.empty else 0.0)
+    if explicada <= 0 or diferencia <= 0:
+        return f"{inicio}; pero {texto_emulsion}, así que no explica su diferencia de {numero(diferencia, 2)} kg/MT."
+    parte = min(explicada / diferencia, 1.0) * 100
+    return (f"{inicio}; {texto_emulsion}: explicaría {numero(explicada, 2)} de sus {numero(diferencia, 2)} kg/MT de "
+            f"diferencia ({numero(parte, 0)} %).")
 
 
 # ---------------------------------------------------------------- modelo multivariable

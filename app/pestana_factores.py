@@ -10,7 +10,8 @@ import pandas as pd
 import streamlit as st
 
 from core.analisis import filtrar, filtros_sin_periodo, pares_con_emulsion
-from core.factores import (CATEGORIAS, N_MINIMO_CELDA, RESPUESTAS, VIF_MAXIMO, aceite_perdido, agregar_dia_proceso, comparar_planta,
+from core.factores import (CATEGORIAS, cortes_cuartiles, esponja_por_cuartil, esponja_por_eboe, etiquetas_cuartiles,
+                           frase_esponja, pendientes_esponja, N_MINIMO_CELDA, RESPUESTAS, VIF_MAXIMO, aceite_perdido, agregar_dia_proceso, comparar_planta,
                            cortes_quintiles, descomponer, etiquetas_quintiles, frase_aceite_perdido, frase_calibre,
                            frase_categoria, frase_descomposicion, frase_eboe_calibre, frase_modelo, frase_planta,
                            frutos_por_eboe, modelo_multivariable, nota_descomposicion, por_categoria, por_quintil,
@@ -218,8 +219,55 @@ def bloque_categorias(pares: pd.DataFrame, registro: Descargas) -> None:
                     "ic_sup": "IC superior", "p": "p"}), decimales, p=4), f"{nombre} - {titulo}")
 
 
+def bloque_esponja(pares: pd.DataFrame, cortes: list[float], toneladas: pd.DataFrame, registro: Descargas) -> None:
+    st.subheader("4. Efecto esponja")
+    st.caption("¿La cáscara retiene más aceite cuando la emulsión (licor) trae más aceite? Cuartiles de aceite en emulsión "
+               "con cortes de todo el histórico: " + ", ".join(etiquetas_cuartiles(cortes).values()) + ". Salida = aceite "
+               "en fruta de salida. Todo dentro de cada temporada (ignora fechas y proceso de la barra); medias "
+               "ponderadas por las toneladas del turno.")
+    por_eboe = esponja_por_eboe(pares, toneladas)
+    if por_eboe.empty:
+        st.info("No hay pares con aceite en emulsión con estos filtros.")
+        return
+    pendientes = pendientes_esponja(pares)
+    for temporada in sorted(por_eboe["temporada"].unique(), reverse=True):
+        st.markdown(f"**{frase_esponja(pendientes, por_eboe, temporada)}**")
+
+    tabla = esponja_por_cuartil(pares, cortes, toneladas)
+    tabla = tabla.assign(corta="C" + tabla["cuartil"].astype(str), eboe_texto="eBOE " + tabla["eboe"].astype(str),
+                         temporada=tabla["temporada"].astype(str))
+    registro.grafico(columnas_agrupadas(tabla, "corta", "eboe_texto", "salida", "Aceite en fruta de salida (kg/MT)",
+                                        "kg/MT", 2, panel="temporada", titulo_x="Cuartil de aceite en emulsión"),
+                     "Salida por cuartil de emulsión")
+    registro.grafico(columnas_agrupadas(tabla, "corta", "eboe_texto", "eficiencia", "Eficiencia eBOE (%)", "%", 1,
+                                        panel="temporada", titulo_x="Cuartil de aceite en emulsión",
+                                        rango_y=[tabla["eficiencia"].min() - 4, tabla["eficiencia"].max() + 3]),
+                     "Eficiencia por cuartil de emulsión")
+    with st.expander("Tabla por cuartil de emulsión"):
+        registro.tabla(con_coma(pd.DataFrame({
+            "Cuartil": tabla["etiqueta"], "Temporada": tabla["temporada"], "eBOE": tabla["eboe_texto"], "N": tabla["n"],
+            "Emulsión (%)": tabla["emulsion"], "Salida (kg/MT)": tabla["salida"], "Eficiencia (%)": tabla["eficiencia"]}),
+            2, **{"Eficiencia (%)": 1}), "Esponja por cuartil")
+
+    izquierda, derecha = st.columns(2)
+    emulsion = por_eboe.assign(eboe_texto="eBOE " + por_eboe["eboe"].astype(str),
+                               temporada=por_eboe["temporada"].astype(str))
+    registro.grafico(columnas_agrupadas(emulsion, "eboe_texto", "temporada", "emulsion", "Aceite en emulsión (%)", "%",
+                                        2), "Emulsión por eBOE", donde=izquierda)
+    derecha.markdown("**Pendiente: salida vs emulsión** (kg/MT de salida por cada 1 % más de aceite en emulsión)")
+    registro.tabla(con_coma(pd.DataFrame({
+        "eBOE": pendientes["eboe"].map(lambda e: f"eBOE {e}"), "Temporada": pendientes["temporada"].astype(str),
+        "N": pendientes["n"], "Pendiente": pendientes["pendiente"], "IC 95 % inferior": pendientes["ic_inf"],
+        "IC 95 % superior": pendientes["ic_sup"], "R²": pendientes["r2"], "p": pendientes["p"].map(texto_p)}), 3),
+        "Pendiente salida vs emulsión", donde=derecha)
+    registro.tabla(con_coma(emulsion[["eboe_texto", "temporada", "n", "emulsion", "salida", "eficiencia"]].rename(
+        columns={"eboe_texto": "eBOE", "temporada": "Temporada", "n": "N", "emulsion": "Emulsión (%)",
+                 "salida": "Salida (kg/MT)", "eficiencia": "Eficiencia (%)"}), 2, **{"Eficiencia (%)": 1}),
+        "Emulsión, salida y eficiencia por eBOE", donde=derecha)
+
+
 def bloque_modelo(pares: pd.DataFrame, registro: Descargas) -> None:
-    st.subheader("4. Modelo multivariable")
+    st.subheader("6. Modelos multivariables")
     st.caption("Regresión lineal con todos los factores a la vez (respeta todos los filtros de la barra): eBOE, "
                "temporada, programa, MTPH, frutos en 10 kg, calidad, turno, caudal de fase pesada, aceite en emulsión "
                "y día del proceso. Entran los pares que tienen todos los datos.")
@@ -261,7 +309,7 @@ def bloque_modelo(pares: pd.DataFrame, registro: Descargas) -> None:
 
 def bloque_aceite_perdido(pares_filtrados: pd.DataFrame, pares_temporadas: pd.DataFrame, toneladas: pd.DataFrame,
                           base, nueva, precios: Precios, registro: Descargas) -> tuple[pd.DataFrame, dict | None]:
-    st.subheader("5. Aceite perdido")
+    st.subheader("7. Aceite perdido")
     st.caption("Toneladas por eBOE (supuesto): la fruta procesada de cada turno (registro de producción) se reparte "
                "entre los eBOE que tienen muestras en ese turno, en proporción a su MTPH promedio del turno; si a "
                "alguno le falta el MTPH, partes iguales. Residual del eBOE ponderado por esas toneladas. Aceite perdido "
@@ -352,6 +400,7 @@ def pestana_factores(registro: Descargas) -> None:
         st.info("La descomposición necesita dos temporadas.")
         descomposicion = None
     bloque_categorias(pares_temporadas, registro)
+    bloque_esponja(pares_temporadas, cortes_cuartiles(todos["aceite_emulsion"]), toneladas, registro)
     bloque_modelo(pares_filtrados, registro)
     perdido, comparacion = bloque_aceite_perdido(pares_filtrados, pares_temporadas, toneladas, base, nueva, precios,
                                                  registro)

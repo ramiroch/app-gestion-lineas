@@ -4,7 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from core.factores import (aceite_perdido, agregar_dia_proceso, asignar_quintil, comparar_planta, cortes_quintiles,
+from core.factores import (asignar_cuartil, cortes_cuartiles, esponja_por_cuartil, esponja_por_eboe,
+                           etiquetas_cuartiles, frase_esponja, pendientes_esponja,
+                           aceite_perdido, agregar_dia_proceso, asignar_quintil, comparar_planta, cortes_quintiles,
                            descomponer, etiquetas_quintiles, frase_aceite_perdido, frase_calibre, frase_categoria,
                            frase_descomposicion, frase_eboe_calibre, frase_modelo, frase_planta, frutos_en_10kg,
                            frase_quintil_eboe, frutos_por_eboe, modelo_multivariable, nota_descomposicion,
@@ -165,6 +167,52 @@ def test_por_categoria_y_frase():
                                                                   ("Firme", (84, 85))) for v in vs]
     assert por_categoria(pd.DataFrame(calidades), "calidad", "eficiencia_pct")["grupo"].tolist() == [
         "Firme", "Blanda", "Podrido"]
+
+
+# ---------------------------------------------------------------- efecto esponja
+
+def _pares_esponja(emulsion_2=(0.8, 1.6)):
+    """3 eBOE con salida = base + 0,3 × emulsión. El eBOE 2 tiene más salida (+0,4) y la emulsión que se pida."""
+    rng = np.random.default_rng(3)
+    filas = []
+    for eboe, (desde, hasta), base in ((1, (1.0, 2.0), 1.0), (2, emulsion_2, 1.4), (3, (1.0, 2.0), 1.0)):
+        for emulsion in np.linspace(desde, hasta, 40):
+            salida = base + 0.3 * emulsion + rng.normal(0, 0.02)
+            filas.append(_par(eboe=eboe, aceite_emulsion=emulsion, aceite_salida=salida,
+                              eficiencia_pct=100 * (1 - salida / 8.0)))
+    return preparar_pares(pd.DataFrame(filas))
+
+
+def test_cuartiles_de_emulsion():
+    cortes = cortes_cuartiles(pd.Series(range(1, 101), dtype=float))
+    assert cortes == pytest.approx([25.75, 50.5, 75.25])
+    assert asignar_cuartil(pd.Series([25.75, 26.0, 99.0]), cortes).tolist() == [1, 2, 4]
+    assert etiquetas_cuartiles([1.12, 1.52, 1.93])[2] == "C2 (1,12–1,52 %)"
+    with pytest.raises(ValueError, match="al menos 4"):
+        cortes_cuartiles(pd.Series([1.0]))
+
+
+def test_efecto_esponja():
+    pares = _pares_esponja()
+    pendientes = pendientes_esponja(pares)
+    assert pendientes["pendiente"].tolist() == pytest.approx([0.3] * 3, abs=0.02)
+
+    por_eboe = esponja_por_eboe(pares, SIN_TONELADAS).set_index("eboe")
+    assert por_eboe.loc[2, "emulsion"] == pytest.approx(1.2) and por_eboe.loc[1, "emulsion"] == pytest.approx(1.5)
+    frase = frase_esponja(pendientes, por_eboe.reset_index(), 2025)
+    assert frase.startswith("En 2025, a más aceite en emulsión, más salida en los 3 eBOE; pero el eBOE 2, el de más "
+                            "salida, tiene la emulsión más baja (1,20 % contra 1,50 % de los otros), así que no explica")
+
+    cuartiles = esponja_por_cuartil(pares, cortes_cuartiles(pares["aceite_emulsion"]), SIN_TONELADAS)
+    eboe_1 = cuartiles[cuartiles["eboe"] == 1].sort_values("cuartil")
+    assert eboe_1["salida"].is_monotonic_increasing and eboe_1["n"].sum() == 40
+
+    # Si el eBOE 2 tuviera la emulsión más alta, la emulsión explicaría parte de su diferencia
+    pares = _pares_esponja(emulsion_2=(2.0, 3.0))
+    por_eboe = esponja_por_eboe(pares, SIN_TONELADAS)
+    frase = frase_esponja(pendientes_esponja(pares), por_eboe, 2025)
+    assert "tiene la emulsión más alta (2,50 % contra 1,50 % de los otros): explicaría 0,29 de sus 0,70 kg/MT" in frase      # 0,3 × 1 %, con ruido
+    assert "no hay datos suficientes" in frase_esponja(pendientes, por_eboe, 2026)
 
 
 # ---------------------------------------------------------------- modelo
