@@ -170,9 +170,9 @@ def unir_plc(tabla: pd.DataFrame, plc: pd.DataFrame, tolerancia: pd.Timedelta = 
 def con_fuente(tabla: pd.DataFrame, fuente: str) -> pd.DataFrame:
     """La tabla con el programa y la MTPH de la fuente elegida ("PLC" o "Laboratorio").
 
-    PLC: programa = programa_plc, solo si es N0–N9 (los programas numéricos del PLC, como "9", no se pueden
-    comparar con los del laboratorio y quedan vacíos), y tph = TON calculadas del PLC (vacía si son 0: el
-    elevador no llevaba fruta). Laboratorio: lo anotado en la planilla (sin cambios).
+    PLC: programa = programa_plc, solo si es N0–N9. Los numéricos del PLC ("9") son otros programas (los de
+    limón y pomelo, o pruebas en naranja): no se comparan con los del laboratorio y quedan vacíos. tph = TON
+    calculadas del PLC (vacía si son 0: el elevador no llevaba fruta). Laboratorio: lo anotado en la planilla (sin cambios).
     """
     if fuente not in FUENTES:
         raise ValueError(f"Fuente desconocida: {fuente}. Las válidas son: {', '.join(FUENTES)}.")

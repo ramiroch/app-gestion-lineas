@@ -142,7 +142,8 @@ def pestana_programas(registro: Descargas) -> None:
     numericos = usos[~usos["programa"].str.startswith("N")]
     if not numericos.empty:
         st.caption(f"Programas numéricos: {numero(numericos['horas'].sum() / usos['horas'].sum() * 100, 1)} % del "
-                   "tiempo en marcha. No se sabe si equivalen a los N0–N9: no se mezclan.")
+                   "tiempo en marcha. Son otros programas (los de limón y pomelo); en naranja aparecen en pruebas. No "
+                   "equivalen a los N0–N9 (por lo general menos agresivos): se muestran aparte y no se mezclan.")
     vista = usos.assign(eboe=texto_eboe(usos["eboe"]), n=99)
     registro.grafico(columnas_agrupadas(vista, "programa", "eboe", "pct", "% del tiempo en marcha", "%", 1,
                                         titulo_x="Programa (PLC)", etiquetas=False), "Uso de programas por tiempo")

@@ -24,6 +24,7 @@ Sistema de gestión para las líneas de aceite y jugo de los clientes de Brown. 
 - Muestras en pares Entrada/Salida por eBOE y hora. Eficiencia eBOE = 1 − salida/entrada; rendimiento eBOE = entrada − salida (kg/MT).
 - Fórmulas de la planta: blanco fijo 0,2 mL; aceite en fruta = 68,8416 × (ml − blanco) × N / g; aceite en emulsión % = (ml − blanco) × 3,45 × N / g. Los factores y el blanco son **configurables por planta**.
 
+- Programas del PLC: N0–N9 son los de naranja (por lo general menos agresivos); los numéricos ("0" a "12") son otros programas, de limón y pomelo, que en naranja aparecen solo en pruebas. Nunca se mezclan ni se convierten a N.
 - Objetivos: eficiencia eBOE 80–90 %; rendimiento eBOE 6,6–6,8 kg/MT; aceite en emulsión 0,80–1,10 %; °Brix emulsión ≤ 5; pH 3–7.
 - Producción por turno (carga manual): fruta procesada t, aceite envasado kg, jugo concentrado kg, reproceso kg.
 - Nunca importes los promedios de la hoja Resumen: se recalculan desde la hoja BOE.
