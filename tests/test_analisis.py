@@ -191,10 +191,12 @@ def test_unir_plc_toma_la_lectura_mas_cercana_del_mismo_eboe():
         ["2026-07-01 10:07", "2026-07-01 10:03", "2026-07-01 10:03", "2026-07-01 12:00"])})
     plc = pd.DataFrame({"equipo_id": [1, 1, 2], "fecha_hora": pd.to_datetime(
         ["2026-07-01 10:00:01", "2026-07-01 10:05:01", "2026-07-01 09:55:00"]),
-        "programa": ["N3", "9", "N5"], "ton_seteadas": [12.0, 11.0, 10.0], "ton_calculadas": [10.8, 0.0, 9.0]})
+        "programa": ["N3", "9", "N5"], "ton_seteadas": [12.0, 11.0, 10.0], "ton_calculadas": [10.8, 0.0, 9.0],
+        "horas_maquina": [100.0, 100.0, 50.0], "minutos": [0.0, 30.0, 0.0]})
     unida = unir_plc(tabla, plc)
     assert unida["programa_plc"].tolist()[:3] == ["9", "9", "N5"]          # 10:07 y 10:03 → 10:05:01; eBOE 2 → 09:55
     assert pd.isna(unida["programa_plc"].iloc[3])                          # 12:00: ninguna a ± 10 min
+    assert unida["horometro_plc"].tolist()[:3] == [100.5, 100.5, 50.0]
     assert unida["fecha_hora"].tolist() == tabla["fecha_hora"].tolist()    # mismo orden
     assert unir_plc(tabla, plc.iloc[0:0])["ton_calc_plc"].isna().all()
 

@@ -30,6 +30,7 @@ import statsmodels.formula.api as smf
 from scipy import stats
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 
+from core.analisis import con_fuente
 from core.comparaciones import comparar_grupos
 from core.estadistica import media_ponderada_por_turno
 from core.formato import numero, texto_p
@@ -60,7 +61,14 @@ FACTORES = {
     "caudal_fase_pesada": ("Caudal de fase pesada", "numero", 1, "+1 m³/h de caudal de fase pesada", None),
     "aceite_emulsion": ("Aceite en emulsión", "numero", 0.1, "+0,1 % de aceite en emulsión", None),
     "dia_proceso": ("Día del proceso", "numero", 1, "+1 día de proceso", None),
+    "horometro_plc": ("Horas acumuladas del eBOE", "numero", 1000, "+1.000 h de horómetro", None),
 }
+OPCIONALES = ["horometro_plc"]              # entran solo si se piden (extra)
+NOTA_HOROMETRO_MODELO = (
+    "Horas acumuladas: el horómetro del eBOE en cada muestra (lectura del PLC más cercana). Casi no cambia dentro de "
+    "una temporada y es muy distinto entre eBOE (el eBOE 3 tiene la mitad de horas), así que funciona como la "
+    "\"edad\" de cada máquina: en el modelo B toma parte de la diferencia entre eBOE, pero no prueba que el desgaste "
+    "sea la causa. Solo hay datos del PLC desde marzo de 2026: con esta variable entran solo esos pares.")
 CATEGORIAS = {"turno": "Turno", "calidad": "Calidad de fruta", "dia_categoria": "Día del proceso"}
 # Orden de las categorías en tablas y gráficos (las que no figuran van al final, en orden alfabético)
 ORDENES = {"turno": ["M", "T", "N"], "calidad": ["Firme", "Blanda", "Partida", "Podrido"],
@@ -87,6 +95,15 @@ def frutos_en_10kg(tabla: pd.DataFrame) -> pd.Series:
     """
     validos = (tabla["n_frutos"] > 0) & (tabla["peso_fruta_kg"] > 0)
     return (tabla["n_frutos"] * 10 / tabla["peso_fruta_kg"]).where(validos)
+
+
+def con_fuente_pares(pares: pd.DataFrame, fuente: str) -> pd.DataFrame:
+    """Los pares con el programa y la MTPH de la fuente elegida (core.analisis.con_fuente) y programa_num al día.
+
+    "PLC": programa del PLC (solo N0–N9) y TON calculadas; "Laboratorio": lo anotado en la planilla.
+    """
+    pares = con_fuente(pares, fuente)
+    return pares.assign(programa_num=pares["programa"].map(numero_programa))
 
 
 def preparar_pares(pares: pd.DataFrame) -> pd.DataFrame:
@@ -641,12 +658,14 @@ NOTA_MODELO_B = ("Este modelo supone que las máquinas son iguales; la diferenci
                  "refleja factores que el modelo no ve.")
 
 
-def modelo_multivariable(pares: pd.DataFrame, respuesta: str, con_eboe: bool = True, alfa: float = ALFA) -> dict:
+def modelo_multivariable(pares: pd.DataFrame, respuesta: str, con_eboe: bool = True, alfa: float = ALFA,
+                         extra: tuple[str, ...] = ()) -> dict:
     """Regresión lineal (OLS) de la respuesta (RESPUESTAS) con todos los FACTORES a la vez.
 
     con_eboe=True es el modelo A: el efecto del eBOE es su diferencia propia, la que no explican las demás
     variables. con_eboe=False es el modelo B (máquinas iguales): las mismas variables menos el eBOE; lo que
-    distingue a cada eBOE queda en el residuo (ajuste).
+    distingue a cada eBOE queda en el residuo (ajuste). extra: factores OPCIONALES que se suman (por ejemplo
+    las horas acumuladas del eBOE, horometro_plc).
 
     Entran los pares con todos los datos. Se dejan afuera los factores sin variación (por ejemplo, la
     temporada si se filtró una sola). Categorías con referencia fija (eBOE 1, Firme, turno M; temporada:
@@ -662,13 +681,17 @@ def modelo_multivariable(pares: pd.DataFrame, respuesta: str, con_eboe: bool = T
     """
     if respuesta not in RESPUESTAS:
         raise ValueError(f"Respuesta desconocida: {respuesta}. Las válidas son: {', '.join(RESPUESTAS)}.")
-    datos = pares.dropna(subset=[respuesta, *FACTORES]).copy()
+    desconocidos = [c for c in extra if c not in OPCIONALES]
+    if desconocidos:
+        raise ValueError(f"Factor opcional desconocido: {', '.join(desconocidos)}.")
+    columnas = [c for c in FACTORES if c not in OPCIONALES] + list(extra)
+    datos = pares.dropna(subset=[respuesta, *columnas]).copy()
     eboe_original = datos["eboe"].copy()
-    for columna, (_, tipo, *_resto) in FACTORES.items():
-        if tipo == "categoria":
+    for columna in columnas:
+        if FACTORES[columna][1] == "categoria":
             datos[columna] = datos[columna].astype(str)
     factores, excluidos = [], []
-    for columna in FACTORES:
+    for columna in columnas:
         if columna == "eboe" and not con_eboe:
             continue
         (factores if datos[columna].nunique() > 1 else excluidos).append(columna)

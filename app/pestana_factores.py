@@ -13,7 +13,8 @@ import pandas as pd
 import streamlit as st
 
 from core.analisis import filtrar, filtros_sin_periodo, pares_con_emulsion
-from core.factores import (CATEGORIAS, FRUTA_MINIMA_TURNO, NOTA_BALANCE, frase_balance, regresion_balance,
+from core.analisis import FUENTES
+from core.factores import (CATEGORIAS, NOTA_HOROMETRO_MODELO, con_fuente_pares, FRUTA_MINIMA_TURNO, NOTA_BALANCE, frase_balance, regresion_balance,
                            separar_turnos_balance, turnos_balance, valor_programa, NOMBRES_MODELO, NOTA_MODELO_B, comparar_modelos, frase_r2_modelos,
                            frase_residuo_eboe, residuos_por_eboe, N_MINIMO_JUSTA, NIVEL_FRASE, NIVELES_JUSTA, NOTA_JUSTA, cascada_justa,
                            celdas_justas, comparacion_justa, eboe_peor, frase_justa, preparar_celdas, cortes_cuartiles, esponja_por_cuartil, esponja_por_eboe, etiquetas_cuartiles,
@@ -53,8 +54,8 @@ def categoria_en_cache(pares: pd.DataFrame, factor: str, variable: str) -> pd.Da
 
 
 @st.cache_data(ttl=600, show_spinner="Ajustando el modelo…")
-def modelo_en_cache(pares: pd.DataFrame, respuesta: str, con_eboe: bool = True) -> dict:
-    return modelo_multivariable(pares, respuesta, con_eboe)
+def modelo_en_cache(pares: pd.DataFrame, respuesta: str, con_eboe: bool = True, extra: tuple = ()) -> dict:
+    return modelo_multivariable(pares, respuesta, con_eboe, extra=extra)
 
 
 def con_coma(df: pd.DataFrame, decimales: int = 2, **por_columna):
@@ -279,19 +280,32 @@ def justa_en_cache(pares: pd.DataFrame, cortes: list[float], cortes_emulsion: li
     return datos, comparacion_justa(datos)
 
 
-def bloque_justa(pares: pd.DataFrame, cortes: list[float], cortes_emulsion: list[float], registro: Descargas) -> None:
+def otra_fuente(fuente: str) -> str:
+    return next(f for f in FUENTES if f != fuente)
+
+
+def del_fuente(fuente: str) -> str:
+    """"del laboratorio" o "del PLC"."""
+    return "del laboratorio" if fuente == "Laboratorio" else f"del {fuente}"
+
+
+def bloque_justa(pares: pd.DataFrame, otros: pd.DataFrame, fuente: str, cortes: list[float], cortes_emulsion: list[float],
+                 registro: Descargas) -> None:
     st.subheader("5. Comparación justa entre eBOE")
     st.caption(f"Se compara cada eBOE contra el promedio de los otros dentro de celdas de fruta y operación parecidas: "
                f"calibre (quintil) × programa (N0–N3, N4–N5, N6–N9); después además × MTPH (≤ 10, 10–12, > 12) × "
                f"temporada; y después además × cuartil de aceite en emulsión. Solo entran las celdas con al menos "
                f"{N_MINIMO_JUSTA} pares de cada eBOE; las diferencias de las celdas se promedian ponderando por los pares "
                "del eBOE. Todas las versiones usan los mismos pares (los que tienen calibre, programa, MTPH y emulsión); "
-               "promedio simple dentro de cada celda. Ignora fechas y proceso de la barra.")
+               f"promedio simple dentro de cada celda. Ignora fechas y proceso de la barra. Programa y MTPH: {fuente}.")
     datos, resumen = justa_en_cache(pares, cortes, cortes_emulsion)
     if resumen.empty:
         st.info("Hace falta más de un eBOE para comparar.")
         return
     st.markdown(f"**{frase_justa(resumen)}**")
+    otra = justa_en_cache(otros, cortes, cortes_emulsion)[1]
+    if not otra.empty:
+        st.caption(f"Con el programa y la MTPH {del_fuente(otra_fuente(fuente))}: {frase_justa(otra)}")
     st.info(NOTA_JUSTA)
 
     eboe = eboe_peor(resumen)
@@ -373,15 +387,21 @@ def mostrar_modelo(resultado: dict, respuesta: str, registro: Descargas) -> None
             f"Efectos {letra} - {RESPUESTAS[respuesta]['nombre']}")
 
 
-def bloque_modelo(pares: pd.DataFrame, registro: Descargas) -> None:
+def bloque_modelo(pares: pd.DataFrame, otros: pd.DataFrame, fuente: str, registro: Descargas) -> None:
     st.subheader("6. Modelos multivariables")
     st.caption("Regresión lineal con todos los factores a la vez (respeta todos los filtros de la barra): temporada, "
                "programa, MTPH, frutos en 10 kg, calidad, turno, caudal de fase pesada, aceite en emulsión y día del "
                "proceso; el modelo A suma el eBOE y el B no. Los dos usan los mismos pares (los que tienen todos los "
-               "datos).")
+               f"datos). Programa y MTPH: {fuente}.")
     respuesta = st.radio("Variable de respuesta", list(RESPUESTAS), horizontal=True, key="factores_respuesta",
                          format_func=lambda r: f"{RESPUESTAS[r]['nombre']} ({RESPUESTAS[r]['unidad']})")
-    con, sin = modelo_en_cache(pares, respuesta, True), modelo_en_cache(pares, respuesta, False)
+    horas = st.checkbox("Sumar las horas acumuladas del eBOE (horómetro del PLC) al modelo B", key="factores_horometro")
+    extra = ()
+    if horas:
+        st.caption(NOTA_HOROMETRO_MODELO + " Para comparar A con B, el modelo A usa los mismos pares.")
+        pares, otros = pares.dropna(subset=["horometro_plc"]), otros.dropna(subset=["horometro_plc"])
+        extra = ("horometro_plc",)
+    con, sin = modelo_en_cache(pares, respuesta, True), modelo_en_cache(pares, respuesta, False, extra)
     nombre = RESPUESTAS[respuesta]["nombre"]
 
     st.markdown(f"##### Modelo {NOMBRES_MODELO[True]}")
@@ -397,6 +417,10 @@ def bloque_modelo(pares: pd.DataFrame, registro: Descargas) -> None:
     st.markdown(f"**{frase_r2_modelos(con, sin)}**")
     residuos = residuos_por_eboe(sin)
     st.markdown(f"**{frase_residuo_eboe(residuos, respuesta)}**")
+    otro_a, otro_b = modelo_en_cache(otros, respuesta, True), modelo_en_cache(otros, respuesta, False, extra)
+    if otro_a["r2"] is not None and otro_b["r2"] is not None:
+        st.caption(f"Con el programa y la MTPH {del_fuente(otra_fuente(fuente))} (N = {numero(otro_a['n'], 0)}): "
+                   f"{frase_r2_modelos(otro_a, otro_b)} {frase_residuo_eboe(residuos_por_eboe(otro_b), respuesta)}")
     unidad, decimales = RESPUESTAS[respuesta]["unidad"], RESPUESTAS[respuesta]["decimales"]
     titulo_y = f"Residuo en B ({'puntos' if unidad == '%' else unidad})"
     izquierda, derecha = st.columns(2)
@@ -611,8 +635,16 @@ def pestana_factores(registro: Descargas) -> None:
     bloque_categorias(pares_temporadas, registro)
     cortes_emulsion = cortes_cuartiles(todos["aceite_emulsion"])     # todo el histórico, sin filtros
     bloque_esponja(pares_temporadas, cortes_emulsion, toneladas, registro)
-    bloque_justa(pares_temporadas, cortes, cortes_emulsion, registro)
-    bloque_modelo(pares_filtrados, registro)
+    st.markdown("---")
+    fuente = st.radio("Fuente del programa y la MTPH (comparación justa y modelos)", FUENTES, horizontal=True,
+                      key="factores_fuente")
+    st.caption("PLC: programa (solo N0–N9) y TON calculadas de la lectura del PLC más cercana (± 10 min). El PLC empieza "
+               "en marzo de 2026: con esta fuente solo entran los pares de 2026. Laboratorio: lo anotado en la planilla "
+               "(la Ton/H es el setpoint). Debajo de cada resultado se muestra el de la otra fuente.")
+    por_fuente = {f: (con_fuente_pares(pares_temporadas, f), con_fuente_pares(pares_filtrados, f)) for f in FUENTES}
+    otra = otra_fuente(fuente)
+    bloque_justa(por_fuente[fuente][0], por_fuente[otra][0], fuente, cortes, cortes_emulsion, registro)
+    bloque_modelo(por_fuente[fuente][1], por_fuente[otra][1], fuente, registro)
     perdido, comparacion = bloque_aceite_perdido(pares_filtrados, pares_temporadas, toneladas, base, nueva, precios,
                                                  registro)
     produccion = produccion_planta(planta_id)
@@ -624,12 +656,13 @@ def pestana_factores(registro: Descargas) -> None:
     with resumen:
         st.subheader("Resumen")
         esponja = (pendientes_esponja(pares_temporadas), esponja_por_eboe(pares_temporadas, toneladas))
-        modelos = (modelo_en_cache(pares_filtrados, "eficiencia_pct", True),
-                   modelo_en_cache(pares_filtrados, "eficiencia_pct", False))
+        modelos = (modelo_en_cache(por_fuente[fuente][1], "eficiencia_pct", True),
+                   modelo_en_cache(por_fuente[fuente][1], "eficiencia_pct", False))
         for frase in resumen_factores(quintiles, eboes, descomposicion, perdido, comparacion, nueva,
                                       precios.aceite_usd_kg, esponja=esponja,
-                                      justa=justa_en_cache(pares_temporadas, cortes, cortes_emulsion)[1],
+                                      justa=justa_en_cache(por_fuente[fuente][0], cortes, cortes_emulsion)[1],
                                       modelos=modelos, balance=balance):
             st.markdown(f"- {frase}")
-        st.caption("La comparación entre eBOE y los modelos usan la eficiencia; el aceite perdido y el balance, las "
+        st.caption(f"La comparación entre eBOE y los modelos usan la eficiencia, con el programa y la MTPH "
+                   f"{del_fuente(fuente)}; el aceite perdido y el balance, las "
                    "toneladas del registro de producción.")

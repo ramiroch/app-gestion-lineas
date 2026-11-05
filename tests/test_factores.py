@@ -7,7 +7,7 @@ import pytest
 from core.formato import numero
 from core.programa import numero_programa
 
-from core.factores import (frase_efecto_programa, frase_balance, regresion_balance, separar_turnos_balance, turnos_balance, valor_programa,
+from core.factores import (con_fuente_pares, frase_efecto_programa, frase_balance, regresion_balance, separar_turnos_balance, turnos_balance, valor_programa,
                            comparar_modelos, frase_r2_modelos, frase_residuo_eboe, residuos_por_eboe,
                            NOTA_JUSTA, cascada_justa, celdas_justas, comparacion_justa, eboe_peor, frase_justa,
                            grupo_mtph, grupo_programa, preparar_celdas,
@@ -341,6 +341,28 @@ def test_modelo_sin_eboe_y_residuos():
     tabla = comparar_modelos(con, sin).set_index("variable")
     assert tabla.loc["+1 nivel de programa", "coef_b"] == pytest.approx(0.8, abs=0.06)
     assert tabla.filter(like="diferencia propia", axis=0)["coef_b"].isna().all()
+
+
+def test_modelo_b_con_horas_acumuladas():
+    datos = _datos_modelo()
+    rng = np.random.default_rng(9)
+    datos["horometro_plc"] = datos["eboe"].map({1: 31000.0, 2: 33000.0, 3: 15000.0}) + rng.uniform(0, 500, len(datos))
+    sin = modelo_multivariable(datos, "eficiencia_pct", False)
+    con_horas = modelo_multivariable(datos, "eficiencia_pct", False, extra=("horometro_plc",))
+    assert "horometro_plc" in con_horas["factores"] and "horometro_plc" not in sin["factores"]
+    assert con_horas["r2"] >= sin["r2"]
+    assert con_horas["efectos"]["texto"].str.startswith("+1.000 h de horómetro →").any()
+    with pytest.raises(ValueError, match="Factor opcional desconocido"):
+        modelo_multivariable(datos, "eficiencia_pct", False, extra=("brix",))
+
+
+def test_pares_con_la_fuente_del_plc():
+    pares = pd.DataFrame({"programa": ["N3", "N3"], "tph": [12.0, 11.0], "programa_plc": ["N5", "9"],
+                          "ton_calc_plc": [10.5, 9.0], "programa_num": [3, 3]})
+    plc = con_fuente_pares(pares, "PLC")
+    assert plc["programa_num"].tolist()[0] == 5 and pd.isna(plc["programa_num"].iloc[1])
+    assert plc["tph"].tolist() == [10.5, 9.0]
+    assert con_fuente_pares(pares, "Laboratorio")["programa_num"].tolist() == [3, 3]
 
 
 def test_vif_detecta_colinealidad():

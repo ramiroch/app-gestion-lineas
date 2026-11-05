@@ -25,11 +25,13 @@ LUGARES = {"fruta entrada": "Entrada", "fruta salida": "Salida"}
 COLUMNAS = ["analisis_id", "fecha_hora", "fecha_produccion", "turno", "temporada", "proceso_id",
             "proceso", "eboe", "lugar", "analista", "aceite_fruta", "eficiencia_par", "programa", "tph",
             "caudal_fase_pesada", "rallado", "peso_muestra_g", "vol_ml", "blanco_ml", "normalidad", "n_frutos",
-            "peso_fruta_kg", "calidad", "fruta", "programa_plc", "ton_set_plc", "ton_calc_plc"]
+            "peso_fruta_kg", "calidad", "fruta", "programa_plc", "ton_set_plc", "ton_calc_plc",
+            "horometro_plc"]
 TIPO_EMULSION = "emulsión"
 COLUMNAS_EMULSION = ["analisis_id", "fecha_hora", "fecha_produccion", "turno", "temporada", "proceso_id",
                      "proceso", "eboe", "analista", "aceite_emulsion", "brix", "ph", "programa", "tph",
-                     "caudal_fase_pesada", "programa_plc", "ton_set_plc", "ton_calc_plc"]
+                     "caudal_fase_pesada", "programa_plc", "ton_set_plc", "ton_calc_plc",
+                     "horometro_plc"]
 TOLERANCIA_PLC = pd.Timedelta(minutes=10)      # lectura del PLC más cercana al análisis: ± 10 min
 # Columnas de la lectura del PLC → columnas que se agregan a cada análisis
 COLUMNAS_UNION_PLC = {"programa": "programa_plc", "ton_seteadas": "ton_set_plc", "ton_calculadas": "ton_calc_plc"}
@@ -149,14 +151,17 @@ def unir_plc(tabla: pd.DataFrame, plc: pd.DataFrame, tolerancia: pd.Timedelta = 
 
     tabla lleva _equipo_id y fecha_hora; plc: core.operacion.lecturas_plc(). Agrega programa_plc (tal como
     lo registra el PLC: "N3" o "9"), ton_set_plc y ton_calc_plc (TON seteadas y calculadas); quedan vacías
-    si no hay lectura a menos de la tolerancia. Mantiene el orden de las filas.
+    si no hay lectura a menos de la tolerancia; horometro_plc = horas_maquina + minutos / 60 (horas acumuladas
+    del eBOE). Mantiene el orden de las filas.
     """
-    tabla = tabla.drop(columns=list(COLUMNAS_UNION_PLC.values()), errors="ignore")
+    nuevas = [*COLUMNAS_UNION_PLC.values(), "horometro_plc"]
+    tabla = tabla.drop(columns=nuevas, errors="ignore")
     if tabla.empty or plc.empty:
-        return tabla.assign(**{c: None for c in COLUMNAS_UNION_PLC.values()})
+        return tabla.assign(**{c: None for c in nuevas})
     izquierda = tabla.reset_index().sort_values("fecha_hora")
-    derecha = (plc.rename(columns={"equipo_id": "_equipo_id", "fecha_hora": "_fecha_plc", **COLUMNAS_UNION_PLC})
-               [["_equipo_id", "_fecha_plc", *COLUMNAS_UNION_PLC.values()]].sort_values("_fecha_plc"))
+    derecha = (plc.assign(horometro_plc=plc["horas_maquina"] + plc["minutos"] / 60)
+               .rename(columns={"equipo_id": "_equipo_id", "fecha_hora": "_fecha_plc", **COLUMNAS_UNION_PLC})
+               [["_equipo_id", "_fecha_plc", *nuevas]].sort_values("_fecha_plc"))
     unida = pd.merge_asof(izquierda, derecha, left_on="fecha_hora", right_on="_fecha_plc", by="_equipo_id",
                           direction="nearest", tolerance=tolerancia)
     return unida.set_index("index").sort_index().drop(columns="_fecha_plc").rename_axis(None)
