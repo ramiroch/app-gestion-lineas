@@ -7,7 +7,7 @@ import pytest
 from core.formato import numero
 from core.programa import numero_programa
 
-from core.factores import (frase_balance, regresion_balance, separar_turnos_balance, turnos_balance, valor_programa,
+from core.factores import (frase_efecto_programa, frase_balance, regresion_balance, separar_turnos_balance, turnos_balance, valor_programa,
                            comparar_modelos, frase_r2_modelos, frase_residuo_eboe, residuos_por_eboe,
                            NOTA_JUSTA, cascada_justa, celdas_justas, comparacion_justa, eboe_peor, frase_justa,
                            grupo_mtph, grupo_programa, preparar_celdas,
@@ -457,10 +457,37 @@ def test_resumen_factores():
     perdido = pd.DataFrame({"temporada": [2026, 2026], "eboe": [2, 3], "toneladas": [100.0, 100.0],
                             "residual": [1.8, 1.1], "referencia": [3, 3], "diferencia": [0.7, 0.0],
                             "kg_perdidos": [70.0, 0.0]})
-    frases = resumen_factores(tabla, frutos_por_eboe(pares), descomponer(tabla, "eficiencia", 2025, 2026),
-                              modelo_multivariable(_datos_modelo(), "eficiencia_pct"), perdido,
-                              {"base": 2025, "nueva": 2026, "residual_base": 1.3, "residual_nueva": 1.56,
-                               "diferencia": 0.26, "toneladas": 1000.0, "kg": 260.0}, 2026)
-    assert len(frases) == 5
-    assert frases[3].endswith("Ese eBOE es también el que recibe la fruta más chica (70 frutos en 10 kg contra 40 "
+    planta = {"base": 2025, "nueva": 2026, "residual_base": 1.3, "residual_nueva": 1.56, "diferencia": 0.26,
+              "toneladas": 1000.0, "kg": 260.0}
+    base = (tabla, frutos_por_eboe(pares), descomponer(tabla, "eficiencia", 2025, 2026), perdido, planta, 2026)
+    frases = resumen_factores(*base)
+    assert len(frases) == 4                                     # sin los bloques nuevos: calibre, desc., perdido, planta
+    assert frases[2].endswith("Ese eBOE es también el que recibe la fruta más chica (70 frutos en 10 kg contra 40 "
                               "del eBOE 3).")
+
+    esponja = _pares_esponja().assign(temporada=2026)
+    datos = _datos_modelo()
+    produccion, turnos = _balance()
+    validos, _ = separar_turnos_balance(turnos_balance(produccion, turnos))
+    regresiones = {v: regresion_balance(validos, v) for v in ("conc_mt", "aceite_mt")}
+    completo = resumen_factores(
+        *base, precio_aceite=10.0, esponja=(pendientes_esponja(esponja), esponja_por_eboe(esponja, SIN_TONELADAS)),
+        justa=comparacion_justa(preparar_celdas(_pares_justos(), [50.0, 55.0, 60.0, 65.0], [1.25, 1.5, 1.75])),
+        modelos=(modelo_multivariable(datos, "eficiencia_pct"), modelo_multivariable(datos, "eficiencia_pct", False)),
+        balance={"regresiones": regresiones, "valor": None})
+    assert len(completo) == 8
+    assert completo[2].startswith("En 2026, a más aceite en emulsión") and completo[3].startswith("Con fruta del mismo")
+    assert completo[4].startswith("Sacar el eBOE del modelo") and "(USD 700)" in completo[5]
+    assert completo[7].startswith("Por turno, cada nivel más de programa se asocia con 1,00 kg menos de concentrado")
+    con_precios = resumen_factores(*base, balance={"regresiones": regresiones,
+                                                   "valor": valor_programa(0.1, -1.0, 10.0, 2.0)})
+    assert con_precios[-1].startswith("Con estos precios, subir un nivel de programa")
+
+
+def test_frase_efecto_programa():
+    conc = {"efecto": -0.59, "ic_inf": -1.12, "ic_sup": -0.07, "p": 0.028}
+    aceite = {"efecto": -0.02, "ic_inf": -0.05, "ic_sup": 0.02, "p": 0.306}
+    assert frase_efecto_programa(conc, aceite) == (
+        "Por turno, cada nivel más de programa se asocia con 0,59 kg menos de concentrado 65 °Brix por MT (IC 95 %: "
+        "0,07 a 1,12; p = 0,028) y con 0,02 kg/MT menos de aceite envasado (p = 0,306: sin efecto claro).")
+    assert "No hay turnos suficientes" in frase_efecto_programa({"efecto": None}, aceite)

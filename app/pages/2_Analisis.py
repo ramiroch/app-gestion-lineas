@@ -7,8 +7,9 @@ ignora fechas y procesos, y respeta eBOE, turno y programa.
 Pestaña Programa y MTPH: análisis 6 y 7 (burbujas, superficie y contorno), con todos los filtros y
 filtrado cruzado al hacer clic en una burbuja.
 Pestaña Proceso: análisis 5 (flowsheet): KPI por eBOE, totales del período y comparación de dos períodos.
-Pestaña Factores (app/pestana_factores.py): calibre, descomposición entre temporadas, turno / calidad / día del
-proceso, modelo multivariable y aceite perdido.
+Pestaña Factores (app/pestana_factores.py): precios, calibre, descomposición entre temporadas, turno / calidad /
+día del proceso, efecto esponja, comparación justa entre eBOE, modelos con y sin eBOE, aceite perdido y balance
+aceite–jugo.
 Solo se dibuja la pestaña abierta. Cada gráfico tiene un botón PNG, cada tabla un botón Excel, y cada
 pestaña un "Descargar todo" (app/descargas.py).
 Solo muestra: la estadística está en core/, los gráficos en app/graficos.py y los datos

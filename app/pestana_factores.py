@@ -1,10 +1,11 @@
 """Pestaña Factores de la página Análisis: qué explica la eficiencia y el aceite residual de los eBOE.
 
-Bloques: limpieza, calibre, descomposición entre temporadas, turno / calidad / día del proceso, modelo
-multivariable y aceite perdido, con un resumen arriba. Los bloques que comparan temporadas ignoran las
-fechas y el proceso de la barra (respetan eBOE, turno y programa); el modelo y el aceite perdido por
-eBOE respetan todos los filtros. Solo muestra: la lógica está en core/factores.py.
-"""
+Bloques: precios, limpieza, calibre (con cada eBOE dentro de cada calibre), descomposición entre
+temporadas, turno / calidad / día del proceso, efecto esponja, comparación justa entre eBOE, modelos con y
+sin eBOE, aceite perdido (kg y USD) y balance aceite–jugo, con un resumen arriba. Los bloques que comparan
+temporadas o eBOE ignoran las fechas y el proceso de la barra (respetan eBOE, turno y programa); los modelos
+y el aceite perdido por eBOE respetan todos los filtros; el balance usa la producción de toda la planta
+(respeta solo el turno). Solo muestra: la lógica está en core/factores.py y core/precios.py."""
 
 from dataclasses import replace
 
@@ -583,9 +584,10 @@ def pestana_factores(registro: Descargas) -> None:
     toneladas = toneladas_planta(planta_id)
     pares_temporadas = filtrar(todos, filtros_sin_periodo(filtros))
     pares_filtrados = filtrar(todos, filtros)
-    st.caption("Los bloques que comparan temporadas (calibre, descomposición, categorías y la comparación de la planta) "
-               "ignoran las fechas y el proceso de la barra; respetan eBOE, turno y programa. El modelo y el aceite "
-               "perdido por eBOE respetan todos los filtros.")
+    st.caption("Los bloques que comparan temporadas o eBOE (calibre, descomposición, categorías, esponja, comparación "
+               "justa y la comparación de la planta) ignoran las fechas y el proceso de la barra; respetan eBOE, turno y "
+               "programa. Los modelos y el aceite perdido por eBOE respetan todos los filtros. El balance aceite–jugo "
+               "usa la producción de toda la planta y respeta solo el turno.")
     temporadas = sorted(pares_temporadas["temporada"].unique())
     if pares_temporadas.empty:
         st.info("No hay pares con estos filtros.")
@@ -621,7 +623,13 @@ def pestana_factores(registro: Descargas) -> None:
 
     with resumen:
         st.subheader("Resumen")
-        modelo = modelo_en_cache(pares_filtrados, "eficiencia_pct")
-        for frase in resumen_factores(quintiles, eboes, descomposicion, modelo, perdido, comparacion, nueva,
-                                       precios.aceite_usd_kg):
+        esponja = (pendientes_esponja(pares_temporadas), esponja_por_eboe(pares_temporadas, toneladas))
+        modelos = (modelo_en_cache(pares_filtrados, "eficiencia_pct", True),
+                   modelo_en_cache(pares_filtrados, "eficiencia_pct", False))
+        for frase in resumen_factores(quintiles, eboes, descomposicion, perdido, comparacion, nueva,
+                                      precios.aceite_usd_kg, esponja=esponja,
+                                      justa=justa_en_cache(pares_temporadas, cortes, cortes_emulsion)[1],
+                                      modelos=modelos, balance=balance):
             st.markdown(f"- {frase}")
+        st.caption("La comparación entre eBOE y los modelos usan la eficiencia; el aceite perdido y el balance, las "
+                   "toneladas del registro de producción.")

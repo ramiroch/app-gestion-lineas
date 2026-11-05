@@ -12,7 +12,15 @@ más chica), calidad y día del proceso. Residual = aceite en fruta de salida (k
 - Turno, calidad y día del proceso: medias con IC 95 % por categoría y temporada.
 - Modelo multivariable (OLS de statsmodels): % de la variación que explica cada factor (ANOVA tipo II),
   efectos con IC 95 % y VIF.
+- Efecto esponja: salida y eficiencia por cuartil de aceite en emulsión y eBOE; pendiente de la salida vs
+  la emulsión; ¿explica la emulsión la diferencia entre eBOE?
+- Comparación justa: cada eBOE contra el promedio de los otros dentro de celdas de calibre × programa
+  (× MTPH × temporada, × emulsión).
+- Modelos A (con eBOE) y B (sin eBOE, máquinas iguales): el residuo de cada eBOE en B es lo que el modelo
+  no ve.
 - Aceite perdido: toneladas por eBOE (la fruta del turno repartida por MTPH) × diferencia de residual.
+- Balance aceite–jugo: por turno, efecto de +1 nivel de programa sobre el concentrado y el aceite, y su
+  valor en USD con los precios de core.precios.
 """
 
 import numpy as np
@@ -1034,19 +1042,50 @@ def frase_balance(valor: dict) -> str:
     return texto
 
 
+def frase_efecto_programa(conc: dict, aceite: dict, alfa: float = ALFA) -> str:
+    """El efecto de +1 nivel de programa por turno, sin precios.
+
+    Ejemplo: "Por turno, cada nivel más de programa se asocia con 0,59 kg menos de concentrado 65 °Brix por MT
+    (IC 95 %: 0,07 a 1,12; p = 0,028) y con 0,02 kg/MT menos de aceite envasado (p = 0,306: sin efecto claro)."
+    """
+    if conc["efecto"] is None or aceite["efecto"] is None:
+        return "No hay turnos suficientes para estimar el efecto del programa sobre el jugo y el aceite."
+
+    def parte(r, que, decimales):
+        sentido = "más" if r["efecto"] > 0 else "menos"
+        nota = "" if r["p"] < alfa else ": sin efecto claro"
+        return f"{numero(abs(r['efecto']), decimales)} {que.format(sentido)} ({texto_p(r['p'])}{nota})"
+
+    ic = sorted((abs(conc["ic_inf"]), abs(conc["ic_sup"])))
+    texto_conc = parte(conc, "kg {} de concentrado 65 °Brix por MT", 2)
+    if conc["ic_inf"] * conc["ic_sup"] > 0:          # el IC no cruza el 0
+        texto_conc = texto_conc.replace(" (p", f" (IC 95 %: {numero(ic[0], 2)} a {numero(ic[1], 2)}; p", 1)
+    return (f"Por turno, cada nivel más de programa se asocia con {texto_conc} y con "
+            f"{parte(aceite, 'kg/MT {} de aceite envasado', 2)}.")
+
+
 # ---------------------------------------------------------------- resumen
 
 def resumen_factores(quintiles: pd.DataFrame, eboe_calibre: pd.DataFrame, descomposicion: dict | None,
-                     modelo: dict, perdido: pd.DataFrame, planta: dict | None, temporada,
-                     precio_aceite: float | None = None) -> list[str]:
-    """Las 5 frases principales de la pestaña, para el informe.
+                     perdido: pd.DataFrame, planta: dict | None, temporada, precio_aceite: float | None = None,
+                     esponja: tuple | None = None, justa: pd.DataFrame | None = None, modelos: tuple | None = None,
+                     balance: dict | None = None) -> list[str]:
+    """Las frases principales de la pestaña, para el informe (las de los bloques que tienen datos).
 
     quintiles: por_quintil(); eboe_calibre: frutos_por_eboe(); descomposicion: descomponer() de la
-    eficiencia; modelo: modelo_multivariable() de la eficiencia; perdido: aceite_perdido(); planta:
-    comparar_planta(); temporada: la que se describe (la más nueva); precio_aceite: USD/kg (opcional).
+    eficiencia; perdido: aceite_perdido(); planta: comparar_planta(); temporada: la que se describe (la más
+    nueva); precio_aceite: USD/kg (opcional); esponja: (pendientes_esponja(), esponja_por_eboe());
+    justa: comparacion_justa(); modelos: (modelo A, modelo B) de la eficiencia; balance: {"regresiones":
+    {variable: regresion_balance()}, "valor": valor_programa() o None si no hay precios}.
     """
-    frases = [frase_calibre(quintiles, temporada), frase_descomposicion(descomposicion, "eficiencia"),
-              frase_modelo(modelo, "eficiencia_pct")]
+    frases = [frase_calibre(quintiles, temporada), frase_descomposicion(descomposicion, "eficiencia")]
+    if esponja is not None:
+        frases.append(frase_esponja(*esponja, temporada))
+    if justa is not None and not justa.empty:
+        frases.append(frase_justa(justa))
+    if modelos is not None and modelos[0]["r2"] is not None and modelos[1]["r2"] is not None:
+        frases.append(frase_r2_modelos(*modelos) + " " + frase_residuo_eboe(residuos_por_eboe(modelos[1]),
+                                                                              "eficiencia_pct"))
     perdida = frase_aceite_perdido(perdido, temporada, precio_aceite)
     sub_perdido = perdido[perdido["temporada"] == temporada]
     sub_calibre = eboe_calibre[eboe_calibre["temporada"] == temporada].sort_values("frutos")
@@ -1058,4 +1097,7 @@ def resumen_factores(quintiles: pd.DataFrame, eboe_calibre: pd.DataFrame, descom
                         f"en 10 kg contra {numero(grande['frutos'], 0)} del eBOE {int(grande['eboe'])}).")
     frases.append(perdida)
     frases.append(frase_planta(planta, precio_aceite))
+    if balance:
+        frases.append(frase_balance(balance["valor"]) if balance.get("valor") else
+                      frase_efecto_programa(balance["regresiones"]["conc_mt"], balance["regresiones"]["aceite_mt"]))
     return frases
