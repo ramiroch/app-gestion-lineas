@@ -381,8 +381,9 @@ def test_muestra_centrifuga_guarda_datos_crudos_y_es_unica_por_equipo_hora_y_fas
     momento = datetime(2025, 6, 24, 14, 30)
     sesion.add_all([
         MuestraCentrifuga(equipo=equipo, fecha_hora=momento, fase="emulsion", caudal_lh=13000, gramos=3.504,
-                          ml=6.54, normalidad=0.0996, blanco_ml=0.1, solidos_pct=0.5, analista="Bulegio",
-                          operador="Escudero", fruta="N Val S/R", cargado_por="prueba",
+                          ml=6.54, normalidad=0.0996, blanco_ml=0.1, solidos_pct=1, analista="Bulegio",
+                          operador="Escudero", fruta="N Val S/R", cargado_por="prueba", solidos_texto="<1",
+                          solidos_marca="menor que", revisar="ESB 130 anotada como 1° centrífuga",
                           origen=texto_origen("CENTRIGUGAS Naranja 25 2.xlsx", "Datos", 3)),
         MuestraCentrifuga(equipo=equipo, fecha_hora=momento, fase="fase_liviana", aceite_pct_medido=72,
                           cp_liviana_bar=0.8, cargado_por="prueba"),
@@ -392,8 +393,11 @@ def test_muestra_centrifuga_guarda_datos_crudos_y_es_unica_por_equipo_hora_y_fas
     assert (emulsion.gramos, emulsion.ml, emulsion.blanco_ml, emulsion.equipo.codigo) == (3.504, 6.54, 0.1,
                                                                                          "LED-CEN-01")
     assert emulsion.origen == "CENTRIGUGAS Naranja 25 2.xlsx › Datos › fila 3"
+    assert (emulsion.solidos_pct, emulsion.solidos_texto, emulsion.solidos_marca) == (1, "<1", "menor que")
+    assert emulsion.revisar == "ESB 130 anotada como 1° centrífuga"
     liviana = sesion.scalars(select(MuestraCentrifuga).where(MuestraCentrifuga.fase == "fase_liviana")).one()
-    assert (liviana.aceite_pct_medido, liviana.caudal_lh, liviana.proceso) == (72, None, None)
+    assert (liviana.aceite_pct_medido, liviana.caudal_lh, liviana.proceso, liviana.revisar) == (72, None, None,
+                                                                                                None)
 
     sesion.add(MuestraCentrifuga(equipo=equipo, fecha_hora=momento, fase="emulsion", cargado_por="prueba"))
     with pytest.raises(IntegrityError):
@@ -409,6 +413,7 @@ def test_muestra_centrifuga_guarda_datos_crudos_y_es_unica_por_equipo_hora_y_fas
     ("t_descarga_s", -1, "no puede ser negativo"),
     ("solidos_pct", 101, "entre 0 y 100"),
     ("aceite_pct_medido", -2, "entre 0 y 100"),
+    ("solidos_marca", "aprox", "no válida"),
 ])
 def test_muestra_centrifuga_valida_valores(campo, valor, mensaje):
     with pytest.raises(ValueError, match=mensaje):

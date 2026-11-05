@@ -14,6 +14,7 @@ DESCRIPCION_PARAMETROS = {
     "factor_aceite_emulsion": "el factor de aceite en emulsión",
     "hora_inicio_dia": "la hora de inicio del día de producción",
     "blanco_centrifugas_ml": "el blanco de centrífugas (mL)",
+    "volumen_descarga_l": "el volumen por descarga de las centrífugas (L)",
 }
 
 
@@ -24,10 +25,10 @@ class ParametrosIncompletos(ValueError):
 def parametros_planta(sesion: Session, planta_id: int, requeridos: list[str] | None = None) -> dict:
     """Devuelve los parámetros de cálculo de la planta (todos, o solo los `requeridos`).
 
-    Unidades: blanco en mL; factores sin unidad (fórmula de la técnica Scott:
+    Unidades: blancos en mL; volumen por descarga en L; factores sin unidad (fórmula de la técnica Scott:
     resultado = (mL − blanco) × N × factor / g); hora como datetime.time.
     Da ParametrosIncompletos si falta alguno, si un blanco es negativo o si un
-    factor no es mayor que 0.
+    factor o el volumen por descarga no es mayor que 0.
     """
     planta = sesion.get(Planta, planta_id)
     if planta is None:
@@ -59,7 +60,7 @@ def validar_parametros(planta: Planta, requeridos: list[str] | None = None) -> d
         if valores.get(blanco, 0) < 0:
             raise ParametrosIncompletos(f'La planta "{planta.nombre}" tiene {DESCRIPCION_PARAMETROS[blanco]} '
                                         f"negativo ({valores[blanco]} mL).")
-    for factor in ("factor_aceite_fruta", "factor_aceite_emulsion"):
+    for factor in ("factor_aceite_fruta", "factor_aceite_emulsion", "volumen_descarga_l"):
         if factor in valores and valores[factor] <= 0:
             raise ParametrosIncompletos(f'La planta "{planta.nombre}" tiene '
                                         f"{DESCRIPCION_PARAMETROS[factor]} en {valores[factor]}: "

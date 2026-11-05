@@ -49,6 +49,7 @@ def detalle_planta(sesion: Session, planta_id: int) -> dict | None:
         "factor_aceite_emulsion": planta.factor_aceite_emulsion,
         "hora_inicio_dia": planta.hora_inicio_dia,
         "blanco_centrifugas_ml": planta.blanco_centrifugas_ml,
+        "volumen_descarga_l": planta.volumen_descarga_l,
         "lineas": [
             {"nombre": linea.nombre,
              "equipos": [_equipo(e) for e in sorted(linea.equipos, key=lambda e: e.codigo)]}
