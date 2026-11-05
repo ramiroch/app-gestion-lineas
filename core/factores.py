@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
+from scipy import stats
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 
 from core.comparaciones import comparar_grupos
@@ -40,7 +41,7 @@ RESPUESTAS = {
 }
 # Factores del modelo: columna → (nombre, tipo, paso del efecto y texto del paso, nivel de referencia)
 FACTORES = {
-    "eboe": ("eBOE", "categoria", None, None, 1),
+    "eboe": ("Diferencia propia del eBOE", "categoria", None, None, 1),
     "temporada": ("Temporada", "categoria", None, None, None),
     "programa_num": ("Programa", "numero", 1, "+1 nivel de programa", None),
     "tph": ("MTPH", "numero", 1, "+1 MTPH", None),
@@ -625,8 +626,17 @@ def _termino(columna: str, referencia) -> str:
     return f"C({columna}, Treatment(reference={referencia!r}))"
 
 
-def modelo_multivariable(pares: pd.DataFrame, respuesta: str, alfa: float = ALFA) -> dict:
+NOMBRES_MODELO = {True: "A · Con eBOE", False: "B · Sin eBOE (máquinas iguales)"}
+NOTA_MODELO_B = ("Este modelo supone que las máquinas son iguales; la diferencia que queda en cada eBOE (residuo) "
+                 "refleja factores que el modelo no ve.")
+
+
+def modelo_multivariable(pares: pd.DataFrame, respuesta: str, con_eboe: bool = True, alfa: float = ALFA) -> dict:
     """Regresión lineal (OLS) de la respuesta (RESPUESTAS) con todos los FACTORES a la vez.
+
+    con_eboe=True es el modelo A: el efecto del eBOE es su diferencia propia, la que no explican las demás
+    variables. con_eboe=False es el modelo B (máquinas iguales): las mismas variables menos el eBOE; lo que
+    distingue a cada eBOE queda en el residuo (ajuste).
 
     Entran los pares con todos los datos. Se dejan afuera los factores sin variación (por ejemplo, la
     temporada si se filtró una sola). Categorías con referencia fija (eBOE 1, Firme, turno M; temporada:
@@ -635,19 +645,26 @@ def modelo_multivariable(pares: pd.DataFrame, respuesta: str, alfa: float = ALFA
     VIF de cada columna del modelo (para las categorías, el mayor de sus columnas).
     Devuelve n, r2, r2_ajustado, factores (los que entraron), excluidos, importancia (factor, nombre, gl,
     sc, pct, f, p; ordenada de mayor a menor), efectos (factor, texto, coeficiente, ic_inf, ic_sup, p),
-    vif (factor, nombre, vif) y sin_explicar (% de la variación que queda en el error).
+    vif (factor, nombre, vif), sin_explicar (% de la variación que queda en el error) y ajuste (por par: eboe,
+    temporada, observado, esperado y residuo = observado − esperado). Cada efecto lleva además clave (el
+    término del modelo) y variable (el texto sin el valor).
+    Los dos modelos usan los mismos pares (los que tienen todos los datos, eBOE incluido).
     """
     if respuesta not in RESPUESTAS:
         raise ValueError(f"Respuesta desconocida: {respuesta}. Las válidas son: {', '.join(RESPUESTAS)}.")
     datos = pares.dropna(subset=[respuesta, *FACTORES]).copy()
+    eboe_original = datos["eboe"].copy()
     for columna, (_, tipo, *_resto) in FACTORES.items():
         if tipo == "categoria":
             datos[columna] = datos[columna].astype(str)
     factores, excluidos = [], []
     for columna in FACTORES:
+        if columna == "eboe" and not con_eboe:
+            continue
         (factores if datos[columna].nunique() > 1 else excluidos).append(columna)
     resultado = {"n": len(datos), "r2": None, "r2_ajustado": None, "factores": factores, "excluidos": excluidos,
-                 "importancia": None, "efectos": None, "vif": None, "sin_explicar": None}
+                 "importancia": None, "efectos": None, "vif": None, "sin_explicar": None, "ajuste": None,
+                 "con_eboe": con_eboe}
     if len(datos) <= len(factores) + 2 or not factores:
         return resultado
 
@@ -681,8 +698,8 @@ def modelo_multivariable(pares: pd.DataFrame, respuesta: str, alfa: float = ALFA
                       for nivel in sorted(datos[columna].unique()) if nivel != ref]
         for clave, texto, multiplicador in claves:
             coef = modelo.params[clave] * multiplicador
-            efectos.append({"factor": columna, "texto": f"{texto} → {'+' if coef >= 0 else '−'}"
-                                                          f"{numero(abs(coef), dec)} {unidad_efecto}",
+            efectos.append({"factor": columna, "clave": clave, "variable": texto,
+                            "texto": f"{texto} → {'+' if coef >= 0 else '−'}{numero(abs(coef), dec)} {unidad_efecto}",
                             "coeficiente": coef, "ic_inf": intervalos.loc[clave, 0] * multiplicador,
                             "ic_sup": intervalos.loc[clave, 1] * multiplicador, "p": modelo.pvalues[clave]})
 
@@ -695,14 +712,17 @@ def modelo_multivariable(pares: pd.DataFrame, respuesta: str, alfa: float = ALFA
     resultado.update(r2=float(modelo.rsquared), r2_ajustado=float(modelo.rsquared_adj),
                      importancia=pd.DataFrame(importancia).sort_values("pct", ascending=False, ignore_index=True),
                      efectos=pd.DataFrame(efectos), vif=pd.DataFrame(vif),
-                     sin_explicar=100 * modelo.ssr / total)
+                     sin_explicar=100 * modelo.ssr / total,
+                     ajuste=pd.DataFrame({"eboe": eboe_original, "temporada": datos["temporada"],
+                                          "observado": datos[respuesta], "esperado": modelo.fittedvalues,
+                                          "residuo": modelo.resid}).reset_index(drop=True))
     return resultado
 
 
 def _texto_categoria(columna: str, nivel: str, referencia: str) -> str:
     """"eBOE 2 en vez de eBOE 1", "Calidad Blanda en vez de Firme", "Turno N en vez de M"."""
     if columna == "eboe":
-        return f"eBOE {nivel} en vez de eBOE {referencia}"
+        return f"eBOE {nivel} en vez de eBOE {referencia}: diferencia propia (no explicada por las variables del modelo)"
     if columna == "temporada":
         return f"Temporada {nivel} en vez de {referencia}"
     if columna == "calidad":
@@ -711,8 +731,8 @@ def _texto_categoria(columna: str, nivel: str, referencia: str) -> str:
 
 
 def frase_modelo(resultado: dict, respuesta: str) -> str:
-    """Ejemplo: "El modelo explica el 35 % de la variación de la eficiencia (R² = 0,35; N = 4.300). Lo que
-    más pesa es el eBOE (12 %), seguido de MTPH (5 %) y Calibre (3 %)."
+    """Ejemplo: "El modelo A explica el 35 % de la variación de la eficiencia (R² = 0,35; N = 4.300). Lo que más
+    pesa, por sí solo: MTPH (8,3 %), Programa (6,0 %) y Diferencia propia del eBOE (4,8 %)."
     """
     if resultado["r2"] is None:
         return f"No hay datos suficientes para el modelo (N = {numero(resultado['n'], 0)})."
@@ -720,9 +740,75 @@ def frase_modelo(resultado: dict, respuesta: str) -> str:
     top = resultado["importancia"].head(3)
     nombres = [f"{f['nombre']} ({numero(f['pct'], 1)} %)" for f in top.to_dict("records")]
     lista = nombres[0] if len(nombres) == 1 else ", ".join(nombres[:-1]) + " y " + nombres[-1]
-    return (f"El modelo explica el {numero(resultado['r2'] * 100, 0)} % de la variación {sujeto} "
+    letra = "A" if resultado.get("con_eboe", True) else "B"
+    return (f"El modelo {letra} explica el {numero(resultado['r2'] * 100, 0)} % de la variación {sujeto} "
             f"(R² = {numero(resultado['r2'], 2)}; N = {numero(resultado['n'], 0)}). Lo que más pesa, por sí solo: "
             f"{lista}.")
+
+
+def comparar_modelos(a: dict, b: dict) -> pd.DataFrame:
+    """Efecto de cada variable en el modelo A (con eBOE) y en el B (sin eBOE), lado a lado.
+
+    Columnas: variable, coef_a, ic_inf_a, ic_sup_a, p_a, coef_b, ic_inf_b, ic_sup_b, p_b (vacías en B para el eBOE).
+    """
+    columnas = ["clave", "variable", "coeficiente", "ic_inf", "ic_sup", "p"]
+    if a["efectos"] is None or b["efectos"] is None:
+        return pd.DataFrame(columns=["variable", "coef_a", "ic_inf_a", "ic_sup_a", "p_a", "coef_b", "ic_inf_b",
+                                     "ic_sup_b", "p_b"])
+    tabla = a["efectos"][columnas].merge(b["efectos"][columnas].drop(columns="variable"), on="clave", how="left",
+                                         suffixes=("_a", "_b"))
+    return tabla.rename(columns={"coeficiente_a": "coef_a", "coeficiente_b": "coef_b"}).drop(columns="clave")
+
+
+def residuos_por_eboe(modelo: dict, alfa: float = ALFA) -> pd.DataFrame:
+    """Residuo promedio de cada eBOE en un modelo (el B): lo que rinde de más o de menos contra lo esperado.
+
+    IC 1 − alfa con la t de Student sobre los residuos del eBOE. Columnas: eboe, n, observado, esperado,
+    residuo, ic_inf, ic_sup.
+    """
+    columnas = ["eboe", "n", "observado", "esperado", "residuo", "ic_inf", "ic_sup"]
+    if modelo["ajuste"] is None:
+        return pd.DataFrame(columns=columnas)
+    filas = []
+    for eboe, sub in modelo["ajuste"].groupby("eboe", sort=True):
+        n, media = len(sub), float(sub["residuo"].mean())
+        margen = (stats.t.ppf(1 - alfa / 2, n - 1) * sub["residuo"].std(ddof=1) / np.sqrt(n)) if n >= 2 else np.nan
+        filas.append({"eboe": eboe, "n": n, "observado": float(sub["observado"].mean()),
+                      "esperado": float(sub["esperado"].mean()), "residuo": media, "ic_inf": media - margen,
+                      "ic_sup": media + margen})
+    return pd.DataFrame(filas, columns=columnas)
+
+
+def frase_residuo_eboe(tabla: pd.DataFrame, respuesta: str) -> str:
+    """El eBOE que peor rinde contra lo que espera el modelo B.
+
+    Ejemplo: "Con su calibre, programa y MTPH, el modelo espera que el eBOE 2 rinda 81,9 %; rinde 78,4 %
+    (3,5 puntos menos de lo esperado)."
+    """
+    if len(tabla) < 2:
+        return "Hace falta más de un eBOE para comparar los residuos."
+    eficiencia = respuesta == "eficiencia_pct"
+    peor = tabla.loc[tabla["residuo"].idxmin() if eficiencia else tabla["residuo"].idxmax()]
+    eboe, residuo = int(peor["eboe"]), peor["residuo"]
+    if eficiencia:
+        cuanto = f"{numero(abs(residuo), 1)} puntos {'menos' if residuo < 0 else 'más'} de lo esperado"
+        return (f"Con su calibre, programa y MTPH, el modelo espera que el eBOE {eboe} rinda "
+                f"{numero(peor['esperado'], 1)} %; rinde {numero(peor['observado'], 1)} % ({cuanto}).")
+    cuanto = f"{numero(abs(residuo), 2)} kg/MT {'más' if residuo > 0 else 'menos'} de lo esperado"
+    return (f"Con su calibre, programa y MTPH, el modelo espera que el eBOE {eboe} deje "
+            f"{numero(peor['esperado'], 2)} kg/MT de aceite en la cáscara; deja {numero(peor['observado'], 2)} kg/MT "
+            f"({cuanto}).")
+
+
+def frase_r2_modelos(a: dict, b: dict) -> str:
+    """Ejemplo: "Sacar el eBOE del modelo baja el R² de 0,39 a 0,35: la posición de la máquina explica un 4 % de
+    la variación que no explican el calibre, el programa ni la MTPH."
+    """
+    if a["r2"] is None or b["r2"] is None:
+        return "No hay datos suficientes para comparar los dos modelos."
+    return (f"Sacar el eBOE del modelo baja el R² de {numero(a['r2'], 2)} a {numero(b['r2'], 2)}: la posición de la "
+            f"máquina explica un {numero(100 * (a['r2'] - b['r2']), 0)} % de la variación que no explican el calibre, "
+            "el programa ni la MTPH.")
 
 
 # ---------------------------------------------------------------- aceite perdido

@@ -10,7 +10,8 @@ import pandas as pd
 import streamlit as st
 
 from core.analisis import filtrar, filtros_sin_periodo, pares_con_emulsion
-from core.factores import (CATEGORIAS, N_MINIMO_JUSTA, NIVEL_FRASE, NIVELES_JUSTA, NOTA_JUSTA, cascada_justa,
+from core.factores import (CATEGORIAS, NOMBRES_MODELO, NOTA_MODELO_B, comparar_modelos, frase_r2_modelos,
+                           frase_residuo_eboe, residuos_por_eboe, N_MINIMO_JUSTA, NIVEL_FRASE, NIVELES_JUSTA, NOTA_JUSTA, cascada_justa,
                            celdas_justas, comparacion_justa, eboe_peor, frase_justa, preparar_celdas, cortes_cuartiles, esponja_por_cuartil, esponja_por_eboe, etiquetas_cuartiles,
                            frase_esponja, pendientes_esponja, N_MINIMO_CELDA, RESPUESTAS, VIF_MAXIMO, aceite_perdido, agregar_dia_proceso, comparar_planta,
                            cortes_quintiles, descomponer, etiquetas_quintiles, frase_aceite_perdido, frase_calibre,
@@ -23,7 +24,7 @@ from core.precios import (BRIX_REFERENCIA, SIN_PRECIOS, UNIDADES, Precios, guard
                            leer_precios, usd)
 from descargas import Descargas
 from filtros import filtros_elegidos, planta_elegida, tabla_emulsion_planta, tabla_planta, toneladas_planta
-from graficos import barras_importancia, cascada, cascada_pasos, columnas_agrupadas, intervalos_agrupados
+from graficos import GRIS, barras_importancia, cascada, cascada_pasos, columnas_agrupadas, intervalos, intervalos_agrupados
 
 INDICADORES = {"entrada": "Entrada", "removido": "Removido", "residual": "Residual"}
 ETIQUETAS_CORTAS = {1: "Q1 grande", 2: "Q2", 3: "Q3", 4: "Q4", 5: "Q5 chica"}
@@ -47,8 +48,8 @@ def categoria_en_cache(pares: pd.DataFrame, factor: str, variable: str) -> pd.Da
 
 
 @st.cache_data(ttl=600, show_spinner="Ajustando el modelo…")
-def modelo_en_cache(pares: pd.DataFrame, respuesta: str) -> dict:
-    return modelo_multivariable(pares, respuesta)
+def modelo_en_cache(pares: pd.DataFrame, respuesta: str, con_eboe: bool = True) -> dict:
+    return modelo_multivariable(pares, respuesta, con_eboe)
 
 
 def con_coma(df: pd.DataFrame, decimales: int = 2, **por_columna):
@@ -331,27 +332,23 @@ def bloque_justa(pares: pd.DataFrame, cortes: list[float], cortes_emulsion: list
                        f"Comparación justa - celdas {nivel}")
 
 
-def bloque_modelo(pares: pd.DataFrame, registro: Descargas) -> None:
-    st.subheader("6. Modelos multivariables")
-    st.caption("Regresión lineal con todos los factores a la vez (respeta todos los filtros de la barra): eBOE, "
-               "temporada, programa, MTPH, frutos en 10 kg, calidad, turno, caudal de fase pesada, aceite en emulsión "
-               "y día del proceso. Entran los pares que tienen todos los datos.")
-    respuesta = st.radio("Variable de respuesta", list(RESPUESTAS), horizontal=True, key="factores_respuesta",
-                         format_func=lambda r: f"{RESPUESTAS[r]['nombre']} ({RESPUESTAS[r]['unidad']})")
-    resultado = modelo_en_cache(pares, respuesta)
+def mostrar_modelo(resultado: dict, respuesta: str, registro: Descargas) -> None:
+    """R², N, "¿Qué pesa más?", VIF y tabla de efectos de un modelo."""
+    nombre = NOMBRES_MODELO[resultado["con_eboe"]]
+    letra = nombre[0]
     st.markdown(f"**{frase_modelo(resultado, respuesta)}**")
     if resultado["r2"] is None:
         return
     uno, dos, tres = st.columns(3)
-    uno.metric("R²", numero(resultado["r2"], 2))
-    dos.metric("R² ajustado", numero(resultado["r2_ajustado"], 2))
+    uno.metric(f"R² ({letra})", numero(resultado["r2"], 2))
+    dos.metric(f"R² ajustado ({letra})", numero(resultado["r2_ajustado"], 2))
     tres.metric("N (pares)", numero(resultado["n"], 0))
     if resultado["excluidos"]:
         st.caption("Sin variación con estos filtros (no entran): " + ", ".join(resultado["excluidos"]) + ".")
 
     izquierda, derecha = st.columns([3, 2])
-    registro.grafico(barras_importancia(resultado["importancia"], resultado["sin_explicar"], "¿Qué pesa más?"),
-                     f"Qué pesa más - {RESPUESTAS[respuesta]['nombre']}", donde=izquierda)
+    registro.grafico(barras_importancia(resultado["importancia"], resultado["sin_explicar"], f"¿Qué pesa más? ({letra})"),
+                     f"Qué pesa más {letra} - {RESPUESTAS[respuesta]['nombre']}", donde=izquierda)
     derecha.caption("% de la variación que explica cada factor por sí solo, una vez que están los demás (suma de "
                     "cuadrados tipo II sobre la total). No suman el R²: lo que comparten dos factores no se le asigna a "
                     "ninguno.")
@@ -361,14 +358,70 @@ def bloque_modelo(pares: pd.DataFrame, registro: Descargas) -> None:
         derecha.warning(f"VIF mayor que {VIF_MAXIMO} en: {', '.join(altos['nombre'])}. Esos factores se mueven juntos "
                         "con otros: sus efectos por separado no son confiables.")
     registro.tabla(con_coma(vif.drop(columns="factor").rename(columns={"nombre": "Factor", "vif": "VIF"}), 2),
-                   f"VIF - {RESPUESTAS[respuesta]['nombre']}", donde=derecha)
+                   f"VIF {letra} - {RESPUESTAS[respuesta]['nombre']}", donde=derecha)
 
-    st.markdown("**Efectos** (cada uno, con los demás factores fijos)")
-    efectos = resultado["efectos"]
-    decimales = RESPUESTAS[respuesta]["decimales"]
+    with st.expander(f"Efectos del modelo {letra} (cada uno, con los demás factores fijos)"):
+        efectos = resultado["efectos"]
+        registro.tabla(con_coma(pd.DataFrame({
+            "Efecto": efectos["texto"], "IC 95 % inferior": efectos["ic_inf"], "IC 95 % superior": efectos["ic_sup"],
+            "p": efectos["p"].map(texto_p)}), RESPUESTAS[respuesta]["decimales"]),
+            f"Efectos {letra} - {RESPUESTAS[respuesta]['nombre']}")
+
+
+def bloque_modelo(pares: pd.DataFrame, registro: Descargas) -> None:
+    st.subheader("6. Modelos multivariables")
+    st.caption("Regresión lineal con todos los factores a la vez (respeta todos los filtros de la barra): temporada, "
+               "programa, MTPH, frutos en 10 kg, calidad, turno, caudal de fase pesada, aceite en emulsión y día del "
+               "proceso; el modelo A suma el eBOE y el B no. Los dos usan los mismos pares (los que tienen todos los "
+               "datos).")
+    respuesta = st.radio("Variable de respuesta", list(RESPUESTAS), horizontal=True, key="factores_respuesta",
+                         format_func=lambda r: f"{RESPUESTAS[r]['nombre']} ({RESPUESTAS[r]['unidad']})")
+    con, sin = modelo_en_cache(pares, respuesta, True), modelo_en_cache(pares, respuesta, False)
+    nombre = RESPUESTAS[respuesta]["nombre"]
+
+    st.markdown(f"##### Modelo {NOMBRES_MODELO[True]}")
+    st.caption("El efecto del eBOE es su diferencia propia: la que no explican las variables del modelo.")
+    mostrar_modelo(con, respuesta, registro)
+    st.markdown(f"##### Modelo {NOMBRES_MODELO[False]}")
+    st.info(NOTA_MODELO_B)
+    mostrar_modelo(sin, respuesta, registro)
+    if con["r2"] is None or sin["r2"] is None:
+        return
+
+    st.markdown("##### A contra B")
+    st.markdown(f"**{frase_r2_modelos(con, sin)}**")
+    residuos = residuos_por_eboe(sin)
+    st.markdown(f"**{frase_residuo_eboe(residuos, respuesta)}**")
+    unidad, decimales = RESPUESTAS[respuesta]["unidad"], RESPUESTAS[respuesta]["decimales"]
+    titulo_y = f"Residuo en B ({'puntos' if unidad == '%' else unidad})"
+    izquierda, derecha = st.columns(2)
+    figura = intervalos(residuos.assign(grupo="eBOE " + residuos["eboe"].astype(str), media=residuos["residuo"]),
+                        titulo_y, "puntos" if unidad == "%" else unidad, decimales, titulo_x="eBOE",
+                        titulo="Residuo promedio por eBOE en el modelo B (IC 95 %)")
+    figura.add_hline(y=0, line_dash="dot", line_color=GRIS)          # 0 = rinde lo esperado
+    registro.grafico(figura, f"Residuo por eBOE - {nombre}", donde=izquierda)
+    derecha.caption("Residuo = valor real − lo que espera el modelo B con el calibre, programa, MTPH y demás variables "
+                    "de cada par. Un eBOE con residuo distinto de 0 rinde distinto de lo esperado por razones que el "
+                    "modelo no ve.")
     registro.tabla(con_coma(pd.DataFrame({
-        "Efecto": efectos["texto"], "IC 95 % inferior": efectos["ic_inf"], "IC 95 % superior": efectos["ic_sup"],
-        "p": efectos["p"].map(texto_p)}), decimales), f"Efectos - {RESPUESTAS[respuesta]['nombre']}")
+        "eBOE": residuos["eboe"].map(lambda e: f"eBOE {e}"), "N": residuos["n"], f"Real ({unidad})": residuos["observado"],
+        f"Esperado ({unidad})": residuos["esperado"], "Residuo": residuos["residuo"], "IC 95 % inferior": residuos["ic_inf"],
+        "IC 95 % superior": residuos["ic_sup"]}), decimales), f"Residuo por eBOE - {nombre}", donde=derecha)
+
+    st.markdown("**Efecto de cada variable en A y en B**")
+    comparacion = comparar_modelos(con, sin)
+    registro.tabla(con_coma(pd.DataFrame({
+        "Variable": comparacion["variable"], "Efecto en A": comparacion["coef_a"],
+        "IC 95 % A": [f"{numero(i, decimales)} a {numero(s, decimales)}" for i, s in
+                      zip(comparacion["ic_inf_a"], comparacion["ic_sup_a"])],
+        "p A": comparacion["p_a"].map(texto_p), "Efecto en B": comparacion["coef_b"],
+        "IC 95 % B": [f"{numero(i, decimales)} a {numero(s, decimales)}" if pd.notna(i) else "—" for i, s in
+                      zip(comparacion["ic_inf_b"], comparacion["ic_sup_b"])],
+        "p B": comparacion["p_b"].map(lambda p: texto_p(p) if pd.notna(p) else "—")}), decimales),
+        f"Efectos A y B - {nombre}")
+    st.caption(f"Efectos en {RESPUESTAS[respuesta]['efecto']}. Si un efecto cambia mucho de A a B, esa variable se "
+               "mueve junto con el eBOE (por ejemplo, un eBOE recibe más fruta chica): sin el eBOE, absorbe parte de su "
+               "diferencia.")
     st.info(NOTA_MODELO)
 
 

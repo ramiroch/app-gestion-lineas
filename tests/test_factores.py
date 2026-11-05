@@ -4,7 +4,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from core.factores import (NOTA_JUSTA, cascada_justa, celdas_justas, comparacion_justa, eboe_peor, frase_justa,
+from core.formato import numero
+
+from core.factores import (comparar_modelos, frase_r2_modelos, frase_residuo_eboe, residuos_por_eboe,
+                           NOTA_JUSTA, cascada_justa, celdas_justas, comparacion_justa, eboe_peor, frase_justa,
                            grupo_mtph, grupo_programa, preparar_celdas,
                            asignar_cuartil, cortes_cuartiles, esponja_por_cuartil, esponja_por_eboe,
                            etiquetas_cuartiles, frase_esponja, pendientes_esponja,
@@ -302,7 +305,7 @@ def test_modelo_recupera_los_efectos():
     importancia = resultado["importancia"]
     assert importancia["pct"].is_monotonic_decreasing and importancia["nombre"].iloc[0] in ("Programa", "MTPH")
     assert (resultado["vif"]["vif"] < 5).all()
-    assert frase_modelo(resultado, "eficiencia_pct").startswith("El modelo explica el 9")
+    assert frase_modelo(resultado, "eficiencia_pct").startswith("El modelo A explica el 9")
 
 
 def test_modelo_saca_factores_constantes_y_valida():
@@ -314,6 +317,28 @@ def test_modelo_saca_factores_constantes_y_valida():
         modelo_multivariable(datos, "brix")
     poco = modelo_multivariable(datos.head(5), "residual")
     assert poco["r2"] is None and "No hay datos suficientes" in frase_modelo(poco, "residual")
+
+
+def test_modelo_sin_eboe_y_residuos():
+    datos = _datos_modelo()
+    con, sin = modelo_multivariable(datos, "eficiencia_pct"), modelo_multivariable(datos, "eficiencia_pct", con_eboe=False)
+    assert "eboe" not in sin["factores"] and sin["n"] == con["n"] and sin["r2"] < con["r2"]
+    assert frase_modelo(sin, "eficiencia_pct").startswith("El modelo B explica")
+    assert con["efectos"]["texto"].str.contains("diferencia propia").any()
+
+    # Sin el eBOE, su −3 queda en el residuo: el eBOE 2 rinde ~2 puntos menos de lo esperado (−3 + 1 del promedio)
+    residuos = residuos_por_eboe(sin).set_index("eboe")
+    assert residuos.loc[2, "residuo"] == pytest.approx(-2.0, abs=0.3)
+    assert residuos.loc[2, "ic_inf"] < residuos.loc[2, "residuo"] < residuos.loc[2, "ic_sup"] < 0
+    assert residuos["residuo"].mul(residuos["n"]).sum() == pytest.approx(0, abs=1e-6)     # MCO: suman 0
+    frase = frase_residuo_eboe(residuos.reset_index(), "eficiencia_pct")
+    assert frase.startswith("Con su calibre, programa y MTPH, el modelo espera que el eBOE 2 rinda ")
+    assert frase.endswith(f"({numero(abs(residuos.loc[2, 'residuo']), 1)} puntos menos de lo esperado).")
+    assert frase_r2_modelos(con, sin).startswith(f"Sacar el eBOE del modelo baja el R² de {numero(con['r2'], 2)} a ")
+
+    tabla = comparar_modelos(con, sin).set_index("variable")
+    assert tabla.loc["+1 nivel de programa", "coef_b"] == pytest.approx(0.8, abs=0.06)
+    assert tabla.filter(like="diferencia propia", axis=0)["coef_b"].isna().all()
 
 
 def test_vif_detecta_colinealidad():
