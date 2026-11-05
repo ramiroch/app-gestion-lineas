@@ -234,6 +234,8 @@ def test_toneladas_por_eboe_y_aceite_perdido():
     assert frase_aceite_perdido(tabla.reset_index(), 2026).startswith(
         "Si el eBOE 2 hubiera tenido el residual del eBOE 1 (1,00 kg/MT), en 2026 se habrían recuperado 200 kg")
     assert "un solo eBOE" in frase_aceite_perdido(tabla.reset_index().iloc[:1], 2026)
+    con_precio = frase_aceite_perdido(tabla.reset_index(), 2026, precio_usd_kg=10.0)
+    assert "recuperado 200 kg de aceite (USD 2.000) (" in con_precio and con_precio.endswith("200 kg (USD 2.000).")
 
 
 def test_planta_entre_temporadas():
@@ -245,6 +247,7 @@ def test_planta_entre_temporadas():
     assert resultado["diferencia"] == pytest.approx(0.26) and resultado["kg"] == pytest.approx(260)
     assert frase_planta(resultado) == ("En 2026 quedaron 0,26 kg/MT más en la cáscara que en 2025 (1,56 contra "
                                        "1,30 kg/MT), equivalente a 260 kg de aceite sobre 1.000 MT.")
+    assert "260 kg de aceite (USD 2.600) sobre" in frase_planta(resultado, 10.0)
     assert comparar_planta(planta, 2024, 2026) is None and "Hacen falta" in frase_planta(None)
 
 

@@ -17,6 +17,8 @@ from core.factores import (CATEGORIAS, RESPUESTAS, VIF_MAXIMO, aceite_perdido, a
                            preparar_pares, promedio_por_temporada,
                            residual_planta, resumen_factores, separar_errores, toneladas_por_eboe)
 from core.formato import numero, texto_p
+from core.precios import (BRIX_REFERENCIA, SIN_PRECIOS, UNIDADES, Precios, guardar_precios, kg_a_65_brix,
+                           leer_precios, usd)
 from descargas import Descargas
 from filtros import filtros_elegidos, planta_elegida, tabla_emulsion_planta, tabla_planta, toneladas_planta
 from graficos import barras_importancia, cascada, columnas_agrupadas, intervalos_agrupados
@@ -55,6 +57,48 @@ def con_coma(df: pd.DataFrame, decimales: int = 2, **por_columna):
 
 
 # ---------------------------------------------------------------- bloques
+
+def texto_usd(valor) -> str:
+    return "—" if valor is None or pd.isna(valor) else f"USD {numero(valor, 0)}"
+
+
+def bloque_precios() -> Precios:
+    """Precios del aceite y del concentrado (data/precios.json). Devuelve los vigentes."""
+    precios = leer_precios()
+    titulo = "Precios" + ("" if precios.cargados else " (sin cargar)")
+    with st.expander(titulo, expanded=not precios.cargados):
+        with st.form("factores_precios", border=False):
+            aceite, unidad_aceite, jugo, unidad_jugo, brix = st.columns([3, 2, 3, 2, 3])
+            valor_aceite = aceite.number_input("Precio del aceite", min_value=0.0, value=precios.aceite, step=0.1,
+                                               format="%.3f")
+            u_aceite = unidad_aceite.selectbox("Unidad", list(UNIDADES), index=list(UNIDADES).index(precios.unidad_aceite),
+                                               key="precios_unidad_aceite")
+            valor_jugo = jugo.number_input("Precio del jugo concentrado 65 °Brix", min_value=0.0, value=precios.jugo,
+                                           step=0.1, format="%.3f")
+            u_jugo = unidad_jugo.selectbox("Unidad", list(UNIDADES), index=list(UNIDADES).index(precios.unidad_jugo),
+                                           key="precios_unidad_jugo")
+            valor_brix = brix.number_input("°Brix del jugo concentrado registrado en Resumen", min_value=1.0,
+                                           value=float(precios.brix_registrado), step=0.5, format="%.1f")
+            if st.form_submit_button("Guardar precios"):
+                try:
+                    precios = guardar_precios(Precios(aceite=valor_aceite or None, unidad_aceite=u_aceite,
+                                                      jugo=valor_jugo or None, unidad_jugo=u_jugo,
+                                                      brix_registrado=valor_brix))
+                    st.success("Precios guardados.")
+                except ValueError as error:
+                    st.error(str(error))
+        partes = [f"Aceite: {numero(precios.aceite_usd_kg, 3)} USD/kg" if precios.aceite else "Aceite: sin precio",
+                  f"jugo concentrado 65 °Brix: {numero(precios.jugo_usd_kg, 3)} USD/kg" if precios.jugo
+                  else "jugo concentrado: sin precio"]
+        if precios.modificado:
+            partes.append(f"última modificación: {pd.Timestamp(precios.modificado):%d/%m/%Y %H:%M}")
+        st.caption(" · ".join(partes) + ". Se guardan en data/precios.json (no se sube a GitHub).")
+        if precios.brix_registrado != BRIX_REFERENCIA:
+            st.caption(f"Los kg de concentrado del Resumen están a {numero(precios.brix_registrado, 1)} °Brix: se pasan a "
+                       f"65 °Brix (kg × {numero(precios.brix_registrado, 1)} / 65 = kg × "
+                       f"{numero(kg_a_65_brix(1.0, precios.brix_registrado), 3)}) antes de valorizarlos.")
+    return precios
+
 
 def bloque_limpieza(excluidos: pd.DataFrame, registro: Descargas) -> None:
     if excluidos.empty:
@@ -198,7 +242,7 @@ def bloque_modelo(pares: pd.DataFrame, registro: Descargas) -> None:
 
 
 def bloque_aceite_perdido(pares_filtrados: pd.DataFrame, pares_temporadas: pd.DataFrame, toneladas: pd.DataFrame,
-                          base, nueva, registro: Descargas) -> tuple[pd.DataFrame, dict | None]:
+                          base, nueva, precios: Precios, registro: Descargas) -> tuple[pd.DataFrame, dict | None]:
     st.subheader("5. Aceite perdido")
     st.caption("Toneladas por eBOE (supuesto): la fruta procesada de cada turno (registro de producción) se reparte "
                "entre los eBOE que tienen muestras en ese turno, en proporción a su MTPH promedio del turno; si a "
@@ -207,18 +251,25 @@ def bloque_aceite_perdido(pares_filtrados: pd.DataFrame, pares_temporadas: pd.Da
                "todos los filtros.")
     reparto = toneladas_por_eboe(pares_filtrados, toneladas)
     perdido = aceite_perdido(reparto)
+    precio = precios.aceite_usd_kg
     if perdido.empty:
         st.info("No hay turnos con toneladas y pares con estos filtros.")
         return perdido, None
     sin_mtph = reparto[reparto["reparto"] == "partes iguales"][["fecha_produccion", "turno"]].drop_duplicates()
     if not sin_mtph.empty:
         st.caption(f"{len(sin_mtph)} turnos repartidos en partes iguales por falta de MTPH.")
+    if precio is None:
+        st.caption(SIN_PRECIOS)
+    else:
+        perdido = perdido.assign(usd=usd(perdido["kg_perdidos"], precio))
     for temporada in sorted(perdido["temporada"].unique(), reverse=True):
         sub = perdido[perdido["temporada"] == temporada]
-        st.markdown(f"**{frase_aceite_perdido(perdido, temporada)}**")
+        st.markdown(f"**{frase_aceite_perdido(perdido, temporada, precio)}**")
         for columna, fila in zip(st.columns(len(sub)), sub.to_dict("records")):
             columna.metric(f"eBOE {fila['eboe']} · {temporada}", f"{numero(fila['kg_perdidos'], 0)} kg",
                            help="Aceite perdido contra el eBOE con menor residual de la temporada")
+            if precio is not None:
+                columna.markdown(f"**{texto_usd(fila['usd'])}**")
             columna.caption(f"Residual {numero(fila['residual'], 2)} kg/MT · {numero(fila['toneladas'], 0)} MT · "
                             f"N {numero(fila['n'], 0)} pares")
     tabla = perdido.assign(eboe="eBOE " + perdido["eboe"].astype(str), temporada=perdido["temporada"].astype(str))
@@ -231,19 +282,21 @@ def bloque_aceite_perdido(pares_filtrados: pd.DataFrame, pares_temporadas: pd.Da
         registro.tabla(con_coma(perdido.rename(columns={
             "temporada": "Temporada", "eboe": "eBOE", "toneladas": "Toneladas (MT)", "turnos": "Turnos", "n": "Pares",
             "residual": "Residual (kg/MT)", "referencia": "eBOE de referencia", "diferencia": "Diferencia (kg/MT)",
-            "kg_perdidos": "Aceite perdido (kg)"}), 2, **{"Toneladas (MT)": 0, "Aceite perdido (kg)": 0}),
+            "kg_perdidos": "Aceite perdido (kg)", "usd": "Aceite perdido (USD)"}), 2,
+            **{"Toneladas (MT)": 0, "Aceite perdido (kg)": 0, **({"Aceite perdido (USD)": 0} if precio else {})}),
             "Aceite perdido por eBOE")
 
     st.markdown(f"**Toda la planta: {nueva} contra {base}** (ignora fechas y proceso de la barra)")
     planta = residual_planta(toneladas_por_eboe(pares_temporadas, toneladas))
     comparacion = comparar_planta(planta, base, nueva)
-    st.markdown(f"**{frase_planta(comparacion)}**")
+    st.markdown(f"**{frase_planta(comparacion, precio)}**")
     if comparacion is not None:
-        uno, dos, tres = st.columns(3)
+        uno, dos, tres, cuatro = st.columns(4)
         uno.metric(f"Residual {base}", f"{numero(comparacion['residual_base'], 2)} kg/MT")
         dos.metric(f"Residual {nueva}", f"{numero(comparacion['residual_nueva'], 2)} kg/MT",
                    delta=f"{numero(comparacion['diferencia'], 2)} kg/MT", delta_color="inverse")
         tres.metric(f"Aceite de diferencia en {nueva}", f"{numero(comparacion['kg'], 0)} kg")
+        cuatro.metric("En USD", texto_usd(usd(comparacion["kg"], precio)), help=None if precio else SIN_PRECIOS)
     return perdido, comparacion
 
 
@@ -269,6 +322,7 @@ def pestana_factores(registro: Descargas) -> None:
     quintiles = por_quintil(pares_temporadas, cortes, toneladas)
     eboes = frutos_por_eboe(pares_temporadas)
 
+    precios = bloque_precios()
     resumen = st.container()
     bloque_limpieza(excluidos, registro)
     bloque_calibre(quintiles, eboes, cortes, registro)
@@ -280,10 +334,12 @@ def pestana_factores(registro: Descargas) -> None:
         descomposicion = None
     bloque_categorias(pares_temporadas, registro)
     bloque_modelo(pares_filtrados, registro)
-    perdido, comparacion = bloque_aceite_perdido(pares_filtrados, pares_temporadas, toneladas, base, nueva, registro)
+    perdido, comparacion = bloque_aceite_perdido(pares_filtrados, pares_temporadas, toneladas, base, nueva, precios,
+                                                 registro)
 
     with resumen:
         st.subheader("Resumen")
         modelo = modelo_en_cache(pares_filtrados, "eficiencia_pct")
-        for frase in resumen_factores(quintiles, eboes, descomposicion, modelo, perdido, comparacion, nueva):
+        for frase in resumen_factores(quintiles, eboes, descomposicion, modelo, perdido, comparacion, nueva,
+                                       precios.aceite_usd_kg):
             st.markdown(f"- {frase}")

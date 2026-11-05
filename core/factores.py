@@ -497,9 +497,14 @@ def residual_planta(reparto: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(filas, columns=["temporada", "toneladas", "residual"])
 
 
-def frase_aceite_perdido(tabla: pd.DataFrame, temporada) -> str:
+def texto_usd(kg, precio_usd_kg: float | None) -> str:
+    """" (USD 40.800)" con el precio del aceite en USD/kg; vacío si no hay precio."""
+    return "" if precio_usd_kg is None or pd.isna(kg) else f" (USD {numero(kg * precio_usd_kg, 0)})"
+
+
+def frase_aceite_perdido(tabla: pd.DataFrame, temporada, precio_usd_kg: float | None = None) -> str:
     """Ejemplo: "Si el eBOE 2 hubiera tenido el residual del eBOE 3 (1,20 kg/MT), en 2026 se habrían
-    recuperado 3.400 kg de aceite (0,25 kg/MT × 13.600 MT)."
+    recuperado 3.400 kg de aceite (0,25 kg/MT × 13.600 MT)." Con precio (USD/kg), suma los USD.
     """
     sub = tabla[tabla["temporada"] == temporada].sort_values("kg_perdidos")
     if len(sub) < 2:
@@ -508,8 +513,9 @@ def frase_aceite_perdido(tabla: pd.DataFrame, temporada) -> str:
     referencia = sub[sub["eboe"] == peor["referencia"]].iloc[0]
     return (f"Si el eBOE {int(peor['eboe'])} hubiera tenido el residual del eBOE {int(peor['referencia'])} "
             f"({numero(referencia['residual'], 2)} kg/MT), en {temporada} se habrían recuperado "
-            f"{numero(peor['kg_perdidos'], 0)} kg de aceite ({numero(peor['diferencia'], 2)} kg/MT × "
-            f"{numero(peor['toneladas'], 0)} MT). Entre todos los eBOE, {numero(sub['kg_perdidos'].sum(), 0)} kg.")
+            f"{numero(peor['kg_perdidos'], 0)} kg de aceite{texto_usd(peor['kg_perdidos'], precio_usd_kg)} "
+            f"({numero(peor['diferencia'], 2)} kg/MT × {numero(peor['toneladas'], 0)} MT). Entre todos los eBOE, "
+            f"{numero(sub['kg_perdidos'].sum(), 0)} kg{texto_usd(sub['kg_perdidos'].sum(), precio_usd_kg)}.")
 
 
 def comparar_planta(planta: pd.DataFrame, base, nueva) -> dict | None:
@@ -523,9 +529,9 @@ def comparar_planta(planta: pd.DataFrame, base, nueva) -> dict | None:
             "toneladas": float(b["toneladas"].iloc[0]), "kg": diferencia * float(b["toneladas"].iloc[0])}
 
 
-def frase_planta(resultado: dict | None) -> str:
+def frase_planta(resultado: dict | None, precio_usd_kg: float | None = None) -> str:
     """Ejemplo: "En 2026 quedaron 0,26 kg/MT más en la cáscara que en 2025 (1,55 contra 1,29 kg/MT),
-    equivalente a 9.800 kg de aceite sobre 37.700 MT."
+    equivalente a 9.800 kg de aceite sobre 37.700 MT." Con precio (USD/kg), suma los USD.
     """
     if resultado is None:
         return "Hacen falta las dos temporadas con producción para comparar la planta."
@@ -536,22 +542,23 @@ def frase_planta(resultado: dict | None) -> str:
     return (f"En {resultado['nueva']} quedaron {numero(abs(diferencia), 2)} kg/MT {sentido} en la cáscara que en "
             f"{resultado['base']} ({numero(resultado['residual_nueva'], 2)} contra "
             f"{numero(resultado['residual_base'], 2)} kg/MT), {equivale} {numero(abs(resultado['kg']), 0)} kg de "
-            f"aceite{ganados} sobre {numero(resultado['toneladas'], 0)} MT.")
+            f"aceite{ganados}{texto_usd(abs(resultado['kg']), precio_usd_kg)} sobre {numero(resultado['toneladas'], 0)} MT.")
 
 
 # ---------------------------------------------------------------- resumen
 
 def resumen_factores(quintiles: pd.DataFrame, eboe_calibre: pd.DataFrame, descomposicion: dict | None,
-                     modelo: dict, perdido: pd.DataFrame, planta: dict | None, temporada) -> list[str]:
+                     modelo: dict, perdido: pd.DataFrame, planta: dict | None, temporada,
+                     precio_aceite: float | None = None) -> list[str]:
     """Las 5 frases principales de la pestaña, para el informe.
 
     quintiles: por_quintil(); eboe_calibre: frutos_por_eboe(); descomposicion: descomponer() de la
     eficiencia; modelo: modelo_multivariable() de la eficiencia; perdido: aceite_perdido(); planta:
-    comparar_planta(); temporada: la que se describe (la más nueva).
+    comparar_planta(); temporada: la que se describe (la más nueva); precio_aceite: USD/kg (opcional).
     """
     frases = [frase_calibre(quintiles, temporada), frase_descomposicion(descomposicion, "eficiencia"),
               frase_modelo(modelo, "eficiencia_pct")]
-    perdida = frase_aceite_perdido(perdido, temporada)
+    perdida = frase_aceite_perdido(perdido, temporada, precio_aceite)
     sub_perdido = perdido[perdido["temporada"] == temporada]
     sub_calibre = eboe_calibre[eboe_calibre["temporada"] == temporada].sort_values("frutos")
     if len(sub_perdido) >= 2 and len(sub_calibre) >= 2:
@@ -561,5 +568,5 @@ def resumen_factores(quintiles: pd.DataFrame, eboe_calibre: pd.DataFrame, descom
             perdida += (f" Ese eBOE es también el que recibe la fruta más chica ({numero(chica['frutos'], 0)} frutos "
                         f"en 10 kg contra {numero(grande['frutos'], 0)} del eBOE {int(grande['eboe'])}).")
     frases.append(perdida)
-    frases.append(frase_planta(planta))
+    frases.append(frase_planta(planta, precio_aceite))
     return frases
