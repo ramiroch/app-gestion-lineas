@@ -10,7 +10,8 @@ import pandas as pd
 import streamlit as st
 
 from core.analisis import filtrar, filtros_sin_periodo, pares_con_emulsion
-from core.factores import (CATEGORIAS, cortes_cuartiles, esponja_por_cuartil, esponja_por_eboe, etiquetas_cuartiles,
+from core.factores import (CATEGORIAS, N_MINIMO_JUSTA, NIVEL_FRASE, NIVELES_JUSTA, NOTA_JUSTA, cascada_justa,
+                           celdas_justas, comparacion_justa, eboe_peor, frase_justa, preparar_celdas, cortes_cuartiles, esponja_por_cuartil, esponja_por_eboe, etiquetas_cuartiles,
                            frase_esponja, pendientes_esponja, N_MINIMO_CELDA, RESPUESTAS, VIF_MAXIMO, aceite_perdido, agregar_dia_proceso, comparar_planta,
                            cortes_quintiles, descomponer, etiquetas_quintiles, frase_aceite_perdido, frase_calibre,
                            frase_categoria, frase_descomposicion, frase_eboe_calibre, frase_modelo, frase_planta,
@@ -22,7 +23,7 @@ from core.precios import (BRIX_REFERENCIA, SIN_PRECIOS, UNIDADES, Precios, guard
                            leer_precios, usd)
 from descargas import Descargas
 from filtros import filtros_elegidos, planta_elegida, tabla_emulsion_planta, tabla_planta, toneladas_planta
-from graficos import barras_importancia, cascada, columnas_agrupadas, intervalos_agrupados
+from graficos import barras_importancia, cascada, cascada_pasos, columnas_agrupadas, intervalos_agrupados
 
 INDICADORES = {"entrada": "Entrada", "removido": "Removido", "residual": "Residual"}
 ETIQUETAS_CORTAS = {1: "Q1 grande", 2: "Q2", 3: "Q3", 4: "Q4", 5: "Q5 chica"}
@@ -266,6 +267,70 @@ def bloque_esponja(pares: pd.DataFrame, cortes: list[float], toneladas: pd.DataF
         "Emulsión, salida y eficiencia por eBOE", donde=derecha)
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def justa_en_cache(pares: pd.DataFrame, cortes: list[float], cortes_emulsion: list[float]):
+    datos = preparar_celdas(pares, cortes, cortes_emulsion)
+    return datos, comparacion_justa(datos)
+
+
+def bloque_justa(pares: pd.DataFrame, cortes: list[float], cortes_emulsion: list[float], registro: Descargas) -> None:
+    st.subheader("5. Comparación justa entre eBOE")
+    st.caption(f"Se compara cada eBOE contra el promedio de los otros dentro de celdas de fruta y operación parecidas: "
+               f"calibre (quintil) × programa (N0–N3, N4–N5, N6–N9); después además × MTPH (≤ 10, 10–12, > 12) × "
+               f"temporada; y después además × cuartil de aceite en emulsión. Solo entran las celdas con al menos "
+               f"{N_MINIMO_JUSTA} pares de cada eBOE; las diferencias de las celdas se promedian ponderando por los pares "
+               "del eBOE. Todas las versiones usan los mismos pares (los que tienen calibre, programa, MTPH y emulsión); "
+               "promedio simple dentro de cada celda. Ignora fechas y proceso de la barra.")
+    datos, resumen = justa_en_cache(pares, cortes, cortes_emulsion)
+    if resumen.empty:
+        st.info("Hace falta más de un eBOE para comparar.")
+        return
+    st.markdown(f"**{frase_justa(resumen)}**")
+    st.info(NOTA_JUSTA)
+
+    eboe = eboe_peor(resumen)
+    izquierda, derecha = st.columns(2)
+    for columna, indicador, titulo, unidad, decimales in (
+            (izquierda, "dif_salida", "Salida (kg/MT)", "kg/MT", 2),
+            (derecha, "dif_eficiencia", "Eficiencia (puntos)", "puntos", 1)):
+        pasos = cascada_justa(resumen, eboe, indicador)
+        if pasos is None:
+            continue
+        registro.grafico(cascada_pasos(
+            ["Sin corregir", "Calibre y programa", "MTPH y temporada", "No explicada"],
+            [pasos["total"], pasos["calibre_programa"], pasos["mtph_temporada"], pasos["no_explicada"]],
+            f"{titulo}: eBOE {int(eboe)} − otros", unidad, decimales),
+            f"Cascada eBOE {int(eboe)} - {indicador}", donde=columna)
+    st.caption(f"Cascada del eBOE {int(eboe)} (el que más aceite deja sin corregir): diferencia contra el promedio de los "
+               f"otros sin corregir, lo que cambia al comparar con el mismo calibre y programa, lo que cambia al sumar MTPH "
+               f"y temporada, y lo que queda (no explicada).")
+
+    st.markdown("**Resumen por nivel de corrección** (diferencia de cada eBOE contra el promedio de los otros)")
+    registro.tabla(con_coma(pd.DataFrame({
+        "Corrección": resumen["nivel"], "eBOE": resumen["eboe"].map(lambda e: f"eBOE {e}"), "Celdas": resumen["celdas"],
+        "Pares": resumen["pares"], "% de los pares del eBOE": resumen["pct_pares"],
+        "Diferencia de salida (kg/MT)": resumen["dif_salida"],
+        "Diferencia de eficiencia (puntos)": resumen["dif_eficiencia"]}), 2,
+        **{"% de los pares del eBOE": 0, "Diferencia de eficiencia (puntos)": 1}), "Comparación justa - resumen")
+    poco = resumen[resumen["pct_pares"] < 50]
+    if not poco.empty:
+        st.caption("Con más correcciones, las celdas se achican y entran menos pares: " + ", ".join(
+            f"{f['nivel']} eBOE {f['eboe']} ({numero(f['pct_pares'], 0)} %)" for f in poco.to_dict("records")) +
+            ". Esas diferencias son menos firmes.")
+
+    with st.expander("Tabla de celdas"):
+        nivel = st.selectbox("Corrección", [n for n in NIVELES_JUSTA if NIVELES_JUSTA[n]], key="factores_justa_nivel",
+                             index=list(n for n in NIVELES_JUSTA if NIVELES_JUSTA[n]).index(NIVEL_FRASE))
+        celdas = celdas_justas(datos, NIVELES_JUSTA[nivel])
+        nombres = {"quintil": "Calibre (quintil)", "grupo_programa": "Programa", "grupo_mtph": "MTPH",
+                   "temporada": "Temporada", "cuartil_emulsion": "Cuartil de emulsión", "eboe": "eBOE", "n": "N",
+                   "salida": "Salida (kg/MT)", "eficiencia": "Eficiencia (%)", "dif_salida": "Dif. salida (kg/MT)",
+                   "dif_eficiencia": "Dif. eficiencia (puntos)"}
+        registro.tabla(con_coma(celdas.assign(eboe=celdas["eboe"].map(lambda e: f"eBOE {e}")).rename(columns=nombres),
+                                2, **{"Eficiencia (%)": 1, "Dif. eficiencia (puntos)": 1}),
+                       f"Comparación justa - celdas {nivel}")
+
+
 def bloque_modelo(pares: pd.DataFrame, registro: Descargas) -> None:
     st.subheader("6. Modelos multivariables")
     st.caption("Regresión lineal con todos los factores a la vez (respeta todos los filtros de la barra): eBOE, "
@@ -400,7 +465,9 @@ def pestana_factores(registro: Descargas) -> None:
         st.info("La descomposición necesita dos temporadas.")
         descomposicion = None
     bloque_categorias(pares_temporadas, registro)
-    bloque_esponja(pares_temporadas, cortes_cuartiles(todos["aceite_emulsion"]), toneladas, registro)
+    cortes_emulsion = cortes_cuartiles(todos["aceite_emulsion"])     # todo el histórico, sin filtros
+    bloque_esponja(pares_temporadas, cortes_emulsion, toneladas, registro)
+    bloque_justa(pares_temporadas, cortes, cortes_emulsion, registro)
     bloque_modelo(pares_filtrados, registro)
     perdido, comparacion = bloque_aceite_perdido(pares_filtrados, pares_temporadas, toneladas, base, nueva, precios,
                                                  registro)

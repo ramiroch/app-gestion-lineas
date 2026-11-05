@@ -4,7 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from core.factores import (asignar_cuartil, cortes_cuartiles, esponja_por_cuartil, esponja_por_eboe,
+from core.factores import (NOTA_JUSTA, cascada_justa, celdas_justas, comparacion_justa, eboe_peor, frase_justa,
+                           grupo_mtph, grupo_programa, preparar_celdas,
+                           asignar_cuartil, cortes_cuartiles, esponja_por_cuartil, esponja_por_eboe,
                            etiquetas_cuartiles, frase_esponja, pendientes_esponja,
                            aceite_perdido, agregar_dia_proceso, asignar_quintil, comparar_planta, cortes_quintiles,
                            descomponer, etiquetas_quintiles, frase_aceite_perdido, frase_calibre, frase_categoria,
@@ -230,6 +232,56 @@ def _datos_modelo(n=400):
                                - 3 * (datos["eboe"] == 2) - 2 * (datos["calidad"] == "Blanda") + g.normal(0, 0.5, n))
     datos["residual"] = 2 - 0.1 * datos["programa_num"] + g.normal(0, 0.05, n)
     return datos
+
+
+# ---------------------------------------------------------------- comparación justa
+
+def test_grupos_de_programa_y_mtph():
+    assert [grupo_programa(n) for n in (0, 3, 4, 5, 6, 9, None)] == ["N0–N3", "N0–N3", "N4–N5", "N4–N5", "N6–N9",
+                                                                      "N6–N9", None]
+    assert [grupo_mtph(m) for m in (10.0, 10.5, 12.0, 12.1)] == ["≤ 10", "10–12", "10–12", "> 12"]
+
+
+def _pares_justos():
+    """Salida = 1,0 + 0,5 si la fruta es chica + 0,2 si es el eBOE 2. El eBOE 2 recibe 80 % de fruta chica; los
+    otros, 20 %. Sin corregir, el eBOE 2 deja 0,5 kg/MT más; con el mismo calibre, 0,2."""
+    rng = np.random.default_rng(5)
+    filas = []
+    for eboe in (1, 2, 3):
+        chicas = 40 if eboe == 2 else 10
+        for k in range(50):
+            chica = k < chicas
+            salida = 1.0 + (0.5 if chica else 0.0) + (0.2 if eboe == 2 else 0.0)
+            filas.append(_par(eboe=eboe, n_frutos=70 if chica else 40, aceite_salida=salida,
+                              eficiencia_pct=100 * (1 - salida / 8), aceite_emulsion=rng.uniform(1, 2)))
+    return preparar_pares(pd.DataFrame(filas))
+
+
+def test_comparacion_justa():
+    pares = _pares_justos()
+    datos = preparar_celdas(pares, [50.0, 55.0, 60.0, 65.0], [1.25, 1.5, 1.75])
+    resumen = comparacion_justa(datos).set_index(["nivel", "eboe"])
+
+    assert resumen.loc[("Sin corregir", 2), "dif_salida"] == pytest.approx(0.5)
+    assert resumen.loc[("Sin corregir", 1), "dif_salida"] == pytest.approx(1.1 - (1.6 + 1.1) / 2)
+    assert resumen.loc[("Calibre + programa", 2), "dif_salida"] == pytest.approx(0.2)
+    assert resumen.loc[("Calibre + programa", 2), "dif_eficiencia"] == pytest.approx(-2.5)
+    assert resumen.loc[("Calibre + programa", 2), "celdas"] == 2 and resumen.loc[("Calibre + programa", 2), "pct_pares"] == 100
+
+    celdas = celdas_justas(datos, ["quintil", "grupo_programa"])
+    assert set(celdas["quintil"]) == {1, 5} and celdas["n"].sum() == 150
+    assert celdas_justas(datos, ["quintil"], minimo=20).empty                 # el eBOE 2 tiene 10 de fruta grande
+
+    resumen = resumen.reset_index()
+    assert eboe_peor(resumen) == 2
+    pasos = cascada_justa(resumen, 2, "dif_salida")
+    assert (pasos["total"], pasos["calibre_programa"], pasos["no_explicada"]) == pytest.approx((0.5, -0.3, 0.2))
+    assert frase_justa(resumen) == (
+        "Con fruta del mismo tamaño, el mismo programa y la misma MTPH, el eBOE 2 deja 0,20 kg/MT más de aceite "
+        "(2,5 puntos menos de eficiencia). El 40 % de su diferencia no se explica por la fruta ni por la operación.")
+    assert "Las máquinas son iguales" in NOTA_JUSTA
+    assert comparacion_justa(datos[datos["eboe"] == 1]).empty and frase_justa(
+        comparacion_justa(datos[datos["eboe"] == 1])).startswith("No hay celdas")
 
 
 def test_modelo_recupera_los_efectos():

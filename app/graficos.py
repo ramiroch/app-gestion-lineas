@@ -851,6 +851,32 @@ def cascada(resultado: dict, titulo_y: str, unidad: str, decimales: int, mejor_s
     return estilo(figura, ALTURA_CHICA)
 
 
+def cascada_pasos(nombres: list[str], valores: list[float], titulo_y: str, unidad: str, decimales: int) -> go.Figure:
+    """Cascada genérica: el primer valor y el último son totales (gris); los del medio, pasos (azul).
+
+    Sirve para la diferencia de un eBOE contra los otros: sin corregir → lo que explica cada corrección →
+    lo que queda sin explicar.
+    """
+    def con_signo(valor, mas: bool) -> str:
+        texto = numero(abs(valor), decimales)
+        if texto == numero(0, decimales):
+            return texto
+        return ("+" if mas else "") + texto if valor > 0 else "−" + texto
+
+    medidas = ["absolute", *["relative"] * (len(valores) - 2), "total"]
+    textos = [con_signo(valores[0], False), *(con_signo(v, True) for v in valores[1:-1]), con_signo(valores[-1], False)]
+    figura = go.Figure(go.Waterfall(
+        x=nombres, measure=medidas, y=valores, text=textos, textposition="outside", cliponaxis=False,
+        increasing=dict(marker=dict(color=COLOR_SERIE)), decreasing=dict(marker=dict(color=COLOR_SERIE)),
+        totals=dict(marker=dict(color=GRIS)), connector=dict(line=dict(color=GRIS, width=1, dash="dot")),
+        hovertemplate=f"%{{x}}: %{{text}} {unidad}<extra></extra>", showlegend=False))
+    acumulados = np.cumsum(valores[:-1]).tolist() + [valores[-1], 0]
+    margen = (max(acumulados) - min(acumulados)) * 0.15 or 1
+    figura.update_layout(yaxis=dict(title=titulo_y, range=[min(acumulados) - margen, max(acumulados) + margen],
+                                    zeroline=True, zerolinecolor=GRIS))
+    return estilo(figura, ALTURA_CHICA)
+
+
 def intervalos_agrupados(tabla: pd.DataFrame, titulo_y: str, unidad: str, decimales: int, titulo_x: str) -> go.Figure:
     """Media e IC del 95 % por categoría, con un color por temporada (lado a lado).
 

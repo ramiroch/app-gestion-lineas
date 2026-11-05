@@ -478,6 +478,142 @@ def frase_esponja(pendientes: pd.DataFrame, por_eboe: pd.DataFrame, temporada, a
             f"diferencia ({numero(parte, 0)} %).")
 
 
+# ---------------------------------------------------------------- comparación justa entre eBOE
+
+N_MINIMO_JUSTA = 5          # pares de cada eBOE en una celda para que la celda entre
+GRUPOS_PROGRAMA = [("N0–N3", 0, 3), ("N4–N5", 4, 5), ("N6–N9", 6, 9)]
+GRUPOS_MTPH = ["≤ 10", "10–12", "> 12"]
+# Niveles de corrección: nombre → columnas que definen la celda (cada uno agrega a los anteriores)
+NIVELES_JUSTA = {
+    "Sin corregir": [],
+    "Calibre + programa": ["quintil", "grupo_programa"],
+    "+ MTPH y temporada": ["quintil", "grupo_programa", "grupo_mtph", "temporada"],
+    "+ emulsión": ["quintil", "grupo_programa", "grupo_mtph", "temporada", "cuartil_emulsion"],
+}
+NIVEL_FRASE = "+ MTPH y temporada"
+NOTA_JUSTA = ("Las máquinas son iguales: la parte no explicada apunta a factores no medidos (alimentación, nivel de agua, "
+              "velocidades reales de rodillos, cuchillas, punto de muestreo).")
+
+
+def grupo_programa(programa) -> str | None:
+    """N0–N3, N4–N5 o N6–N9 según el número de programa."""
+    if pd.isna(programa):
+        return None
+    return next((nombre for nombre, desde, hasta in GRUPOS_PROGRAMA if desde <= programa <= hasta), None)
+
+
+def grupo_mtph(mtph) -> str | None:
+    """≤ 10, 10–12 (más de 10 hasta 12) o > 12 MTPH."""
+    if pd.isna(mtph):
+        return None
+    return GRUPOS_MTPH[0] if mtph <= 10 else GRUPOS_MTPH[1] if mtph <= 12 else GRUPOS_MTPH[2]
+
+
+def preparar_celdas(pares: pd.DataFrame, cortes_calibre: list[float], cortes_emulsion: list[float]) -> pd.DataFrame:
+    """Pares con todos los datos de las celdas (calibre, programa, MTPH y emulsión), con sus grupos.
+
+    Todas las versiones de la comparación usan estos mismos pares: así lo único que cambia es la corrección.
+    """
+    datos = pares.dropna(subset=["frutos_10kg", "programa_num", "tph", "aceite_emulsion", "residual",
+                                 "eficiencia_pct"])
+    return datos.assign(quintil=asignar_quintil(datos["frutos_10kg"], cortes_calibre),
+                        grupo_programa=datos["programa_num"].map(grupo_programa),
+                        grupo_mtph=datos["tph"].map(grupo_mtph),
+                        cuartil_emulsion=asignar_cuartil(datos["aceite_emulsion"], cortes_emulsion))
+
+
+def celdas_justas(datos: pd.DataFrame, columnas: list[str], minimo: int = N_MINIMO_JUSTA) -> pd.DataFrame:
+    """Diferencia de cada eBOE contra el promedio de los otros, dentro de cada celda.
+
+    Celda = combinación de `columnas` (sin columnas: todos los pares juntos). Solo entran las celdas en las
+    que todos los eBOE tienen al menos `minimo` pares. Dentro de la celda: promedio simple de salida (kg/MT)
+    y eficiencia (%) de cada eBOE; dif_salida = salida del eBOE − promedio de las salidas de los otros
+    eBOE (igual para la eficiencia). Columnas: las de la celda, eboe, n, salida, eficiencia, dif_salida y
+    dif_eficiencia.
+    """
+    eboes = datos["eboe"].nunique()
+    salida = ["eboe", "n", "salida", "eficiencia", "dif_salida", "dif_eficiencia"]
+    if eboes < 2:
+        return pd.DataFrame(columns=[*columnas, *salida])
+    clave = columnas or ["_celda"]
+    medias = (datos.assign(_celda=0).groupby([*clave, "eboe"], observed=True, sort=True)
+              .agg(n=("residual", "size"), salida=("residual", "mean"), eficiencia=("eficiencia_pct", "mean"))
+              .reset_index())
+    por_celda = medias.groupby(clave, observed=True)
+    completa = (por_celda["eboe"].transform("size") == eboes) & (por_celda["n"].transform("min") >= minimo)
+    medias = medias[completa].copy()
+    por_celda = medias.groupby(clave, observed=True)
+    for columna in ("salida", "eficiencia"):        # los otros: (suma de la celda − el eBOE) / (eBOE − 1)
+        otros = (por_celda[columna].transform("sum") - medias[columna]) / (eboes - 1)
+        medias[f"dif_{columna}"] = medias[columna] - otros
+    return medias[[*columnas, *salida]].reset_index(drop=True)
+
+
+def comparacion_justa(datos: pd.DataFrame, minimo: int = N_MINIMO_JUSTA) -> pd.DataFrame:
+    """Resumen por nivel de corrección (NIVELES_JUSTA) y eBOE, sobre preparar_celdas().
+
+    Diferencia de cada eBOE = promedio de sus diferencias por celda, ponderado por sus pares en la celda.
+    Columnas: nivel, eboe, celdas, pares (del eBOE en las celdas que entran), pct_pares (sobre los pares
+    del eBOE en datos), dif_salida (kg/MT) y dif_eficiencia (puntos).
+    """
+    filas = []
+    pares_eboe = datos.groupby("eboe").size()
+    for nivel, columnas in NIVELES_JUSTA.items():
+        celdas = celdas_justas(datos, columnas, minimo)
+        for eboe, sub in celdas.groupby("eboe", sort=True):
+            filas.append({"nivel": nivel, "eboe": eboe, "celdas": len(sub), "pares": int(sub["n"].sum()),
+                          "pct_pares": 100 * sub["n"].sum() / pares_eboe[eboe],
+                          "dif_salida": float(np.average(sub["dif_salida"], weights=sub["n"])),
+                          "dif_eficiencia": float(np.average(sub["dif_eficiencia"], weights=sub["n"]))})
+    return pd.DataFrame(filas, columns=["nivel", "eboe", "celdas", "pares", "pct_pares", "dif_salida",
+                                        "dif_eficiencia"])
+
+
+def eboe_peor(resumen: pd.DataFrame):
+    """El eBOE con más salida que los otros sin corregir (el que más aceite deja); None si no hay datos."""
+    sin_corregir = resumen[resumen["nivel"] == "Sin corregir"]
+    return None if sin_corregir.empty else sin_corregir.loc[sin_corregir["dif_salida"].idxmax(), "eboe"]
+
+
+def cascada_justa(resumen: pd.DataFrame, eboe, indicador: str) -> dict | None:
+    """Pasos de la cascada de la diferencia de un eBOE: sin corregir → calibre y programa → MTPH y temporada → no explicada.
+
+    indicador: "dif_salida" o "dif_eficiencia". total = sin corregir; calibre_programa = cambio al corregir por
+    calibre y programa; mtph_temporada = cambio al sumar MTPH y temporada; no_explicada = la diferencia que
+    queda (NIVEL_FRASE).
+    """
+    valores = resumen[resumen["eboe"] == eboe].set_index("nivel")[indicador]
+    niveles = ["Sin corregir", "Calibre + programa", NIVEL_FRASE]
+    if not all(n in valores.index for n in niveles):
+        return None
+    total, uno, dos = (float(valores[n]) for n in niveles)
+    return {"eboe": eboe, "total": total, "calibre_programa": uno - total, "mtph_temporada": dos - uno,
+            "no_explicada": dos}
+
+
+def frase_justa(resumen: pd.DataFrame) -> str:
+    """Ejemplo: "Con fruta del mismo tamaño, el mismo programa y la misma MTPH, el eBOE 2 deja 0,35 kg/MT más de
+    aceite (4,1 puntos menos de eficiencia). El 88 % de su diferencia no se explica por la fruta ni por la operación."
+    """
+    eboe = eboe_peor(resumen)
+    salida = None if eboe is None else cascada_justa(resumen, eboe, "dif_salida")
+    if salida is None:
+        return ("No hay celdas con al menos 5 pares de cada eBOE para comparar con fruta del mismo tamaño, el mismo "
+                "programa y la misma MTPH.")
+    eficiencia = cascada_justa(resumen, eboe, "dif_eficiencia")["no_explicada"]
+    deja = f"{numero(abs(salida['no_explicada']), 2)} kg/MT {'más' if salida['no_explicada'] > 0 else 'menos'}"
+    puntos = f"{numero(abs(eficiencia), 1)} puntos {'menos' if eficiencia < 0 else 'más'}"
+    inicio = (f"Con fruta del mismo tamaño, el mismo programa y la misma MTPH, el eBOE {int(eboe)} deja {deja} de "
+              f"aceite ({puntos} de eficiencia).")
+    if salida["total"] <= 0 or salida["no_explicada"] <= 0:
+        return inicio + " La fruta y la operación explican toda su diferencia."
+    if salida["no_explicada"] >= salida["total"]:
+        return (inicio + " Corregida, su diferencia es incluso mayor que sin corregir "
+                f"({numero(salida['total'], 2)} kg/MT): la fruta y la operación no la explican.")
+    parte = 100 * salida["no_explicada"] / salida["total"]
+    return inicio + f" El {numero(parte, 0)} % de su diferencia no se explica por la fruta ni por la operación."
+
+
 # ---------------------------------------------------------------- modelo multivariable
 
 def _termino(columna: str, referencia) -> str:
