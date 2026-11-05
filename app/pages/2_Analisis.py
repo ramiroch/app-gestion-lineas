@@ -7,6 +7,8 @@ ignora fechas y procesos, y respeta eBOE, turno y programa.
 Pestaña Programa y MTPH: análisis 6 y 7 (burbujas, superficie y contorno), con todos los filtros y
 filtrado cruzado al hacer clic en una burbuja.
 Pestaña Proceso: análisis 5 (flowsheet): KPI por eBOE, totales del período y comparación de dos períodos.
+Pestaña Factores (app/pestana_factores.py): calibre, descomposición entre temporadas, turno / calidad / día del
+proceso, modelo multivariable y aceite perdido.
 Solo se dibuja la pestaña abierta. Cada gráfico tiene un botón PNG, cada tabla un botón Excel, y cada
 pestaña un "Descargar todo" (app/descargas.py).
 Solo muestra: la estadística está en core/, los gráficos en app/graficos.py y los datos
@@ -31,6 +33,7 @@ from core.proceso import (INDICADORES_EBOE, INDICADORES_TOTALES, comparar_resume
                           resumen_proceso)
 from core.regresion import frase_pendiente, regresiones_por_grupo
 from descargas import Descargas
+from pestana_factores import pestana_factores
 from filtros import (barra_filtros, filtros_elegidos, planta_elegida, produccion_planta, rango_planta,
                      tabla_emulsion_planta, tabla_planta, toneladas_planta)
 from graficos import (barras_uso, boxplot, boxplot_temporadas, burbujas, columnas_mensuales, combinaciones_de_puntos,
@@ -694,6 +697,7 @@ PESTANAS = {
     "Temporadas": pestana_temporadas,
     "Programa y MTPH": pestana_programa_completa,
     "Proceso": pestana_proceso,
+    "Factores": pestana_factores,
 }
 # Con key y on_change, cada pestaña sabe si está abierta (.open): solo se dibuja la abierta.
 # bind="query-params": la pestaña queda en la URL (?pestana_analisis=Proceso) y se puede compartir el enlace.

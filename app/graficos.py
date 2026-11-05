@@ -774,3 +774,121 @@ def dispersion_por_lugar(datos: pd.DataFrame, x: str, y: str, regresiones: pd.Da
     estilo(figura)
     figura.update_layout(margin=dict(t=60))
     return figura
+
+
+# ---------------------------------------------------------------- factores
+
+COLOR_EMPEORA = "#e34948"
+COLOR_MEJORA = "#1baf7a"
+
+
+def columnas_agrupadas(tabla: pd.DataFrame, x: str, grupo: str, y: str, titulo_y: str, unidad: str,
+                       decimales: int = 1, panel: str | None = None, nombres_grupo: dict | None = None,
+                       titulo_x: str = "", rango_y: list | None = None) -> go.Figure:
+    """Columnas agrupadas: una categoría por x y un color por grupo (orden fijo de la paleta).
+
+    tabla tiene las columnas x, grupo, y y n (N en el tooltip; N < 3 tenue y con aviso). panel: columna
+    para separar en paneles lado a lado (mismo eje Y). nombres_grupo: {valor: nombre en la leyenda}.
+    """
+    paneles = sorted(tabla[panel].unique()) if panel else [None]
+    figura = make_subplots(rows=1, cols=len(paneles), shared_yaxes=True, horizontal_spacing=0.04,
+                           subplot_titles=[str(p) for p in paneles] if panel else None)
+    grupos = list(dict.fromkeys(tabla[grupo]))
+    nombres_grupo = nombres_grupo or {}
+    for columna, valor_panel in enumerate(paneles, start=1):
+        datos = tabla if panel is None else tabla[tabla[panel] == valor_panel]
+        for k, g in enumerate(grupos):
+            sub = datos[datos[grupo] == g].dropna(subset=[y])
+            if sub.empty:
+                continue
+            chicos = (sub["n"] < 3).tolist()
+            nombre = nombres_grupo.get(g, str(g))
+            figura.add_bar(
+                row=1, col=columna, x=sub[x].astype(str), y=sub[y], name=nombre, legendgroup=nombre,
+                showlegend=columna == 1, offsetgroup=str(k),
+                marker=dict(color=PALETA[k % len(PALETA)], opacity=[0.3 if c else 1 for c in chicos],
+                            line=dict(color="white", width=1)),
+                text=sub[y].map(lambda v: numero(v, decimales)), textposition="outside", cliponaxis=False,
+                textfont=dict(size=10),
+                customdata=list(zip(sub["n"].map(lambda v: numero(v, 0)),
+                                    ["<br><b>⚠ N < 3: poco representativo</b>" if c else "" for c in chicos],
+                                    sub[y].map(lambda v: numero(v, decimales)))),
+                hovertemplate=f"<b>{nombre} · %{{x}}</b><br>{titulo_y}: %{{customdata[2]}} {unidad}<br>"
+                              "N %{customdata[0]}%{customdata[1]}<extra></extra>")
+        figura.update_xaxes(type="category", title_text=titulo_x, row=1, col=columna)
+    figura.update_layout(barmode="group", bargap=0.2, bargroupgap=0.05)
+    figura.update_yaxes(title_text=titulo_y, row=1, col=1)
+    if rango_y:
+        figura.update_yaxes(range=rango_y)
+    estilo(figura)
+    if panel:
+        figura.update_layout(margin=dict(t=70), legend=dict(y=1.12))
+    return figura
+
+
+def cascada(resultado: dict, titulo_y: str, unidad: str, decimales: int, mejor_si_sube: bool) -> go.Figure:
+    """Cascada de la descomposición entre temporadas: base → calibre → resto → nueva.
+
+    resultado: core.factores.descomponer(). Rojo lo que empeora y verde lo que mejora (según
+    mejor_si_sube); los totales en gris.
+    """
+    pasos = [resultado["calibre"], resultado["resto"]]
+    colores = {"increasing": COLOR_MEJORA if mejor_si_sube else COLOR_EMPEORA,
+               "decreasing": COLOR_EMPEORA if mejor_si_sube else COLOR_MEJORA}
+    figura = go.Figure(go.Waterfall(
+        x=[str(resultado["base"]), "Cambio de calibre", "Resto", str(resultado["nueva"])],
+        measure=["absolute", "relative", "relative", "total"],
+        y=[resultado["valor_base"], *pasos, resultado["valor_nueva"]],
+        text=[numero(resultado["valor_base"], decimales), *(("+" if p >= 0 else "−") + numero(abs(p), decimales)
+                                                             for p in pasos), numero(resultado["valor_nueva"], decimales)],
+        textposition="outside", cliponaxis=False,
+        increasing=dict(marker=dict(color=colores["increasing"])), decreasing=dict(marker=dict(color=colores["decreasing"])),
+        totals=dict(marker=dict(color=GRIS)), connector=dict(line=dict(color=GRIS, width=1, dash="dot")),
+        hovertemplate=f"%{{x}}: %{{text}} {unidad}<extra></extra>", showlegend=False))
+    valores = [resultado["valor_base"], resultado["estandarizado"], resultado["valor_nueva"]]
+    margen = max(abs(resultado["total"]), abs(resultado["calibre"]), abs(resultado["resto"])) * 0.8 or 1
+    figura.update_layout(yaxis=dict(title=titulo_y, range=[min(valores) - margen, max(valores) + margen]))
+    return estilo(figura, ALTURA_CHICA)
+
+
+def intervalos_agrupados(tabla: pd.DataFrame, titulo_y: str, unidad: str, decimales: int, titulo_x: str) -> go.Figure:
+    """Media e IC del 95 % por categoría, con un color por temporada (lado a lado).
+
+    tabla: core.factores.por_categoria() (temporada, grupo, n, media, ic_inf, ic_sup).
+    """
+    figura = go.Figure()
+    orden = list(dict.fromkeys(tabla["grupo"]))
+    for k, (temporada, sub) in enumerate(tabla.groupby("temporada", sort=True)):
+        color = PALETA[k % len(PALETA)]
+        figura.add_scatter(
+            x=sub["grupo"], y=sub["media"], mode="markers", name=str(temporada), offsetgroup=str(temporada),
+            marker=dict(size=9, color=color),
+            error_y=dict(type="data", symmetric=False, array=sub["ic_sup"] - sub["media"],
+                         arrayminus=sub["media"] - sub["ic_inf"], color=color, thickness=2, width=8),
+            customdata=list(zip(*(sub[c].map(lambda v: numero(v, decimales)) for c in ("media", "ic_inf", "ic_sup")),
+                                sub["n"].map(lambda v: numero(v, 0)))),
+            hovertemplate=f"<b>{temporada} · %{{x}}</b><br>Media %{{customdata[0]}} {unidad}<br>IC 95 %: "
+                          f"%{{customdata[1]}} a %{{customdata[2]}} {unidad}<br>N %{{customdata[3]}}<extra></extra>")
+    margen = (tabla["ic_sup"].max() - tabla["ic_inf"].min()) * 0.15 or 1
+    figura.update_layout(scattermode="group", yaxis=dict(title=titulo_y, range=[tabla["ic_inf"].min() - margen,
+                                                                               tabla["ic_sup"].max() + margen]),
+                         xaxis=dict(type="category", title=titulo_x, categoryorder="array", categoryarray=orden))
+    return estilo(figura, ALTURA_CHICA)
+
+
+def barras_importancia(importancia: pd.DataFrame, sin_explicar: float, titulo: str) -> go.Figure:
+    """"¿Qué pesa más?": % de la variación que explica cada factor por sí solo, en barras horizontales.
+
+    importancia: core.factores.modelo_multivariable()["importancia"] (nombre, pct, p), ya ordenada.
+    """
+    datos = importancia.iloc[::-1]          # el más importante arriba
+    figura = go.Figure(go.Bar(
+        x=datos["pct"], y=datos["nombre"], orientation="h", marker=dict(color=COLOR_SERIE),
+        text=datos["pct"].map(lambda v: f"{numero(v, 1)} %"), textposition="outside", cliponaxis=False,
+        customdata=datos["p"].map(texto_p),
+        hovertemplate="<b>%{y}</b><br>%{x:.1f} % de la variación<br>%{customdata}<extra></extra>", showlegend=False))
+    figura.update_layout(title=dict(text=titulo, font_size=14),
+                         xaxis=dict(title=f"% de la variación que explica por sí solo (sin explicar: "
+                                          f"{numero(sin_explicar, 0)} %)", range=[0, datos["pct"].max() * 1.2]),
+                         yaxis=dict(title=""))
+    return estilo(figura, 120 + 32 * len(datos))
