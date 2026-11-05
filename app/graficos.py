@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 
 from core.estadistica import ancho_de_clase, cuartiles, curva_normal, es_outlier_iqr, limites_iqr, resumen_descriptivo
 from core.formato import numero, texto_p
-from core.laboratorio import DIAS_MISMA_NORMALIDAD
+from core.laboratorio import DIAS_MISMA_NORMALIDAD, texto_p_ad
 from core.programa import numero_programa
 from core.regresion import recta
 
@@ -63,13 +63,14 @@ def png(figura: go.Figure, ancho_dibujo: int = ANCHO_DIBUJO_PNG) -> bytes:
 
 
 def histograma_grupos(datos: pd.DataFrame, variable: str, grupo: str, titulo_x: str, unidad: str,
-                      decimales: int = 2, colores: dict | None = None) -> go.Figure:
+                      decimales: int = 2, colores: dict | None = None, curva: bool = True) -> go.Figure:
     """Histograma de una variable con un grupo por color (superpuestos) y su curva normal.
 
     Densidad de probabilidad en Y (así la curva normal y las barras están en la misma escala);
     media, desvío y N de cada grupo en la leyenda. Los grupos comparten el ancho de clase: el
     menor de los de Freedman–Diaconis de cada grupo, para que el más angosto no quede con pocas
     barras. colores: {grupo: color}; si falta, la paleta categórica en orden fijo (grupos ordenados).
+    curva=False: sin curva normal (para variables que no tienen por qué ser normales).
     """
     series = {g: valores.dropna() for g, valores in datos.groupby(grupo, sort=True)[variable]}
     series = {g: valores for g, valores in series.items() if not valores.empty}
@@ -90,7 +91,7 @@ def histograma_grupos(datos: pd.DataFrame, variable: str, grupo: str, titulo_x: 
         figura.add_histogram(x=valores, histnorm="probability density", bingroup="grupos", xbins=clases, name=nombre,
                              legendgroup=str(g), marker=dict(color=colores[g], line=dict(color="white", width=0.5)),
                              opacity=0.55, hovertemplate=f"{g}<br>%{{x}} {unidad}<br>densidad %{{y:.3f}}<extra></extra>")
-        if r["desvio"]:
+        if curva and r["desvio"]:
             # Media ± 4 s, sin pasar medio desvío más allá de los datos (la curva no cruza el otro grupo).
             media, s = r["media"], r["desvio"]
             x, y = curva_normal(media, s, max(valores.min() - s / 2, media - 4 * s),
@@ -551,18 +552,6 @@ def carta_control(tabla: pd.DataFrame, tipo: str, dispersion: str, titulo_y: str
 ESCALA_DIVERGENTE = [[0, "#2a78d6"], [0.5, "#f2f2f2"], [1, "#e34948"]]
 
 
-def marcar_protocolo(figura: go.Figure, rangos: dict, unidad: str = "g") -> go.Figure:
-    """Agrega al histograma el rango del protocolo de cada lugar: líneas punteadas de su color."""
-    for posicion, (lugar, (minimo, maximo)) in enumerate(rangos.items()):
-        color = COLORES.get(lugar, GRIS)
-        for limite in (minimo, maximo):
-            figura.add_vline(x=limite, line=dict(color=color, width=1.5, dash="dot"))
-        figura.add_annotation(x=(minimo + maximo) / 2, y=1 - 0.09 * posicion, xref="x", yref="paper",
-                              text=f"Protocolo {lugar.lower()}<br>{numero(minimo, 1)}–{numero(maximo, 1)} {unidad}",
-                              showarrow=False, font=dict(size=10, color=color), yanchor="top")
-    return figura
-
-
 def boxplot_por_analista(datos: pd.DataFrame, variable: str, titulo_y: str, unidad: str,
                          decimales: int = 2) -> go.Figure:
     """Boxplot de una variable por analista, con Entrada y Salida lado a lado."""
@@ -573,6 +562,105 @@ def boxplot_por_analista(datos: pd.DataFrame, variable: str, titulo_y: str, unid
     figura.update_layout(boxmode="group", scattermode="group", yaxis_title=titulo_y,
                          xaxis=dict(type="category", title="Analista", categoryorder="category ascending"))
     return estilo(figura)
+
+
+def histograma_forma(valores: pd.Series, titulo_x: str, unidad: str, color: str, nombre: str, referencia: dict,
+                     kde: tuple, forma: dict, decimales: int = 2) -> go.Figure:
+    """Histograma de un lugar con su curva normal, la densidad real (KDE, punteada) y la referencia de la planta.
+
+    referencia: una fila de core.laboratorio.referencia_planta() (q1, mediana, q3): la franja gris es el
+    rango intercuartil y la línea, la mediana. kde: core.laboratorio.curva_kde(). forma:
+    core.laboratorio.forma_distribucion() (media y desvío de la curva normal; AD y p en el título).
+    """
+    valores = valores.dropna()
+    figura = go.Figure()
+    ancho = ancho_de_clase(valores)
+    clases = None
+    if ancho:
+        clases = dict(start=math.floor(valores.min() / ancho) * ancho, size=ancho)
+    if referencia.get("q1") is not None:
+        figura.add_vrect(x0=referencia["q1"], x1=referencia["q3"], fillcolor=GRIS, opacity=0.15, line_width=0,
+                         layer="below")
+        figura.add_vline(x=referencia["mediana"], line=dict(color=GRIS, width=1.5))
+        figura.add_scatter(x=[None], y=[None], mode="markers", name=(
+            f"Planta: mediana {numero(referencia['mediana'], decimales)} · IQR {numero(referencia['q1'], decimales)}–"
+            f"{numero(referencia['q3'], decimales)} {unidad}"),
+            marker=dict(symbol="square", size=12, color=GRIS, opacity=0.4))
+    figura.add_histogram(x=valores, histnorm="probability density", xbins=clases, name=f"{nombre} · N {numero(len(valores), 0)}",
+                         marker=dict(color=color, line=dict(color="white", width=0.5)), opacity=0.6,
+                         hovertemplate=f"%{{x}} {unidad}<br>densidad %{{y:.3f}}<extra></extra>")
+    if forma.get("desvio"):
+        media, s = forma["media"], forma["desvio"]
+        x, y = curva_normal(media, s, max(valores.min() - s / 2, media - 4 * s), min(valores.max() + s / 2, media + 4 * s))
+        figura.add_scatter(x=x, y=y, mode="lines", name="Curva normal", line=dict(color=color, width=2),
+                           hoverinfo="skip")
+    if len(kde[0]):
+        figura.add_scatter(x=kde[0], y=kde[1], mode="lines", name="Densidad real (KDE)",
+                           line=dict(color=COLOR_DATOS, width=2, dash="dot"), hoverinfo="skip")
+    titulo = nombre if forma.get("ad") is None else (
+        f"{nombre} · AD = {numero(forma['ad'], 1)} · {texto_p_ad(forma['p'])}")
+    figura.update_layout(xaxis_title=titulo_x, yaxis_title="Densidad", title=dict(text=titulo, font_size=13))
+    estilo(figura, ALTURA_CHICA)
+    figura.update_layout(margin=dict(t=90), legend=dict(y=1.0, yanchor="bottom", font_size=10),
+                         title=dict(y=0.98, yanchor="top"))
+    return figura
+
+
+def grafico_probabilidad(tabla: pd.DataFrame, recta: dict, titulo_y: str, color: str, nombre: str,
+                         decimales: int = 2) -> go.Figure:
+    """Gráfico de probabilidad normal: datos ordenados contra su cuantil teórico, con la recta x̄ + s·z.
+
+    tabla y recta: core.laboratorio.probabilidad_normal(). Si los datos son normales, quedan sobre la recta.
+    """
+    figura = go.Figure()
+    figura.add_scatter(x=tabla["z"], y=tabla["valor"], mode="markers", name="Datos ordenados",
+                       marker=dict(color=color, size=4, opacity=0.5),
+                       customdata=list(zip(tabla["porcentaje"].map(lambda v: numero(v, 1)),
+                                           tabla["valor"].map(lambda v: numero(v, decimales)))),
+                       hovertemplate=f"{titulo_y}: %{{customdata[1]}}<br>Percentil %{{customdata[0]}} %<extra></extra>")
+    if recta["desvio"]:
+        extremos = np.array([tabla["z"].min(), tabla["z"].max()])
+        figura.add_scatter(x=extremos, y=recta["media"] + recta["desvio"] * extremos, mode="lines",
+                           name="Normal de referencia", line=dict(color=COLOR_DATOS, width=2), hoverinfo="skip")
+    figura.update_layout(xaxis_title="Cuantil teórico de la normal (z)", yaxis_title=titulo_y,
+                         title=dict(text=f"Probabilidad normal · {nombre}", font_size=13))
+    estilo(figura, ALTURA_CHICA)
+    figura.update_layout(margin=dict(t=90), legend=dict(y=1.0, yanchor="bottom", font_size=10),
+                         title=dict(y=0.98, yanchor="top"))
+    return figura
+
+
+def barras_por_lugar(tabla: pd.DataFrame, x: str, titulo_x: str, eje: list[str] | None = None) -> go.Figure:
+    """% de muestras a 5 g fijo (pct_fijo) por categoría, con Entrada y Salida lado a lado.
+
+    tabla: core.laboratorio.porcentaje_fijo(). eje: orden de las categorías (para meses, con huecos:
+    core.mensual.eje_de_meses()). Valor sobre cada barra; N en el tooltip; N < 3 tenue y con aviso.
+    """
+    figura = go.Figure()
+    for lugar in LUGARES:
+        sub = tabla[tabla["lugar"] == lugar]
+        if sub.empty:
+            continue
+        chicos = (sub["n"] < 3).tolist()
+        figura.add_bar(
+            x=sub[x].astype(str), y=sub["pct_fijo"], name=lugar,
+            marker=dict(color=COLORES[lugar], opacity=[0.3 if c else 1 for c in chicos], line=dict(color="white", width=1)),
+            text=sub["pct_fijo"].map(lambda v: numero(v, 0)), textposition="outside", cliponaxis=False,
+            textfont=dict(size=10),
+            customdata=list(zip(sub["n_fijo"].map(lambda v: numero(v, 0)), sub["n"].map(lambda v: numero(v, 0)),
+                                ["<br><b>⚠ N < 3</b>" if c else "" for c in chicos])),
+            hovertemplate=f"<b>{lugar} · %{{x}}</b><br>5 g fijo: %{{y:.1f}} %<br>%{{customdata[0]}} de "
+                          "%{customdata[1]} muestras%{customdata[2]}<extra></extra>")
+    if eje:
+        huecos = [e for e in eje if not e.strip()]
+        if huecos:
+            figura.add_scatter(x=huecos, y=[None] * len(huecos), mode="markers", showlegend=False, hoverinfo="skip")
+        figura.update_xaxes(type="category", categoryorder="array", categoryarray=eje)
+    else:
+        figura.update_xaxes(type="category")
+    figura.update_layout(barmode="group", bargap=0.25, xaxis_title=titulo_x, yaxis_title="% de muestras a 5 g fijo",
+                         yaxis=dict(range=[0, max(5.0, float(tabla["pct_fijo"].max() or 0)) * 1.15]))
+    return estilo(figura, ALTURA_CHICA)
 
 
 def mapa_digitos(tabla: pd.DataFrame, titulo: str) -> go.Figure:

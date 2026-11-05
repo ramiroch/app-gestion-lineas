@@ -1,9 +1,10 @@
 """Página Confiabilidad del laboratorio: controles sobre los datos crudos de la titulación Scott.
 
-Usa la barra de filtros global. Pestañas: gramaje y mL (protocolo de Brown), preferencia de dígitos,
-muestras compartidas, analistas, normalidad del titulante y gramaje vs resultado. Solo se dibuja la
-pestaña abierta; cada gráfico tiene botón PNG, cada tabla Excel y cada pestaña "Descargar todo".
-Solo muestra: la lógica está en core/laboratorio.py (y la carta I-MR en core/spc.py).
+Usa la barra de filtros global. Arriba, un resumen con los hallazgos principales (para el informe);
+debajo, una pestaña por bloque: gramaje y mL, formas de pesar, gramaje y resultado, precisión,
+dígitos, muestras compartidas, analistas y normalidad del titulante. Solo se dibuja la pestaña abierta;
+cada gráfico tiene botón PNG, cada tabla Excel y cada pestaña "Descargar todo".
+Solo muestra: la lógica está en core/laboratorio.py.
 """
 
 from dataclasses import replace
@@ -13,18 +14,31 @@ import streamlit as st
 
 from core.analisis import filtrar
 from core.formato import numero
-from core.laboratorio import (DIAS_MISMA_NORMALIDAD, N_MINIMO_DIGITOS, POSICIONES, VOL_MAXIMO_ML,
-                              carta_normalidad, comparar_analistas, compartidas_por_mes, frase_analistas,
-                              frase_digitos, frase_gramaje, frase_periodos, fuera_de_protocolo, gramaje_vs_resultado,
-                              muestras_compartidas, muestras_vol_alto, normalidad_diaria, periodos_misma_normalidad,
-                              preferencia_digitos, rangos_protocolo)
+from core.laboratorio import (DIAS_MISMA_NORMALIDAD, ERROR_MAXIMO_PCT, N_MINIMO_DIGITOS, PESO_FIJO, POSICIONES,
+                              VOL_MAXIMO_ML, agregar_ml_por_g, carta_normalidad, comparar_analistas, comparar_formas,
+                              compartidas_por_mes, curva_kde, error_de_lectura, forma_de_pesar, forma_distribucion,
+                              frase_analistas, frase_digitos, frase_forma, frase_formas, frase_gramaje,
+                              frase_periodos, frase_precision, gramaje_vs_resultado, muestras_compartidas,
+                              muestras_vol_alto, normalidad_diaria, periodos_misma_normalidad, porcentaje_fijo,
+                              precision_titulacion, preferencia_digitos, probabilidad_normal, referencia_planta,
+                              resumen_hallazgos)
 from core.mensual import eje_de_meses
 from descargas import Descargas
 from filtros import barra_filtros, filtros_elegidos, planta_elegida, tabla_planta
-from graficos import (COLORES, boxplot_por_analista, columnas_mensuales, dispersion_por_lugar, grafico_normalidad,
-                      histograma_grupos, intervalos, mapa_digitos, marcar_protocolo)
+from graficos import (COLOR_DATOS, COLORES, GRIS, barras_por_lugar, boxplot_por_analista, columnas_mensuales,
+                      dispersion_por_lugar, grafico_normalidad, grafico_probabilidad, histograma_forma,
+                      histograma_grupos, intervalos, mapa_digitos)
 
 LUGARES = ("Entrada", "Salida")
+# clave, título, sujeto de la frase, unidad, decimales (tablas), decimales de la frase, plural, título del eje
+VARIABLES = [
+    ("peso_muestra_g", "Gramaje", "El gramaje", "g", 2, 1, False, "Peso de muestra (g)"),
+    ("vol_ml", "mL gastados", "Los mL", "mL", 2, 0, True, "Volumen de titulante (mL)"),
+    ("ml_por_g", "mL/g", "Los mL/g", "mL/g", 3, 2, True, "mL / g de muestra"),
+]
+CAUSA_COLA_SALIDA = "probablemente por los eventos de baja eficiencia (salidas con mucho aceite)"
+NOTA_AD = ("Con N grande, Anderson-Darling detecta diferencias muy chicas; el gráfico de probabilidad muestra cuánto "
+           "se aparta de la normal y dónde.")
 
 
 def con_coma(df: pd.DataFrame, decimales: int = 2, **por_columna):
@@ -50,69 +64,178 @@ def columnas_muestras(datos: pd.DataFrame) -> pd.DataFrame:
                                  "normalidad": "Normalidad (N)", "aceite_fruta": "Aceite (kg/MT)"})
 
 
-# ---------------------------------------------------------------- pestañas
+def solo_lugar(tabla: pd.DataFrame, lugar: str) -> pd.DataFrame:
+    return tabla[tabla["lugar"] == lugar]
+
+
+# ---------------------------------------------------------------- resumen
+
+@st.cache_data(ttl=600, show_spinner="Calculando el resumen…")
+def calcular_resumen(datos: pd.DataFrame, datos_sin_eboe: pd.DataFrame) -> list[str]:
+    """Las frases del resumen (en caché: la ANOVA de analistas tarda un poco)."""
+    return resumen_hallazgos(
+        porcentaje_fijo(datos.assign(todas="todas"), "todas"), porcentaje_fijo(datos, "analista"),
+        comparar_formas(datos), precision_titulacion(datos), preferencia_digitos(datos, "centesimo"),
+        compartidas_por_mes(datos_sin_eboe), comparar_analistas(solo_lugar(datos, "Salida"), "aceite_fruta"))
+
+
+# ---------------------------------------------------------------- 1. gramaje y mL
 
 def pestana_gramaje(datos: pd.DataFrame, registro: Descargas) -> None:
-    st.caption("Protocolo de Brown: 15 g de muestra en la entrada y 25 g en la salida. El rango aceptado se "
-               "puede cambiar acá abajo.")
-    por_defecto = rangos_protocolo()
-    columnas = st.columns(4)
-    rangos = {}
-    for k, lugar in enumerate(LUGARES):
-        minimo = columnas[2 * k].number_input(f"{lugar}: mínimo (g)", value=por_defecto[lugar][0], step=0.5,
-                                              key=f"lab_min_{lugar}")
-        maximo = columnas[2 * k + 1].number_input(f"{lugar}: máximo (g)", value=por_defecto[lugar][1], step=0.5,
-                                                  key=f"lab_max_{lugar}")
-        rangos[lugar] = (minimo, maximo)
-    try:
-        por_lugar = fuera_de_protocolo(datos, rangos).set_index("lugar")
-    except ValueError as error:
-        st.warning(str(error))
-        return
-
-    tarjetas = st.columns(3)
-    for columna, lugar in zip(tarjetas, LUGARES):
-        if lugar in por_lugar.index:
-            fila = por_lugar.loc[lugar]
-            columna.metric(f"{lugar}: fuera del protocolo", f"{numero(fila['pct_fuera'], 1)} %")
-            columna.caption(f"{numero(fila['fuera'], 0)} de {numero(fila['n'], 0)} muestras · "
-                            f"{numero(fila['debajo'], 0)} con menos y {numero(fila['encima'], 0)} con más gramos")
-    altos = muestras_vol_alto(datos)
-    tarjetas[2].metric(f"Muestras con más de {numero(VOL_MAXIMO_ML, 0)} mL", numero(len(altos), 0))
-    tarjetas[2].caption(f"de {numero(len(datos), 0)} muestras")
+    st.caption("Referencia de la propia planta: la franja gris es el rango intercuartil (del 25 % al 75 % de las "
+               "muestras) y la línea, la mediana. mL/g = mL gastados / gramaje: saca el efecto del gramaje y deja la "
+               "variación real del aceite. En cada histograma, la curva continua es la normal y la punteada, la "
+               "densidad real de los datos (KDE).")
+    referencia = referencia_planta(datos, [v[0] for v in VARIABLES])
+    nombres = {v[0]: f"{v[1]} ({v[3]})" for v in VARIABLES}
+    with st.expander("Referencia de la planta (mediana e IQR)"):
+        registro.tabla(con_coma(referencia.assign(variable=referencia["variable"].map(nombres)).rename(columns={
+            "lugar": "Lugar", "variable": "Variable", "n": "N", "q1": "Q1", "mediana": "Mediana", "q3": "Q3",
+            "iqr": "IQR"}), 3), "Referencia de la planta")
     avisar_n(len(datos))
 
-    figura = marcar_protocolo(histograma_grupos(datos, "peso_muestra_g", "lugar", "Peso de muestra (g)", "g",
-                                                colores=COLORES), rangos)
-    registro.grafico(figura, "Histograma del gramaje")
-    registro.grafico(histograma_grupos(datos, "vol_ml", "lugar", "Volumen de titulante (mL)", "mL", colores=COLORES),
-                     "Histograma de los mL")
+    for clave, titulo, sujeto, unidad, decimales, dec_frase, plural, titulo_x in VARIABLES:
+        st.subheader(titulo)
+        for lugar in LUGARES:
+            valores = solo_lugar(datos, lugar)[clave].dropna()
+            if valores.empty:
+                continue
+            forma = forma_distribucion(valores)
+            fila = referencia[(referencia["lugar"] == lugar) & (referencia["variable"] == clave)].iloc[0].to_dict()
+            nombre = f"{titulo} de {lugar.lower()}"
+            izquierda, derecha = st.columns(2)
+            registro.grafico(histograma_forma(valores, titulo_x, unidad, COLORES[lugar], nombre, fila,
+                                              curva_kde(valores), forma, decimales), f"Histograma {nombre}",
+                             donde=izquierda)
+            tabla, recta = probabilidad_normal(valores)
+            registro.grafico(grafico_probabilidad(tabla, recta, titulo_x, COLORES[lugar], nombre, decimales),
+                             f"Probabilidad normal {nombre}", donde=derecha)
+            causa = CAUSA_COLA_SALIDA if lugar == "Salida" and clave != "peso_muestra_g" else None
+            st.markdown(f"**{frase_forma(forma, f'{sujeto} de {lugar.lower()}', unidad, dec_frase, plural, causa)}**")
+        st.caption(NOTA_AD)
+
+    st.subheader("Por analista")
     izquierda, derecha = st.columns(2)
     registro.grafico(boxplot_por_analista(datos, "peso_muestra_g", "Peso de muestra (g)", "g"),
                      "Gramaje por analista", donde=izquierda)
     registro.grafico(boxplot_por_analista(datos, "vol_ml", "Volumen de titulante (mL)", "mL"),
                      "mL por analista", donde=derecha)
 
-    st.subheader("Fuera del protocolo por analista")
-    por_analista = fuera_de_protocolo(datos, rangos, ["analista"])
-    registro.tabla(con_coma(por_analista.rename(columns={
-        "lugar": "Lugar", "analista": "Analista", "minimo": "Mínimo (g)", "maximo": "Máximo (g)", "n": "N",
-        "debajo": "Con menos gramos", "encima": "Con más gramos", "fuera": "Fuera", "pct_fuera": "% fuera"}),
-        1), "Fuera del protocolo por analista")
     st.subheader(f"Muestras con más de {numero(VOL_MAXIMO_ML, 0)} mL")
+    altos = muestras_vol_alto(datos)
     if altos.empty:
         st.info(f"Ninguna muestra pasa de {numero(VOL_MAXIMO_ML, 0)} mL.")
     else:
-        st.caption("Más de 50 mL suele indicar que hubo que recargar la bureta o que la muestra tenía demasiado "
-                   "aceite para su peso: conviene revisar el dato.")
+        st.caption(f"{numero(len(altos), 0)} muestras. Más de 50 mL suele indicar que se volvió a llenar la bureta "
+                   "en medio de la titulación o un error de carga: conviene revisar el dato.")
         registro.tabla(con_coma(columnas_muestras(altos), 2, **{"Normalidad (N)": 4}),
                        f"Muestras con más de {numero(VOL_MAXIMO_ML, 0)} mL")
 
 
+# ---------------------------------------------------------------- 2. formas de pesar
+
+def pestana_formas(datos: pd.DataFrame, banda: tuple, registro: Descargas) -> None:
+    st.caption(f"Muestras de {numero(banda[0], 2)} a {numero(banda[1], 2)} g = \"5 g fijo\"; el resto, \"variable\" "
+               "(se pesa lo que da la muestra). La banda se cambia en «Parámetros», arriba de la página.")
+    tarjetas = st.columns(len(LUGARES))
+    por_lugar = porcentaje_fijo(datos.assign(todas="todas"), "todas").set_index("lugar")
+    for columna, lugar in zip(tarjetas, LUGARES):
+        if lugar in por_lugar.index:
+            fila = por_lugar.loc[lugar]
+            columna.metric(f"{lugar}: a 5 g fijo", f"{numero(fila['pct_fijo'], 1)} %")
+            columna.caption(f"{numero(fila['n_fijo'], 0)} de {numero(fila['n'], 0)} muestras")
+    avisar_n(len(datos))
+
+    for por, titulo in (("analista", "Analista"), ("turno", "Turno")):
+        tabla = porcentaje_fijo(datos, por)
+        st.subheader(f"Por {titulo.lower()}")
+        registro.grafico(barras_por_lugar(tabla, por, titulo), f"5 g fijo por {titulo.lower()}")
+        with st.expander("Tabla"):
+            registro.tabla(con_coma(tabla.rename(columns={"lugar": "Lugar", por: titulo, "n": "N",
+                                                          "n_fijo": "A 5 g fijo", "pct_fijo": "%"}), 1),
+                           f"5 g fijo por {titulo.lower()}")
+    st.subheader("Por mes")
+    meses = porcentaje_fijo(datos, "mes")
+    registro.grafico(barras_por_lugar(meses, "etiqueta", "Mes", eje_de_meses(meses["mes"])), "5 g fijo por mes")
+    with st.expander("Tabla"):
+        registro.tabla(con_coma(meses.drop(columns="mes").rename(columns={
+            "lugar": "Lugar", "etiqueta": "Mes", "n": "N", "n_fijo": "A 5 g fijo", "pct_fijo": "%"}), 1),
+            "5 g fijo por mes")
+
+
+# ---------------------------------------------------------------- 3. ¿el gramaje cambia el resultado?
+
+def pestana_gramaje_resultado(datos: pd.DataFrame, registro: Descargas) -> None:
+    st.subheader("5 g fijo contra gramaje variable, el mismo día")
+    st.caption("Para cada eBOE, lugar y día de producción con muestras de las dos formas: aceite promedio de las de 5 g "
+               "menos el de las variables. Comparar dentro del mismo día y eBOE saca el efecto de la fruta y del "
+               "proceso. Diferencia media de esos días con su IC del 95 % (prueba t emparejada).")
+    formas = comparar_formas(datos)
+    for fila in formas.to_dict("records"):
+        st.markdown(f"**{frase_formas(fila)}**")
+    con_dato = formas.dropna(subset=["diferencia"])
+    if not con_dato.empty:
+        medias = con_dato.rename(columns={"lugar": "grupo", "n_dias": "n", "diferencia": "media"})
+        figura = intervalos(medias, "Diferencia 5 g − variable (kg/MT)", "kg/MT", 2, titulo_x="Lugar",
+                            titulo="Diferencia media e IC del 95 %")
+        figura.add_hline(y=0, line=dict(color=GRIS, width=1, dash="dot"))
+        izquierda, derecha = st.columns([2, 3])
+        registro.grafico(figura, "Diferencia 5 g contra variable", donde=izquierda)
+        registro.tabla(con_coma(formas.rename(columns={
+            "lugar": "Lugar", "n_dias": "Días", "n_fijo": "Muestras 5 g", "n_variable": "Muestras variables",
+            "media_fijo": "Aceite 5 g (kg/MT)", "media_variable": "Aceite variable (kg/MT)",
+            "diferencia": "Diferencia (kg/MT)", "ic_inf": "IC inferior", "ic_sup": "IC superior", "p": "p",
+            "variable_p10": "Gramaje variable P10 (g)", "variable_p90": "Gramaje variable P90 (g)"}), 3, p=4),
+            "Diferencia 5 g contra variable", donde=derecha)
+
+    st.subheader("Aceite en fruta vs gramaje")
+    st.caption("Si la titulación funciona bien, el aceite en fruta no debería depender de cuánta muestra se pesó.")
+    rectas = gramaje_vs_resultado(datos)
+    for fila in rectas.to_dict("records"):
+        st.markdown(f"**{frase_gramaje(fila)}**")
+    registro.grafico(dispersion_por_lugar(datos, "peso_muestra_g", "aceite_fruta", rectas, "Peso de muestra (g)",
+                                          "Aceite en fruta (kg/MT)", "kg/MT"), "Gramaje vs aceite en fruta")
+    with st.expander("Rectas"):
+        registro.tabla(con_coma(rectas.rename(columns={
+            "lugar": "Lugar", "n": "N", "pendiente": "Pendiente (kg/MT por g)", "ordenada": "Ordenada (kg/MT)",
+            "r2": "R²", "p": "p", "ic_inf": "IC inferior", "ic_sup": "IC superior"}), 4), "Rectas gramaje")
+
+
+# ---------------------------------------------------------------- 4. precisión
+
+def pestana_precision(datos: pd.DataFrame, registro: Descargas) -> None:
+    st.caption("Error relativo de lectura = 0,05 mL / (mL gastados − blanco): la mitad de la menor división de una "
+               f"bureta de 0,1 mL sobre lo que se tituló. Con menos de 5 mL netos, el error pasa del "
+               f"{numero(ERROR_MAXIMO_PCT, 0)} %.")
+    tabla = precision_titulacion(datos)
+    st.markdown(f"**{frase_precision(tabla)}**")
+    tarjetas = st.columns(len(LUGARES))
+    for columna, fila in zip(tarjetas, tabla.to_dict("records")):
+        columna.metric(f"{fila['lugar']}: error mayor al {numero(ERROR_MAXIMO_PCT, 0)} %",
+                       f"{numero(fila['pct_mayor'], 1)} %")
+        columna.caption(f"{numero(fila['n_mayor'], 0)} de {numero(fila['n'], 0)} muestras · mediana "
+                        f"{numero(fila['mediana'], 2)} %")
+    avisar_n(len(datos))
+    con_error = datos.assign(error_pct=error_de_lectura(datos))
+    figura = histograma_grupos(con_error, "error_pct", "lugar", "Error relativo de lectura (%)", "%", 2,
+                               colores=COLORES, curva=False)
+    figura.add_vline(x=ERROR_MAXIMO_PCT, line=dict(color=COLOR_DATOS, width=1.5, dash="dot"),
+                     annotation_text=f"{numero(ERROR_MAXIMO_PCT, 0)} %", annotation_position="top right")
+    registro.grafico(figura, "Error de lectura")
+    mayores = con_error[con_error["error_pct"] > ERROR_MAXIMO_PCT]
+    if not mayores.empty:
+        with st.expander(f"Muestras con error mayor al {numero(ERROR_MAXIMO_PCT, 0)} %"):
+            lista = columnas_muestras(mayores).assign(**{"Error (%)": mayores["error_pct"].to_numpy()})
+            registro.tabla(con_coma(lista, 2, **{"Normalidad (N)": 4}), "Muestras con error de lectura alto")
+
+
+# ---------------------------------------------------------------- 5. dígitos
+
 def pestana_digitos(datos: pd.DataFrame, registro: Descargas) -> None:
     st.caption("Si los mL se leen bien, cada dígito (0 a 9) aparece cerca del 10 % de las veces. Anotar de más el 0 "
-               "y el 5 indica que se redondea la lectura de la bureta. Prueba chi² contra la distribución uniforme, "
-               f"solo para analistas con al menos {N_MINIMO_DIGITOS} muestras.")
+               "y el 5 indica que se redondea la lectura; muchos más decimales pares que impares, una bureta "
+               "graduada cada 0,2 mL. Prueba chi² contra la distribución uniforme, solo para analistas con al menos "
+               f"{N_MINIMO_DIGITOS} muestras.")
     for posicion, nombre in POSICIONES.items():
         tabla = preferencia_digitos(datos, posicion)
         if tabla.empty:
@@ -124,19 +247,23 @@ def pestana_digitos(datos: pd.DataFrame, registro: Descargas) -> None:
                          f"Dígitos - {nombre}")
         with st.expander("Tabla"):
             mostrada = tabla.rename(columns={"grupo": "Analista", "n": "N", "chi2": "Chi²", "p": "p",
-                                             "exceso_0_5": "Exceso de 0 y 5", "digito_max": "Dígito más anotado",
-                                             "exceso_max": "Exceso del más anotado",
+                                             "exceso_0_5": "Exceso de 0 y 5 (%)", "digito_max": "Dígito más anotado",
+                                             "exceso_max": "Exceso del más anotado (%)",
+                                             "exceso_pares": "Exceso de pares (%)", "p_pares": "p pares",
                                              **{f"pct_{d}": f"% {d}" for d in range(10)}})
-            for columna in ("Exceso de 0 y 5", "Exceso del más anotado"):
+            for columna in ("Exceso de 0 y 5 (%)", "Exceso del más anotado (%)", "Exceso de pares (%)"):
                 mostrada[columna] = mostrada[columna] * 100
-            registro.tabla(con_coma(mostrada, 1, p=4), f"Dígitos - {nombre}")
+            registro.tabla(con_coma(mostrada, 1, p=4, **{"p pares": 4}), f"Dígitos - {nombre}")
 
+
+# ---------------------------------------------------------------- 6. compartidas
 
 def pestana_compartidas(datos_sin_eboe: pd.DataFrame, registro: Descargas) -> None:
     st.caption("Muestras de Entrada con la misma fecha y hora, el mismo peso y los mismos mL en más de un eBOE. Es "
                "muy poco probable que frutas distintas den exactamente lo mismo: lo más probable es que se haya "
                "titulado una sola muestra y se anotó para varios eBOE. Se miran todos los eBOE (no se aplica el "
                "filtro de eBOE).")
+    st.info("Si la entrada se muestrea una sola vez para los tres eBOE, sus eficiencias no son independientes.")
     grupos = muestras_compartidas(datos_sin_eboe)
     por_mes = compartidas_por_mes(datos_sin_eboe)
     entradas = int(por_mes["entradas"].sum())
@@ -167,6 +294,8 @@ def pestana_compartidas(datos_sin_eboe: pd.DataFrame, registro: Descargas) -> No
     registro.tabla(con_coma(lista, 2, **{"Peso (g)": 3}), "Grupos compartidos")
 
 
+# ---------------------------------------------------------------- 7. analistas
+
 def bloque_analistas(registro: Descargas, titulo: str, datos: pd.DataFrame, variable: str, sujeto: str,
                      unidad: str, decimales: int, unidad_diferencia: str | None = None) -> None:
     st.subheader(titulo)
@@ -184,30 +313,34 @@ def bloque_analistas(registro: Descargas, titulo: str, datos: pd.DataFrame, vari
     izquierda, derecha = st.columns([3, 2])
     registro.grafico(intervalos(medias, f"{titulo} ({unidad})", unidad, decimales, titulo_x="Analista",
                                 titulo="Media ajustada e IC del 95 %"), f"Analistas - {titulo}", donde=izquierda)
-    with derecha:
-        anova = resultado["anova"].rename(columns={"fuente": "Fuente", "gl": "GL", "sc": "SC", "f": "F", "p": "p"})
-        registro.tabla(con_coma(anova, 2, p=4, GL=0), f"ANOVA analistas - {titulo}", donde=derecha)
-        registro.tabla(con_coma(medias.rename(columns={"grupo": "Analista", "n": "N", "media": "Media ajustada",
-                                                       "ic_inf": "IC inferior", "ic_sup": "IC superior"}), decimales),
-                       f"Medias analistas - {titulo}", donde=derecha)
+    anova = resultado["anova"].rename(columns={"fuente": "Fuente", "gl": "GL", "sc": "SC", "f": "F", "p": "p"})
+    registro.tabla(con_coma(anova, 2, p=4, GL=0), f"ANOVA analistas - {titulo}", donde=derecha)
+    registro.tabla(con_coma(medias.rename(columns={"grupo": "Analista", "n": "N", "media": "Media ajustada",
+                                                   "ic_inf": "IC inferior", "ic_sup": "IC superior"}), decimales),
+                   f"Medias analistas - {titulo}", donde=derecha)
 
 
 def pestana_analistas(datos: pd.DataFrame, registro: Descargas) -> None:
     st.caption("Para no confundir al analista con la fruta o la temporada, se compara a cada analista contra los "
                "otros que midieron el mismo eBOE en la misma semana: ANOVA de dos factores (analista + eBOE × "
-               "semana), solo con las semanas en que trabajaron 2 o más analistas.")
-    salidas = datos[datos["lugar"] == "Salida"]
+               "semana), solo con las semanas en que trabajaron 2 o más analistas. Ojo con el gramaje: si un "
+               "analista pesa casi siempre 5 g, parte de su diferencia puede venir de ahí (pestaña «Gramaje y "
+               "resultado»).")
+    salidas = solo_lugar(datos, "Salida")
     pares = datos[(datos["lugar"] == "Entrada") & datos["eficiencia_par"].notna()]
     pares = pares.assign(eficiencia_pct=pares["eficiencia_par"] * 100)
     bloque_analistas(registro, "Aceite en fruta de salida", salidas, "aceite_fruta", "el aceite de salida", "kg/MT", 2)
     bloque_analistas(registro, "Eficiencia eBOE", pares, "eficiencia_pct", "la eficiencia", "%", 1, "puntos")
 
 
+# ---------------------------------------------------------------- 8. normalidad
+
 def pestana_normalidad(datos: pd.DataFrame, registro: Descargas) -> None:
     st.caption("Toda la planta usa la misma solución de bromato en cada momento: un punto por día de producción "
                f"(la normalidad más anotada ese día). En naranja, los períodos de más de {DIAS_MISMA_NORMALIDAD} días "
-               "con la misma normalidad. Los límites de la carta I-MR salen de un valor por período (cuánto cambia la "
-               "normalidad de una valoración a la siguiente); en rojo, los días fuera de esos límites.")
+               "con la misma normalidad (posible falta de re-estandarización). Los límites de la carta I-MR salen de "
+               "un valor por período (cuánto cambia la normalidad de una valoración a la siguiente); en rojo, los "
+               "días fuera de esos límites.")
     for lugar in LUGARES:
         st.subheader(f"Normalidad de {lugar.lower()}")
         diaria = normalidad_diaria(datos, lugar)
@@ -235,21 +368,6 @@ def pestana_normalidad(datos: pd.DataFrame, registro: Descargas) -> None:
                 f"Períodos normalidad {lugar.lower()}")
 
 
-def pestana_gramaje_resultado(datos: pd.DataFrame, registro: Descargas) -> None:
-    st.caption("Si la titulación funciona bien, el aceite en fruta no debería depender de cuánta muestra se pesó. "
-               "Una pendiente significativa indica un efecto del gramaje (por ejemplo, destilación incompleta con "
-               "muestras grandes) o que se pesa distinto según la fruta.")
-    rectas = gramaje_vs_resultado(datos)
-    for fila in rectas.to_dict("records"):
-        st.markdown(f"**{frase_gramaje(fila)}**")
-    registro.grafico(dispersion_por_lugar(datos, "peso_muestra_g", "aceite_fruta", rectas, "Peso de muestra (g)",
-                                          "Aceite en fruta (kg/MT)", "kg/MT"), "Gramaje vs aceite en fruta")
-    with st.expander("Rectas"):
-        registro.tabla(con_coma(rectas.rename(columns={
-            "lugar": "Lugar", "n": "N", "pendiente": "Pendiente (kg/MT por g)", "ordenada": "Ordenada (kg/MT)",
-            "r2": "R²", "p": "p", "ic_inf": "IC inferior", "ic_sup": "IC superior"}), 4), "Rectas gramaje")
-
-
 # ---------------------------------------------------------------- página
 
 st.set_page_config(page_title="Confiabilidad del laboratorio", layout="wide")
@@ -263,18 +381,33 @@ if datos.empty:
     st.info("No hay muestras con estos filtros.")
     st.stop()
 
+with st.expander("Parámetros"):
+    desde_col, hasta_col, _ = st.columns([1, 1, 3])
+    banda = (desde_col.number_input("5 g fijo: desde (g)", value=PESO_FIJO[0], step=0.05, format="%.2f",
+                                    key="lab_fijo_desde"),
+             hasta_col.number_input("5 g fijo: hasta (g)", value=PESO_FIJO[1], step=0.05, format="%.2f",
+                                    key="lab_fijo_hasta"))
+if banda[0] > banda[1]:
+    st.warning("La banda de 5 g fijo tiene el mínimo mayor que el máximo: se usa la de siempre.")
+    banda = PESO_FIJO
 
-def compartidas(registro: Descargas) -> None:
-    pestana_compartidas(filtrar(tabla_planta(planta_elegida()), replace(filtros, eboes=[])), registro)
+datos = agregar_ml_por_g(datos)
+datos = datos.assign(forma=forma_de_pesar(datos, *banda))
+datos_sin_eboe = filtrar(tabla_planta(planta_elegida()), replace(filtros, eboes=[]))
 
+st.subheader("Resumen")
+for frase in calcular_resumen(datos, datos_sin_eboe):
+    st.markdown(f"- {frase}")
 
 PESTANAS = {
     "Gramaje y mL": lambda registro: pestana_gramaje(datos, registro),
+    "Formas de pesar": lambda registro: pestana_formas(datos, banda, registro),
+    "Gramaje y resultado": lambda registro: pestana_gramaje_resultado(datos, registro),
+    "Precisión": lambda registro: pestana_precision(datos, registro),
     "Dígitos": lambda registro: pestana_digitos(datos, registro),
-    "Muestras compartidas": compartidas,
+    "Muestras compartidas": lambda registro: pestana_compartidas(datos_sin_eboe, registro),
     "Analistas": lambda registro: pestana_analistas(datos, registro),
     "Normalidad": lambda registro: pestana_normalidad(datos, registro),
-    "Gramaje vs resultado": lambda registro: pestana_gramaje_resultado(datos, registro),
 }
 # Solo se dibuja la pestaña abierta; la pestaña queda en la URL (?pestana_laboratorio=Dígitos).
 for (nombre, dibujar), pestana in zip(PESTANAS.items(), st.tabs(list(PESTANAS), key="pestana_laboratorio",

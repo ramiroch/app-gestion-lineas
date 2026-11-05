@@ -6,10 +6,15 @@ import pytest
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
 
-from core.laboratorio import (carta_normalidad, comparar_analistas, compartidas_por_mes, digitos, frase_analistas,
-                              frase_digitos, frase_gramaje, frase_periodos, fuera_de_protocolo, gramaje_vs_resultado,
+from scipy import stats
+
+from core.laboratorio import (agregar_ml_por_g, anderson_darling, carta_normalidad, comparar_analistas,
+                              comparar_formas, compartidas_por_mes, curva_kde, digitos, error_de_lectura,
+                              forma_de_pesar, forma_distribucion, frase_analistas, frase_digitos, frase_forma,
+                              frase_formas, frase_gramaje, frase_periodos, frase_precision, gramaje_vs_resultado,
                               muestras_compartidas, muestras_vol_alto, normalidad_diaria, periodos_misma_normalidad,
-                              preferencia_digitos, rangos_protocolo, semana_de)
+                              porcentaje_fijo, precision_titulacion, preferencia_digitos, probabilidad_normal,
+                              referencia_planta, resumen_hallazgos, semana_de, texto_p_ad)
 
 
 def _muestra(eboe, lugar, fecha_hora, peso, vol, analista="Ana", normalidad=0.1, aceite=8.0):
@@ -21,29 +26,155 @@ def _muestra(eboe, lugar, fecha_hora, peso, vol, analista="Ana", normalidad=0.1,
 
 # ---------------------------------------------------------------- gramaje y volumen
 
-def test_rangos_y_fuera_de_protocolo():
-    rangos = rangos_protocolo(0.10)
-    assert rangos["Entrada"] == pytest.approx((13.5, 16.5)) and rangos["Salida"] == pytest.approx((22.5, 27.5))
-    with pytest.raises(ValueError, match="entre 0 y 1"):
-        rangos_protocolo(1.5)
+def test_ml_por_g_y_referencia():
+    datos = agregar_ml_por_g(pd.DataFrame({"lugar": ["Entrada"] * 4 + ["Salida"],
+                                           "vol_ml": [10.0, 12.0, 9.0, 20.0, 5.0],
+                                           "peso_muestra_g": [5.0, 6.0, 9.0, 10.0, 5.0]}))
+    assert datos["ml_por_g"].tolist() == pytest.approx([2.0, 2.0, 1.0, 2.0, 1.0])
 
-    datos = pd.DataFrame([_muestra(1, "Entrada", "2025-07-01 06:00", g, 10.0, analista=a)
-                          for g, a in ((15.0, "Ana"), (10.0, "Ana"), (17.0, "Beto"), (14.0, "Beto"))]
-                         + [_muestra(1, "Salida", "2025-07-01 06:00", 25.0, 10.0)])
-    rangos = {"Entrada": (14.0, 16.0), "Salida": (24.0, 26.0)}
-
-    por_lugar = fuera_de_protocolo(datos, rangos).set_index("lugar")
-    entrada = por_lugar.loc["Entrada"]
-    assert (entrada["n"], entrada["debajo"], entrada["encima"], entrada["fuera"]) == (4, 1, 1, 2)
-    assert entrada["pct_fuera"] == pytest.approx(50.0) and por_lugar.loc["Salida", "fuera"] == 0   # bordes adentro
-    por_analista = fuera_de_protocolo(datos, rangos, ["analista"]).set_index(["lugar", "analista"])
-    assert por_analista.loc[("Entrada", "Beto"), "encima"] == 1
+    referencia = referencia_planta(datos, ["peso_muestra_g"]).set_index("lugar")
+    entrada = referencia.loc["Entrada"]
+    # Cuartiles de Minitab de 5, 6, 9, 10: Q1 = 5,25, mediana 7,5, Q3 = 9,75
+    assert (entrada["q1"], entrada["mediana"], entrada["q3"]) == pytest.approx((5.25, 7.5, 9.75))
+    assert entrada["iqr"] == pytest.approx(4.5) and entrada["n"] == 4
 
 
 def test_muestras_vol_alto():
     datos = pd.DataFrame([_muestra(1, "Salida", "2025-07-01 08:00", 5.0, 58.2),
                           _muestra(1, "Salida", "2025-07-01 06:00", 5.0, 50.0)])
     assert muestras_vol_alto(datos)["vol_ml"].tolist() == [58.2]          # 50 justo no cuenta
+
+
+# ---------------------------------------------------------------- forma de la distribución
+
+def test_anderson_darling_igual_que_scipy_y_p_de_minitab():
+    generador = np.random.default_rng(3)
+    normales = generador.normal(10, 2, 200)
+    resultado = anderson_darling(normales)
+    assert resultado["ad"] == pytest.approx(stats.anderson(normales, "norm", method="interpolate").statistic)
+    assert resultado["p"] > 0.05
+
+    # p de Minitab con A*² = A²·(1 + 0,75/n + 2,25/n²): con A*² = 0,752 (el crítico del 5 %), p ≈ 0,05
+    x = np.array([1.0, 2.0, 3.0, 4.0, 10.0])
+    ad = anderson_darling(x)
+    ajustado = ad["ad"] * (1 + 0.75 / 5 + 2.25 / 25)
+    assert ad["p"] == pytest.approx(np.exp(0.9177 - 4.279 * ajustado - 1.38 * ajustado ** 2) if ajustado < 0.6
+                                    else np.exp(1.2937 - 5.709 * ajustado + 0.0186 * ajustado ** 2))
+    assert anderson_darling(generador.exponential(1, 500))["p"] < 0.005
+    assert anderson_darling([1.0, 2.0])["ad"] is None
+    assert texto_p_ad(0.001) == "p < 0,005" and texto_p_ad(0.2346) == "p = 0,235"
+
+
+def test_probabilidad_normal_con_rangos_de_benard():
+    tabla, recta = probabilidad_normal([3.0, 1.0, 2.0])
+    assert tabla["valor"].tolist() == [1.0, 2.0, 3.0]
+    assert tabla["porcentaje"].tolist() == pytest.approx([100 * 0.7 / 3.4, 50.0, 100 * 2.7 / 3.4])
+    assert tabla["z"].iloc[1] == pytest.approx(0.0)
+    assert recta == pytest.approx({"media": 2.0, "desvio": 1.0})
+
+
+def test_forma_distribucion_detecta_cada_desvio():
+    generador = np.random.default_rng(11)
+    dos_grupos = np.concatenate([generador.normal(5.0, 0.05, 1000), generador.normal(9.0, 1.0, 2000)])
+    forma = forma_distribucion(dos_grupos)
+    assert forma["tipo"] == "dos_grupos" and 5.2 < forma["corte"] < 7.5
+    assert frase_forma(forma, "El gramaje de entrada", "g", 0).startswith(
+        "El gramaje de entrada no es normal (AD = ")
+    assert "tiene dos grupos, uno en 5 g y otro entre 8 y 10 g. En el gráfico de probabilidad se ve como un escalón." \
+        in frase_forma(forma, "El gramaje de entrada", "g", 0)
+
+    derecha = forma_distribucion(generador.lognormal(0, 0.6, 3000))
+    assert derecha["tipo"] == "cola_derecha"
+    assert "una cola larga hacia valores altos por eventos raros (asimetría" in frase_forma(
+        derecha, "Los mL de salida", "mL", plural=True, causa_cola_alta="por eventos raros")
+    assert forma_distribucion(-generador.lognormal(0, 0.6, 3000))["tipo"] == "cola_izquierda"
+    assert forma_distribucion(generador.standard_t(3, 5000))["tipo"] == "colas_pesadas"
+
+    normal = forma_distribucion(generador.normal(0, 1, 300))
+    assert normal["tipo"] == "normal"
+    assert frase_forma(normal, "Los mL/g de entrada", "mL/g", plural=True).startswith(
+        "Los mL/g de entrada son compatibles con una normal (AD = ")
+    assert "no hay datos suficientes" in frase_forma(forma_distribucion([1.0]), "El gramaje", "g")
+
+
+def test_curva_kde():
+    eje, y = curva_kde(np.random.default_rng(1).normal(0, 1, 500), puntos=100)
+    assert len(eje) == 100 and np.trapezoid(y, eje) == pytest.approx(1, abs=0.05)
+    assert len(curva_kde([1.0, 1.0, 1.0])[0]) == 0
+
+
+# ---------------------------------------------------------------- dos formas de pesar
+
+def _datos_formas():
+    """eBOE 1, salida, 4 días: cada día dos muestras de 5 g (aceite 1,6 + 0,002·día) y dos variables de
+    8 g (1,4); el día 5 solo tiene variables (no entra en la comparación)."""
+    filas = []
+    for dia in range(1, 6):
+        fecha = f"2025-07-0{dia}"
+        pesos = [8.0, 8.2] if dia == 5 else [5.0, 5.05, 8.0, 8.2]
+        for k, peso in enumerate(pesos):
+            aceite = (1.6 + 0.002 * dia if peso < 6 else 1.4) + 0.01 * dia * (k % 2)
+            filas.append(_muestra(1, "Salida", f"{fecha} {6 + k:02d}:00", peso, 10.0,
+                                  analista="Ana" if peso < 6 else "Beto", aceite=aceite))
+    filas.append(_muestra(1, "Entrada", "2025-07-01 06:00", 4.95, 10.0))
+    datos = pd.DataFrame(filas)
+    return datos.assign(forma=forma_de_pesar(datos))
+
+
+def test_forma_de_pesar_y_porcentajes():
+    datos = _datos_formas()
+    assert forma_de_pesar(pd.DataFrame({"peso_muestra_g": [4.9, 5.1, 5.11, 4.89, None]})).tolist()[:4] == [
+        "5 g fijo", "5 g fijo", "variable", "variable"]
+    with pytest.raises(ValueError, match="mayor que el máximo"):
+        forma_de_pesar(datos, 5.1, 4.9)
+
+    analistas = porcentaje_fijo(datos, "analista").set_index(["lugar", "analista"])
+    assert analistas.loc[("Salida", "Ana"), "pct_fijo"] == 100 and analistas.loc[("Salida", "Beto"), "n_fijo"] == 0
+    meses = porcentaje_fijo(datos, "mes")
+    assert meses["etiqueta"].tolist() == ["Jul 2025", "Jul 2025"]
+    assert meses.set_index("lugar").loc["Salida", "pct_fijo"] == pytest.approx(100 * 8 / 18)
+
+
+def test_comparar_formas_emparejado_por_dia():
+    datos = _datos_formas()
+    tabla = comparar_formas(datos).set_index("lugar")
+
+    salida = tabla.loc["Salida"]
+    assert salida["n_dias"] == 4 and (salida["n_fijo"], salida["n_variable"]) == (8, 8)
+    # Cada día la diferencia es 0,2 + 0,002·día: en promedio (días 1 a 4), 0,205
+    assert salida["diferencia"] == pytest.approx(0.205)
+    assert salida["ic_inf"] < 0.205 < salida["ic_sup"] and salida["p"] < 0.001
+    assert tabla.loc["Entrada", "n_dias"] == 0 and pd.isna(tabla.loc["Entrada", "diferencia"])
+
+    assert frase_formas(tabla.reset_index().to_dict("records")[0]).startswith("En la entrada hay 0 días con muestras")
+    fila = {"lugar": "Salida", "n_dias": 85, "diferencia": 0.08, "p": 0.02, "variable_p10": 7.0, "variable_p90": 11.0}
+    assert frase_formas(fila) == ("En la salida, las muestras de 5 g dan 0,08 kg/MT más que las de 7–11 g del mismo día "
+                                  "(p = 0,020; 85 días).")
+    assert "no hay diferencia significativa" in frase_formas(fila | {"p": 0.4})
+
+
+def test_comparar_formas_con_ruido():
+    generador = np.random.default_rng(5)
+    datos = _datos_formas()
+    datos["aceite_fruta"] += generador.normal(0, 0.02, len(datos))
+    salida = comparar_formas(datos).set_index("lugar").loc["Salida"]
+    assert salida["ic_inf"] < salida["diferencia"] < salida["ic_sup"] and salida["p"] < 0.05
+
+
+# ---------------------------------------------------------------- precisión de la titulación
+
+def test_precision_titulacion():
+    datos = pd.DataFrame({"lugar": ["Entrada", "Entrada", "Salida", "Salida"], "vol_ml": [10.2, 4.2, 25.2, 0.2],
+                          "blanco_ml": [0.2] * 4})
+    error = error_de_lectura(datos)
+    assert error.iloc[0] == pytest.approx(0.5) and error.iloc[1] == pytest.approx(1.25) and pd.isna(error.iloc[3])
+
+    tabla = precision_titulacion(datos).set_index("lugar")
+    assert (tabla.loc["Entrada", "n_mayor"], tabla.loc["Entrada", "pct_mayor"]) == (1, 50.0)
+    assert tabla.loc["Salida", "n"] == 1 and tabla.loc["Salida", "mediana"] == pytest.approx(0.2)
+    assert frase_precision(tabla.reset_index()) == (
+        "El error de lectura de la bureta supera el 1 % (menos de 5 mL netos) en el 50,0 % de las muestras de "
+        "entrada y en el 0,0 % de las muestras de salida. Mediana del error: 0,88 % en entrada y 0,20 % en salida.")
 
 
 # ---------------------------------------------------------------- dígitos
@@ -72,6 +203,20 @@ def test_preferencia_y_frase():
     assert "Sin preferencia: Ana." in frase and "(no se prueba): Ceci." in frase
     with pytest.raises(ValueError, match="Posición desconocida"):
         preferencia_digitos(datos, "unidad")
+
+
+def test_decimales_pares():
+    # Beto lee con una bureta graduada cada 0,2 mL: 80 de 100 primeros decimales son pares.
+    pares = [10 + d / 10 for d in (0, 2, 4, 6, 8)] * 16
+    impares = [10 + d / 10 for d in (1, 3, 5, 7, 9)] * 4
+    datos = pd.DataFrame({"vol_ml": pares + impares, "analista": "Beto"})
+
+    tabla = preferencia_digitos(datos, "decimo")
+    assert tabla["exceso_pares"].iloc[0] == pytest.approx(80 / 20 - 1)          # 4 veces más pares: +300 %
+    assert tabla["p_pares"].iloc[0] < 0.001
+    assert ("En Beto, los primeros decimales pares aparecen un 300 % más que los impares (p < 0,001; posible bureta "
+            "graduada cada 0,2 mL).") in frase_digitos(tabla, "decimo")
+    assert "pares" not in frase_digitos(preferencia_digitos(datos, "centesimo"), "centesimo")
 
 
 def test_frase_sin_preferencia_y_otro_digito():
@@ -234,3 +379,32 @@ def test_gramaje_vs_resultado_y_frases():
     debil = salida | {"r2": 0.01, "p": 0.001}
     assert frase_gramaje(debil).endswith("pero el gramaje explica muy poco del resultado.")
     assert "no hay datos suficientes" in frase_gramaje({"lugar": "Entrada", "n": 2, "pendiente": None})
+
+
+
+# ---------------------------------------------------------------- resumen
+
+def test_resumen_hallazgos():
+    lugar = pd.DataFrame({"lugar": ["Entrada", "Salida"], "n": [100, 100], "n_fijo": [1, 20], "pct_fijo": [1.0, 20.0]})
+    analista = pd.DataFrame({"lugar": ["Salida", "Salida"], "analista": ["Ana", "Beto"], "n": [60, 60],
+                             "n_fijo": [45, 3], "pct_fijo": [75.0, 5.0]})
+    formas = pd.DataFrame([{"lugar": "Salida", "n_dias": 85, "diferencia": 0.08, "p": 0.02, "variable_p10": 7.0,
+                            "variable_p90": 11.0}])
+    precision = pd.DataFrame({"lugar": ["Entrada"], "n": [200], "mediana": [0.4], "n_mayor": [2], "pct_mayor": [1.0]})
+    digitos_tabla = pd.DataFrame({"grupo": ["Ana", "Beto"], "p": [0.001, 0.5], "exceso_0_5": [0.6, 0.0]})
+    compartidas = pd.DataFrame({"entradas": [100, 100], "compartidas": [5, 15], "pct": [5.0, 15.0]})
+    analistas = {"p": 0.001, "alfa": 0.05, "medias": pd.DataFrame({"grupo": ["Ana", "Beto"], "media": [1.5, 1.2]})}
+
+    frases = resumen_hallazgos(lugar, analista, formas, precision, digitos_tabla, compartidas, analistas)
+
+    assert len(frases) == 5
+    assert frases[0] == ("Conviven dos formas de pesar: se pesan a 5 g fijo el 1 % de las de entrada y el 20 % de las "
+                         "de salida; el resto, con gramaje variable. Quien más pesa a 5 g es Ana (75 % de sus muestras "
+                         "de salida).")
+    assert frases[1].startswith("En la salida, las muestras de 5 g dan 0,08 kg/MT más")
+    assert frases[2] == ("El 1,0 % de las muestras tiene un error de lectura mayor al 1 % (menos de 5 mL netos), y Ana "
+                         "redondea el último dígito de los mL a 0 o 5.")
+    assert frases[3].startswith("El 10,0 % de las muestras de entrada está anotado igual en más de un eBOE "
+                                "(máximo mensual 15,0 %)")
+    assert frases[4].endswith("Ojo: Ana pesa a 5 g el 75 % de sus salidas, y esas muestras dan 0,08 kg/MT más: parte "
+                              "de la diferencia es por el gramaje y no por el analista.")
