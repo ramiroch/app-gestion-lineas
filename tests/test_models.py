@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
-from core.models import (AnalisisScott, Cliente, Equipo, LecturaOperacion, Linea, Planta,
+from core.models import (AnalisisScott, Cliente, Equipo, LecturaOperacion, LecturaPLC, Linea, Planta,
                          Proceso, PuntoMuestreo, RegistroProduccion, Turno, texto_origen)
 
 TIPOS_PUNTO = ["fruta entrada", "fruta salida", "emulsión"]
@@ -344,3 +344,25 @@ def test_origen_del_dato_importado_y_vacio_si_es_manual(motor):
             "eficiencia eBOE Naranja 25 2.xlsm › BOE › fila 125")
         assert sesion.scalars(select(AnalisisScott)).one().origen is None        # cargado a mano
         assert sesion.scalars(select(RegistroProduccion)).one().origen is None
+
+
+def test_lectura_plc_unica_por_equipo_y_hora(sesion):
+    planta = crear_ledesma(sesion)
+    equipo = planta.lineas[0].equipos[0]
+    momento = datetime(2026, 7, 1, 10, 5)
+    sesion.add(LecturaPLC(equipo=equipo, fecha_hora=momento, horas_maquina=31549, minutos=29, elevador=1,
+                          programa="N3", ton_seteadas=12, ton_calculadas=10.8, cargado_por="prueba",
+                          origen="Ledesma712026.csv › fila 3"))
+    sesion.commit()
+    assert sesion.scalars(select(LecturaPLC)).one().programa == "N3"
+
+    sesion.add(LecturaPLC(equipo=equipo, fecha_hora=momento, cargado_por="prueba"))
+    with pytest.raises(IntegrityError):
+        sesion.commit()
+
+
+def test_lectura_plc_valida_elevador_y_negativos():
+    with pytest.raises(ValueError, match="0 o 1"):
+        LecturaPLC(elevador=2)
+    with pytest.raises(ValueError, match="no puede ser negativo"):
+        LecturaPLC(ton_calculadas=-1.0)

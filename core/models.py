@@ -1,7 +1,7 @@
 """Modelos de datos.
 
 Maestros: Cliente → Planta → Linea → Equipo → PuntoMuestreo, más Turno, Proceso y
-RangoReferencia. Datos de planta: AnalisisScott, LecturaOperacion y RegistroProduccion.
+RangoReferencia. Datos de planta: AnalisisScott, LecturaOperacion, LecturaPLC y RegistroProduccion.
 
 Cada clase es una tabla de la base. Las relaciones son "uno a muchos":
 un cliente tiene muchas plantas, una planta muchas líneas, etc.
@@ -312,6 +312,41 @@ class LecturaOperacion(Auditoria, Base):
         return valor
 
     @validates("tph", "caudal_fase_pesada")
+    def validar_no_negativos(self, clave, valor):
+        return _no_negativo(clave, valor)
+
+
+class LecturaPLC(Auditoria, Base):
+    """Lectura del PLC de un eBOE (un registro cada 5 minutos, importado con core/importar_plc.py).
+
+    horas_maquina y minutos: horómetro del equipo (horas enteras + minutos). elevador: 1 si el
+    elevador de fruta está en marcha, 0 si no. programa: tal como lo registra el PLC, sin el texto
+    "Programa" ("N3" o "9"). ton_seteadas: setpoint de toneladas por hora; ton_calculadas: las que
+    calcula el PLC (baldes por minuto × kg por balde, no un peso real). Única por equipo + fecha_hora.
+    """
+
+    __tablename__ = "lectura_plc"
+    __table_args__ = (UniqueConstraint("equipo_id", "fecha_hora"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    equipo_id: Mapped[int] = mapped_column(ForeignKey("equipo.id"))
+    fecha_hora: Mapped[datetime] = mapped_column(DateTime)
+    horas_maquina: Mapped[float | None] = mapped_column(Float)
+    minutos: Mapped[float | None] = mapped_column(Float)
+    elevador: Mapped[int | None]
+    programa: Mapped[str | None] = mapped_column(String(10))
+    ton_seteadas: Mapped[float | None] = mapped_column(Float)
+    ton_calculadas: Mapped[float | None] = mapped_column(Float)
+
+    equipo: Mapped["Equipo"] = relationship()
+
+    @validates("elevador")
+    def validar_elevador(self, clave, valor):
+        if valor is not None and valor not in (0, 1):
+            raise ValueError(f'"elevador" tiene que ser 0 o 1 (dice {valor}).')
+        return valor
+
+    @validates("horas_maquina", "minutos", "ton_seteadas", "ton_calculadas")
     def validar_no_negativos(self, clave, valor):
         return _no_negativo(clave, valor)
 
