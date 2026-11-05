@@ -13,7 +13,8 @@ from core.analisis import filtrar, filtros_sin_periodo, pares_con_emulsion
 from core.factores import (CATEGORIAS, RESPUESTAS, VIF_MAXIMO, aceite_perdido, agregar_dia_proceso, comparar_planta,
                            cortes_quintiles, descomponer, etiquetas_quintiles, frase_aceite_perdido, frase_calibre,
                            frase_categoria, frase_descomposicion, frase_eboe_calibre, frase_modelo, frase_planta,
-                           frutos_por_eboe, modelo_multivariable, por_categoria, por_quintil, preparar_pares,
+                           frutos_por_eboe, modelo_multivariable, nota_descomposicion, por_categoria, por_quintil,
+                           preparar_pares, promedio_por_temporada,
                            residual_planta, resumen_factores, separar_errores, toneladas_por_eboe)
 from core.formato import numero, texto_p
 from descargas import Descargas
@@ -106,19 +107,25 @@ def bloque_calibre(quintiles: pd.DataFrame, eboes: pd.DataFrame, cortes: list[fl
                    "Frutos en 10 kg por eBOE", donde=derecha)
 
 
-def bloque_descomposicion(quintiles: pd.DataFrame, base, nueva, registro: Descargas) -> dict | None:
+def bloque_descomposicion(quintiles: pd.DataFrame, crudos: pd.DataFrame, toneladas: pd.DataFrame, base, nueva,
+                          registro: Descargas) -> dict | None:
     st.subheader(f"2. Descomposición de la diferencia entre {base} y {nueva}")
-    st.caption(f"Parte del calibre: lo que cambió por tener otra mezcla de calibres ({nueva} estandarizado a la mezcla "
-               f"de quintiles de {base}). Resto: lo que cambió dentro de cada calibre. Cada temporada se arma con sus "
-               "quintiles pesados por la cantidad de pares, así que el total puede diferir un poco del promedio de "
-               "la pestaña Proceso.")
+    st.caption(f"Total: la diferencia entre temporadas de la pestaña Proceso (promedio de todos los pares de cada "
+               f"temporada, ponderado por las toneladas del turno). Parte del calibre: lo que cambió por tener otra "
+               f"mezcla de calibres ({nueva} estandarizado a la mezcla de quintiles de {base}). Resto = total − calibre: "
+               "lo que cambió dentro de cada calibre.")
     resultados = {}
     columnas = st.columns(2)
-    for columna, (indicador, titulo, unidad, decimales, mejor_si_sube) in zip(columnas, (
-            ("eficiencia", "Eficiencia eBOE (%)", "%", 1, True), ("residual", "Aceite residual (kg/MT)", "kg/MT", 2, False))):
-        resultado = descomponer(quintiles, indicador, base, nueva)
+    for columna, (indicador, columna_pares, titulo, unidad, decimales, mejor_si_sube) in zip(columnas, (
+            ("eficiencia", "eficiencia_pct", "Eficiencia eBOE (%)", "%", 1, True),
+            ("residual", "aceite_salida", "Aceite residual (kg/MT)", "kg/MT", 2, False))):
+        totales = promedio_por_temporada(crudos, columna_pares, toneladas)
+        resultado = descomponer(quintiles, indicador, base, nueva, totales)
         resultados[indicador] = resultado
         columna.markdown(f"**{frase_descomposicion(resultado, indicador)}**")
+        nota = nota_descomposicion(resultado, indicador)
+        if nota:
+            columna.caption(nota)
         if resultado is not None:
             registro.grafico(cascada(resultado, titulo, unidad, decimales, mejor_si_sube), f"Cascada {indicador}",
                              donde=columna)
@@ -245,7 +252,8 @@ def bloque_aceite_perdido(pares_filtrados: pd.DataFrame, pares_temporadas: pd.Da
 def pestana_factores(registro: Descargas) -> None:
     filtros = filtros_elegidos()
     planta_id = planta_elegida()
-    todos, excluidos = separar_errores(pares_planta(planta_id))
+    crudos = pares_planta(planta_id)
+    todos, excluidos = separar_errores(crudos)
     toneladas = toneladas_planta(planta_id)
     pares_temporadas = filtrar(todos, filtros_sin_periodo(filtros))
     pares_filtrados = filtrar(todos, filtros)
@@ -265,7 +273,8 @@ def pestana_factores(registro: Descargas) -> None:
     bloque_limpieza(excluidos, registro)
     bloque_calibre(quintiles, eboes, cortes, registro)
     if len(temporadas) >= 2:
-        descomposicion = bloque_descomposicion(quintiles, base, nueva, registro)
+        descomposicion = bloque_descomposicion(quintiles, filtrar(crudos, filtros_sin_periodo(filtros)), toneladas,
+                                               base, nueva, registro)
     else:
         st.info("La descomposición necesita dos temporadas.")
         descomposicion = None

@@ -7,7 +7,8 @@ import pytest
 from core.factores import (aceite_perdido, agregar_dia_proceso, asignar_quintil, comparar_planta, cortes_quintiles,
                            descomponer, etiquetas_quintiles, frase_aceite_perdido, frase_calibre, frase_categoria,
                            frase_descomposicion, frase_eboe_calibre, frase_modelo, frase_planta, frutos_en_10kg,
-                           frutos_por_eboe, modelo_multivariable, por_categoria, por_quintil, preparar_pares,
+                           frutos_por_eboe, modelo_multivariable, nota_descomposicion, por_categoria, por_quintil,
+                           preparar_pares, promedio_por_temporada,
                            residual_planta, resumen_factores, separar_errores, toneladas_por_eboe)
 
 SIN_TONELADAS = pd.DataFrame(columns=["fecha_produccion", "turno", "fruta_t"])
@@ -104,6 +105,21 @@ def test_descomposicion_suma_y_separa_el_calibre():
     assert frase_descomposicion(residual, "residual").startswith("De los 0,35 kg/MT de aumento del aceite residual")
     assert descomponer(tabla, "eficiencia", 2025, 2024) is None
     assert "Hacen falta las dos temporadas" in frase_descomposicion(None, "eficiencia")
+    assert nota_descomposicion(resultado, "eficiencia") is None      # sin totales de Proceso: coincide
+
+
+def test_descomposicion_con_el_total_de_proceso():
+    pares = _pares_calibre()
+    tabla = por_quintil(pares, [50.0, 55.0, 60.0, 65.0], SIN_TONELADAS)
+    totales = promedio_por_temporada(pares, "eficiencia_pct", SIN_TONELADAS)
+    assert totales == pytest.approx({2025: 87.5, 2026: 80.5})
+
+    # Proceso dice 86,0 → 80,0 (−6): el calibre sigue en −5 y el resto pasa a −1 (= total − calibre)
+    resultado = descomponer(tabla, "eficiencia", 2025, 2026, {2025: 86.0, 2026: 80.0})
+    assert (resultado["valor_base"], resultado["valor_nueva"], resultado["total"]) == pytest.approx((86.0, 80.0, -6.0))
+    assert (resultado["calibre"], resultado["resto"], resultado["total_metodo"]) == pytest.approx((-5.0, -1.0, -7.0))
+    assert frase_descomposicion(resultado, "eficiencia").startswith("De los 6,0 puntos de caída")
+    assert "la diferencia da -7,0 puntos en vez de -6,0" in nota_descomposicion(resultado, "eficiencia")
 
 
 def test_descomposicion_con_calibre_en_contra():

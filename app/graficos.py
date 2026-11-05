@@ -845,7 +845,7 @@ def cascada(resultado: dict, titulo_y: str, unidad: str, decimales: int, mejor_s
         increasing=dict(marker=dict(color=colores["increasing"])), decreasing=dict(marker=dict(color=colores["decreasing"])),
         totals=dict(marker=dict(color=GRIS)), connector=dict(line=dict(color=GRIS, width=1, dash="dot")),
         hovertemplate=f"%{{x}}: %{{text}} {unidad}<extra></extra>", showlegend=False))
-    valores = [resultado["valor_base"], resultado["estandarizado"], resultado["valor_nueva"]]
+    valores = [resultado["valor_base"], resultado["valor_base"] + resultado["calibre"], resultado["valor_nueva"]]
     margen = max(abs(resultado["total"]), abs(resultado["calibre"]), abs(resultado["resto"])) * 0.8 or 1
     figura.update_layout(yaxis=dict(title=titulo_y, range=[min(valores) - margen, max(valores) + margen]))
     return estilo(figura, ALTURA_CHICA)

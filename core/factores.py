@@ -198,16 +198,28 @@ def frase_eboe_calibre(tabla: pd.DataFrame, temporada) -> str:
 
 # ---------------------------------------------------------------- descomposición
 
-def descomponer(tabla: pd.DataFrame, indicador: str, base, nueva) -> dict | None:
+def promedio_por_temporada(pares: pd.DataFrame, columna: str, toneladas: pd.DataFrame) -> dict:
+    """{temporada: promedio de la columna}, ponderado por las toneladas del turno, como la pestaña Proceso.
+
+    Con todos los pares de la temporada (tengan o no calibre). Es el total que muestra la descomposición.
+    """
+    return {t: media_ponderada_por_turno(sub, columna, toneladas)["valor"]
+            for t, sub in pares.groupby("temporada", sort=True)}
+
+
+def descomponer(tabla: pd.DataFrame, indicador: str, base, nueva, totales: dict | None = None) -> dict | None:
     """Separa la diferencia de un indicador entre dos temporadas en calibre + resto (estandarización directa).
 
     Con wq = proporción de pares de cada quintil y mq = media del quintil (por_quintil()):
-    valor de cada temporada = Σ wq·mq; estandarizado = Σ wq(base)·mq(nueva) (la nueva con la mezcla de
-    calibres de la base). total = nueva − base = calibre + resto, con calibre = nueva − estandarizado
-    (lo que cambió por tener otra mezcla de calibres) y resto = estandarizado − base (lo que cambió dentro
-    de cada calibre). Solo entran los quintiles con datos en las dos temporadas.
-    Devuelve base, nueva, valor_base, valor_nueva, estandarizado, total, calibre, resto y frutos_base,
-    frutos_nueva (promedio de frutos en 10 kg); None si falta una temporada.
+    valor de cada temporada (método) = Σ wq·mq; estandarizado = Σ wq(base)·mq(nueva) (la nueva con la
+    mezcla de calibres de la base); calibre = nueva − estandarizado (lo que cambió por tener otra mezcla
+    de calibres). Solo entran los quintiles con datos en las dos temporadas.
+    totales: {temporada: valor} de promedio_por_temporada() (el de la pestaña Proceso). Si se pasa, el total
+    es la diferencia de esos valores; si no, la del método. resto = total − calibre (lo que cambió dentro
+    de cada calibre).
+    Devuelve base, nueva, valor_base, valor_nueva, total, calibre, resto, total_metodo (el del método de
+    quintiles, para la nota si difiere), estandarizado y frutos_base, frutos_nueva (promedio de frutos en
+    10 kg); None si falta una temporada.
     """
     a = tabla[tabla["temporada"] == base].set_index("quintil")
     b = tabla[tabla["temporada"] == nueva].set_index("quintil")
@@ -216,12 +228,32 @@ def descomponer(tabla: pd.DataFrame, indicador: str, base, nueva) -> dict | None
         return None
     a, b = a.loc[comunes], b.loc[comunes]
     wa, wb = a["n"] / a["n"].sum(), b["n"] / b["n"].sum()
-    valor_base, valor_nueva = float((wa * a[indicador]).sum()), float((wb * b[indicador]).sum())
+    metodo_base, metodo_nueva = float((wa * a[indicador]).sum()), float((wb * b[indicador]).sum())
     estandarizado = float((wa * b[indicador]).sum())
-    return {"base": base, "nueva": nueva, "valor_base": valor_base, "valor_nueva": valor_nueva,
-            "estandarizado": estandarizado, "total": valor_nueva - valor_base,
-            "calibre": valor_nueva - estandarizado, "resto": estandarizado - valor_base,
+    calibre = metodo_nueva - estandarizado
+    if totales is not None and totales.get(base) is not None and totales.get(nueva) is not None:
+        valor_base, valor_nueva = float(totales[base]), float(totales[nueva])
+    else:
+        valor_base, valor_nueva = metodo_base, metodo_nueva
+    total = valor_nueva - valor_base
+    return {"base": base, "nueva": nueva, "valor_base": valor_base, "valor_nueva": valor_nueva, "total": total,
+            "calibre": calibre, "resto": total - calibre, "total_metodo": metodo_nueva - metodo_base,
+            "estandarizado": estandarizado,
             "frutos_base": float((wa * a["frutos"]).sum()), "frutos_nueva": float((wb * b["frutos"]).sum())}
+
+
+def nota_descomposicion(resultado: dict | None, indicador: str) -> str | None:
+    """Aclaración si el total del método de quintiles difiere del de la pestaña Proceso (a la vista); si no, None."""
+    if resultado is None:
+        return None
+    unidad, dec = ("puntos", 1) if indicador == "eficiencia" else ("kg/MT", 2)
+    if numero(resultado["total"], dec) == numero(resultado["total_metodo"], dec):
+        return None
+    return (f"Armando cada temporada con sus quintiles pesados por la cantidad de pares (solo los pares con calibre), "
+            f"la diferencia da {numero(resultado['total_metodo'], dec)} {unidad} en vez de "
+            f"{numero(resultado['total'], dec)}: la pestaña Proceso pondera por las toneladas del turno y usa todos los "
+            "pares. El total y el número principal son los de Proceso; la parte del calibre sale del método de "
+            "quintiles y el resto es total − calibre.")
 
 
 def frase_descomposicion(resultado: dict | None, indicador: str) -> str:
