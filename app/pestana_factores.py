@@ -6,11 +6,14 @@ fechas y el proceso de la barra (respetan eBOE, turno y programa); el modelo y e
 eBOE respetan todos los filtros. Solo muestra: la lógica está en core/factores.py.
 """
 
+from dataclasses import replace
+
 import pandas as pd
 import streamlit as st
 
 from core.analisis import filtrar, filtros_sin_periodo, pares_con_emulsion
-from core.factores import (CATEGORIAS, NOMBRES_MODELO, NOTA_MODELO_B, comparar_modelos, frase_r2_modelos,
+from core.factores import (CATEGORIAS, FRUTA_MINIMA_TURNO, NOTA_BALANCE, frase_balance, regresion_balance,
+                           separar_turnos_balance, turnos_balance, valor_programa, NOMBRES_MODELO, NOTA_MODELO_B, comparar_modelos, frase_r2_modelos,
                            frase_residuo_eboe, residuos_por_eboe, N_MINIMO_JUSTA, NIVEL_FRASE, NIVELES_JUSTA, NOTA_JUSTA, cascada_justa,
                            celdas_justas, comparacion_justa, eboe_peor, frase_justa, preparar_celdas, cortes_cuartiles, esponja_por_cuartil, esponja_por_eboe, etiquetas_cuartiles,
                            frase_esponja, pendientes_esponja, N_MINIMO_CELDA, RESPUESTAS, VIF_MAXIMO, aceite_perdido, agregar_dia_proceso, comparar_planta,
@@ -23,7 +26,8 @@ from core.formato import numero, texto_p
 from core.precios import (BRIX_REFERENCIA, SIN_PRECIOS, UNIDADES, Precios, guardar_precios, kg_a_65_brix,
                            leer_precios, usd)
 from descargas import Descargas
-from filtros import filtros_elegidos, planta_elegida, tabla_emulsion_planta, tabla_planta, toneladas_planta
+from filtros import (filtros_elegidos, planta_elegida, produccion_planta, tabla_emulsion_planta, tabla_planta,
+                     toneladas_planta)
 from graficos import GRIS, barras_importancia, cascada, cascada_pasos, columnas_agrupadas, intervalos, intervalos_agrupados
 
 INDICADORES = {"entrada": "Entrada", "removido": "Removido", "residual": "Residual"}
@@ -484,6 +488,91 @@ def bloque_aceite_perdido(pares_filtrados: pd.DataFrame, pares_temporadas: pd.Da
     return perdido, comparacion
 
 
+MEDIDAS_ACEITE = {"aceite_mt": "Aceite envasado por MT (Resumen)",
+                  "removido_mt": "Aceite removido por los eBOE por MT (entrada − salida, muestras)"}
+
+
+def bloque_balance(produccion: pd.DataFrame, pares: pd.DataFrame, precios: Precios, registro: Descargas) -> dict:
+    st.subheader("8. Balance aceite–jugo")
+    st.caption(f"Por turno de producción: fruta, aceite envasado y jugo concentrado del registro de producción (toda la "
+               f"planta); programa = promedio de los eBOE en marcha (programa de la lectura de operación de cada "
+               f"muestra); eficiencia y calibre de los pares del turno. Concentrado a 65 °Brix (registrado a "
+               f"{numero(precios.brix_registrado, 1)} °Brix). Ignora fechas, proceso, eBOE y programa de la barra "
+               f"(respeta el turno). Se excluyen los turnos con menos de {FRUTA_MINIMA_TURNO} MT de fruta, sin muestras "
+               "de los eBOE o con valores fuera de rango.")
+    turnos, excluidos = separar_turnos_balance(turnos_balance(produccion, pares, precios.brix_registrado))
+    if turnos.empty:
+        st.info("No hay turnos con producción y muestras con estos filtros.")
+        return {}
+    if not excluidos.empty:
+        st.warning(f"Se excluyeron {len(excluidos)} turnos (de {len(turnos) + len(excluidos)}).")
+        with st.expander("Turnos excluidos"):
+            registro.tabla(con_coma(pd.DataFrame({
+                "Fecha de producción": excluidos["fecha_produccion"].dt.strftime("%d/%m/%Y"), "Turno": excluidos["turno"],
+                "Fruta (MT)": excluidos["fruta_t"], "kg conc. 65 °Brix/MT": excluidos["conc_mt"],
+                "Aceite envasado/MT": excluidos["aceite_mt"], "Programa": excluidos["programa"],
+                "Motivo": excluidos["motivo"]}), 1), "Balance - turnos excluidos")
+
+    izquierda, derecha = st.columns(2)
+    tablas = {}
+    for columna, variable, titulo, unidad, decimales in (
+            (izquierda, "conc_mt", "kg conc. 65 °Brix por MT", "kg/MT", 1),
+            (derecha, "eficiencia", "Eficiencia eBOE (%)", "%", 1)):
+        tabla = categoria_en_cache(turnos, "grupo_programa", variable)
+        tablas[variable] = tabla
+        if tabla.empty:
+            continue
+        registro.grafico(intervalos_agrupados(tabla, titulo, unidad, decimales, "Programa promedio del turno"),
+                         f"Balance - {titulo}", donde=columna)
+    st.caption("Media e IC del 95 % por grupo de programa del turno (programa promedio redondeado) y temporada; N = "
+               "turnos.")
+    with st.expander("Tabla por grupo de programa"):
+        combinada = tablas["conc_mt"].merge(tablas["eficiencia"], on=["temporada", "grupo"], suffixes=("_conc", "_ef"))
+        registro.tabla(con_coma(pd.DataFrame({
+            "Temporada": combinada["temporada"].astype(str), "Programa": combinada["grupo"], "Turnos": combinada["n_conc"],
+            "kg conc./MT": combinada["media_conc"], "IC conc. inferior": combinada["ic_inf_conc"],
+            "IC conc. superior": combinada["ic_sup_conc"], "Eficiencia (%)": combinada["media_ef"],
+            "IC efic. inferior": combinada["ic_inf_ef"], "IC efic. superior": combinada["ic_sup_ef"]}), 1),
+            "Balance por grupo de programa")
+
+    regresiones = {v: regresion_balance(turnos, v) for v in ("conc_mt", *MEDIDAS_ACEITE)}
+    st.markdown("**Efecto de +1 nivel de programa** (regresión por turno con programa, calibre y temporada)")
+    nombres = {"conc_mt": "kg conc. 65 °Brix por MT", **MEDIDAS_ACEITE}
+    registro.tabla(con_coma(pd.DataFrame([{
+        "Variable": nombres[v], "Efecto de +1 nivel (kg/MT)": r["efecto"], "IC 95 % inferior": r["ic_inf"],
+        "IC 95 % superior": r["ic_sup"], "p": texto_p(r["p"]) if r["p"] is not None else "—",
+        "R²": r["r2"], "Turnos": r["n"]} for v, r in regresiones.items()]), 3, **{"Turnos": 0}),
+        "Balance - efecto del programa")
+
+    st.markdown("**Calculadora: ¿conviene subir o bajar un nivel de programa?**")
+    resultado = {"regresiones": regresiones, "valor": None}
+    if not precios.cargados:
+        st.caption(SIN_PRECIOS)
+    elif regresiones["conc_mt"]["efecto"] is None:
+        st.caption("No hay turnos suficientes para estimar el efecto del programa.")
+    else:
+        medida = st.radio("Aceite por MT medido como", list(MEDIDAS_ACEITE), format_func=MEDIDAS_ACEITE.get,
+                          key="factores_medida_aceite", horizontal=True)
+        valor = valor_programa(regresiones[medida]["efecto"], regresiones["conc_mt"]["efecto"],
+                               precios.aceite_usd_kg, precios.jugo_usd_kg)
+        resultado["valor"] = valor
+        st.markdown(f"**{frase_balance(valor)}**")
+        uno, dos, tres, cuatro = st.columns(4)
+        uno.metric("Aceite (+1 nivel)", f"USD {numero(valor['usd_aceite'], 2)}/MT")
+        dos.metric("Jugo (+1 nivel)", f"USD {numero(valor['usd_jugo'], 2)}/MT")
+        tres.metric("Neto de subir un nivel", f"USD {numero(valor['neto'], 2)}/MT",
+                    delta="conviene" if valor["neto"] > 0 else "no conviene",
+                    delta_color="normal" if valor["neto"] > 0 else "inverse")
+        cuatro.metric("Neto de bajar un nivel", f"USD {numero(-valor['neto'], 2)}/MT",
+                      delta="conviene" if valor["neto"] < 0 else "no conviene",
+                      delta_color="normal" if valor["neto"] < 0 else "inverse")
+        if medida == "aceite_mt":
+            st.caption("El aceite envasado por turno tiene desfase (se envasa después de procesar): su efecto es más "
+                       "incierto. El aceite removido por los eBOE sale de las muestras de cada turno.")
+    st.info(NOTA_BALANCE)
+    return resultado
+
+
 # ---------------------------------------------------------------- pestaña
 
 def pestana_factores(registro: Descargas) -> None:
@@ -524,6 +613,11 @@ def pestana_factores(registro: Descargas) -> None:
     bloque_modelo(pares_filtrados, registro)
     perdido, comparacion = bloque_aceite_perdido(pares_filtrados, pares_temporadas, toneladas, base, nueva, precios,
                                                  registro)
+    produccion = produccion_planta(planta_id)
+    if filtros.turnos:
+        produccion = produccion[produccion["turno"].isin(filtros.turnos)]
+    balance = bloque_balance(produccion, filtrar(todos, replace(filtros_sin_periodo(filtros), eboes=[], programas=[])),
+                             precios, registro)
 
     with resumen:
         st.subheader("Resumen")

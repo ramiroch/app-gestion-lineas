@@ -51,7 +51,8 @@ def test_tabla_produccion(sesion):
     proceso = Proceso(numero=3, temporada=2025, planta=planta)
     sesion.add_all([planta, turno, proceso,
                     RegistroProduccion(planta=planta, fecha_produccion=date(2025, 7, 1), turno=turno, proceso=proceso,
-                                       fruta_t=300.0, aceite_envasado_kg=1500.0, cargado_por="prueba"),
+                                       fruta_t=300.0, aceite_envasado_kg=1500.0, jugo_conc_kg=24000.0,
+                                       cargado_por="prueba"),
                     RegistroProduccion(planta=planta, fecha_produccion=date(2025, 7, 2), turno=turno,
                                        fruta_t=200.0, cargado_por="prueba")])          # sin proceso ni aceite
     sesion.commit()
@@ -59,6 +60,6 @@ def test_tabla_produccion(sesion):
     tabla = tabla_produccion(sesion, planta.id).sort_values("fecha_produccion", ignore_index=True)
 
     assert tabla[["turno", "temporada", "fruta_t"]].values.tolist()[0] == ["M", 2025, 300.0]
-    assert tabla.loc[0, "aceite_envasado_kg"] == 1500.0
+    assert tabla.loc[0, "aceite_envasado_kg"] == 1500.0 and tabla.loc[0, "jugo_conc_kg"] == 24000.0
     assert pd.isna(tabla.loc[1, "temporada"]) and pd.isna(tabla.loc[1, "aceite_envasado_kg"])
     assert tabla.loc[1, "fecha_produccion"] == pd.Timestamp(2025, 7, 2)

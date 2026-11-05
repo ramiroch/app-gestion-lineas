@@ -5,8 +5,10 @@ import pandas as pd
 import pytest
 
 from core.formato import numero
+from core.programa import numero_programa
 
-from core.factores import (comparar_modelos, frase_r2_modelos, frase_residuo_eboe, residuos_por_eboe,
+from core.factores import (frase_balance, regresion_balance, separar_turnos_balance, turnos_balance, valor_programa,
+                           comparar_modelos, frase_r2_modelos, frase_residuo_eboe, residuos_por_eboe,
                            NOTA_JUSTA, cascada_justa, celdas_justas, comparacion_justa, eboe_peor, frase_justa,
                            grupo_mtph, grupo_programa, preparar_celdas,
                            asignar_cuartil, cortes_cuartiles, esponja_por_cuartil, esponja_por_eboe,
@@ -346,6 +348,62 @@ def test_vif_detecta_colinealidad():
     datos["caudal_fase_pesada"] = datos["tph"] * 0.7 + np.random.default_rng(1).normal(0, 0.05, len(datos))
     vif = modelo_multivariable(datos, "eficiencia_pct")["vif"].set_index("factor")["vif"]
     assert vif["tph"] > 5 and vif["caudal_fase_pesada"] > 5
+
+
+# ---------------------------------------------------------------- balance aceite–jugo
+
+def _balance(n=40):
+    """n turnos: conc. = 80 − 1·programa (kg/MT a 65 °Brix), aceite = 6 + 0,1·programa (kg/MT), 200 MT por turno.
+    Cada turno tiene dos eBOE con el mismo programa; el jugo se registra a 65 °Brix."""
+    rng = np.random.default_rng(7)
+    produccion, pares = [], []
+    for k in range(n):
+        dia, programa = pd.Timestamp("2025-07-01") + pd.Timedelta(days=k), int(rng.integers(1, 9))
+        temporada = 2025 if k < n // 2 else 2026
+        produccion.append({"fecha_produccion": dia, "turno": "M", "proceso_id": 1, "temporada": temporada,
+                           "fruta_t": 200.0, "aceite_envasado_kg": 200 * (6 + 0.1 * programa + rng.normal(0, 0.01)),
+                           "jugo_conc_kg": 200 * (80 - programa + rng.normal(0, 0.1))})
+        for eboe in (1, 2):
+            pares.append(_par(fecha_produccion=dia, turno="M", temporada=temporada, eboe=eboe, programa=f"N{programa}",
+                              n_frutos=int(rng.integers(40, 60))))
+    return pd.DataFrame(produccion), preparar_pares(pd.DataFrame(pares))
+
+
+def test_turnos_y_exclusiones_del_balance():
+    produccion, pares = _balance(3)
+    produccion.loc[1, "jugo_conc_kg"] = 200 * 150.0                      # fuera de rango
+    produccion = pd.concat([produccion, pd.DataFrame([
+        {"fecha_produccion": pd.Timestamp("2025-08-01"), "turno": "T", "temporada": 2025, "fruta_t": 10.0,
+         "aceite_envasado_kg": 60.0, "jugo_conc_kg": 750.0}])], ignore_index=True)      # poca fruta y sin muestras
+    turnos = turnos_balance(produccion, pares, brix_registrado=66.0)
+    fila = turnos.iloc[0]
+    assert fila["eboes"] == 2 and fila["n"] == 2 and fila["programa"] == numero_programa(pares["programa"].iloc[0])
+    assert fila["conc_mt"] == pytest.approx(produccion.loc[0, "jugo_conc_kg"] * 66 / 65 / 200)    # pasado a 65 °Brix
+
+    validos, excluidos = separar_turnos_balance(turnos)
+    assert len(validos) == 2 and len(excluidos) == 2
+    assert excluidos["motivo"].tolist() == ["kg conc. 65 °Brix/MT fuera de 40–130",
+                                            "fruta < 20 MT; sin muestras de los eBOE"]
+
+
+def test_efecto_del_programa_y_calculadora():
+    produccion, pares = _balance()
+    turnos, _ = separar_turnos_balance(turnos_balance(produccion, pares))
+    conc, aceite = regresion_balance(turnos, "conc_mt"), regresion_balance(turnos, "aceite_mt")
+    assert conc["n"] == 40 and conc["efecto"] == pytest.approx(-1.0, abs=0.03) and conc["ic_inf"] < -1 < conc["ic_sup"]
+    assert aceite["efecto"] == pytest.approx(0.1, abs=0.01) and aceite["p"] < 0.001
+    assert regresion_balance(turnos.head(5), "conc_mt")["efecto"] is None
+
+    # +0,1 kg/MT de aceite a 10 USD/kg = +1 USD; −1 kg/MT de concentrado a 2 USD/kg = −2 USD → no conviene
+    valor = valor_programa(0.1, -1.0, 10.0, 2.0)
+    assert (valor["usd_aceite"], valor["usd_jugo"], valor["neto"], valor["equilibrio"]) == pytest.approx((1, -2, -1, 10))
+    assert frase_balance(valor) == (
+        "Con estos precios, subir un nivel de programa suma USD 1,00 por MT en aceite y resta USD 2,00 en jugo: no "
+        "conviene (USD −1,00 por MT de fruta). Conviene subir si el aceite vale más de 10,0 veces el concentrado "
+        "(hoy, 5,0 veces).")
+    assert frase_balance(valor_programa(0.1, -1.0, 30.0, 2.0)).startswith(
+        "Con estos precios, subir un nivel de programa suma USD 3,00 por MT en aceite y resta USD 2,00 en jugo: conviene")
+    assert valor_programa(-0.1, -1.0, 10.0, 2.0)["equilibrio"] is None          # subir no da más aceite
 
 
 # ---------------------------------------------------------------- aceite perdido

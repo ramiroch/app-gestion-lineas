@@ -41,19 +41,21 @@ def toneladas_por_turno(sesion: Session, planta_id: int) -> pd.DataFrame:
     return tabla
 
 
-COLUMNAS_PRODUCCION = ["fecha_produccion", "turno", "proceso_id", "temporada", "fruta_t", "aceite_envasado_kg"]
+COLUMNAS_PRODUCCION = ["fecha_produccion", "turno", "proceso_id", "temporada", "fruta_t", "aceite_envasado_kg",
+                       "jugo_conc_kg"]
 
 
 def tabla_produccion(sesion: Session, planta_id: int) -> pd.DataFrame:
     """Registros de producción de la planta, uno por turno y proceso (carga manual o importada).
 
     Columnas: fecha_produccion (fecha de pandas), turno (nombre), proceso_id, temporada (del proceso;
-    vacía si el registro no tiene proceso), fruta_t (MT de fruta procesada) y aceite_envasado_kg.
+    vacía si el registro no tiene proceso), fruta_t (MT de fruta procesada), aceite_envasado_kg y jugo_conc_kg
+    (kg de jugo concentrado, al °Brix con que los registra la planta).
     Se filtra con core.proceso.filtrar_produccion().
     """
     filas = sesion.execute(
         select(RegistroProduccion.fecha_produccion, Turno.nombre, RegistroProduccion.proceso_id, Proceso.temporada,
-               RegistroProduccion.fruta_t, RegistroProduccion.aceite_envasado_kg)
+               RegistroProduccion.fruta_t, RegistroProduccion.aceite_envasado_kg, RegistroProduccion.jugo_conc_kg)
         .join(Turno, RegistroProduccion.turno_id == Turno.id)
         .outerjoin(Proceso, RegistroProduccion.proceso_id == Proceso.id)
         .where(RegistroProduccion.planta_id == planta_id)).all()

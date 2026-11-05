@@ -25,6 +25,7 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 from core.comparaciones import comparar_grupos
 from core.estadistica import media_ponderada_por_turno
 from core.formato import numero, texto_p
+from core.precios import kg_a_65_brix
 from core.programa import numero_programa
 from core.regresion import regresiones_por_grupo
 
@@ -54,7 +55,8 @@ FACTORES = {
 }
 CATEGORIAS = {"turno": "Turno", "calidad": "Calidad de fruta", "dia_categoria": "Día del proceso"}
 # Orden de las categorías en tablas y gráficos (las que no figuran van al final, en orden alfabético)
-ORDENES = {"turno": ["M", "T", "N"], "calidad": ["Firme", "Blanda", "Partida", "Podrido"]}
+ORDENES = {"turno": ["M", "T", "N"], "calidad": ["Firme", "Blanda", "Partida", "Podrido"],
+           "grupo_programa": ["N0–N3", "N4–N5", "N6–N9"]}
 
 
 # ---------------------------------------------------------------- preparación
@@ -914,6 +916,122 @@ def frase_planta(resultado: dict | None, precio_usd_kg: float | None = None) -> 
             f"{resultado['base']} ({numero(resultado['residual_nueva'], 2)} contra "
             f"{numero(resultado['residual_base'], 2)} kg/MT), {equivale} {numero(abs(resultado['kg']), 0)} kg de "
             f"aceite{ganados}{texto_usd(abs(resultado['kg']), precio_usd_kg)} sobre {numero(resultado['toneladas'], 0)} MT.")
+
+
+# ---------------------------------------------------------------- balance aceite–jugo
+
+FRUTA_MINIMA_TURNO = 20     # MT: turnos con menos fruta no entran en el balance
+# Rangos válidos por turno: fuera de ellos, error de carga o desfase de envasado (columna, mínimo, máximo, nombre)
+RANGOS_BALANCE = [("conc_mt", 40, 130, "kg conc. 65 °Brix/MT"), ("aceite_mt", 1, 15, "aceite envasado/MT"),
+                  ("eficiencia", 0, 100, "eficiencia eBOE")]
+NOTA_BALANCE = ("Datos por turno, con ruido: el jugo depende también del °Brix del concentrado, del desfase de envasado "
+                "y de la in-line. Es un indicio para una prueba controlada, no una conclusión.")
+
+
+def turnos_balance(produccion: pd.DataFrame, pares: pd.DataFrame, brix_registrado: float = 65.0) -> pd.DataFrame:
+    """Una fila por turno de producción con lo que hace falta para el balance aceite–jugo.
+
+    produccion: core.produccion.tabla_produccion() (se suman los procesos del turno). pares: los de la
+    planta (todos los eBOE). programa = promedio de los eBOE en marcha (los que tienen pares en el turno) del
+    programa promedio de cada uno (de la lectura de operación de cada muestra); frutos = frutos en 10 kg
+    promedio; eficiencia = eficiencia eBOE promedio de los pares (%); removido_mt = aceite removido por los eBOE
+    (entrada − salida, kg/MT) promedio de los pares. conc_mt = kg de concentrado a 65 °Brix
+    (core.precios.kg_a_65_brix) / MT de fruta; aceite_mt = aceite envasado (kg) / MT de fruta.
+    Columnas: fecha_produccion, turno, temporada, fruta_t, aceite_kg, jugo_kg, conc_mt, aceite_mt, programa,
+    grupo_programa, frutos, eficiencia, removido_mt, eboes, n.
+    """
+    claves = ["fecha_produccion", "turno"]
+    turnos = (produccion.groupby(claves)
+              .agg(temporada=("temporada", "first"), fruta_t=("fruta_t", lambda s: s.sum(min_count=1)),
+                   aceite_kg=("aceite_envasado_kg", lambda s: s.sum(min_count=1)),
+                   jugo_kg=("jugo_conc_kg", lambda s: s.sum(min_count=1)))
+              .reset_index())
+    por_eboe = pares.groupby([*claves, "eboe"]).agg(programa=("programa_num", "mean"), temporada=("temporada", "first"))
+    muestras = (pares.groupby(claves)
+                .agg(frutos=("frutos_10kg", "mean"), eficiencia=("eficiencia_pct", "mean"),
+                     removido_mt=("removido", "mean"), n=("eficiencia_pct", "size"),
+                     eboes=("eboe", "nunique"), temporada_pares=("temporada", "first"))
+                .join(por_eboe.groupby(claves)["programa"].mean()).reset_index())
+    turnos = turnos.merge(muestras, on=claves, how="left")
+    turnos["temporada"] = turnos["temporada"].fillna(turnos.pop("temporada_pares"))
+    fruta = turnos["fruta_t"].where(turnos["fruta_t"] > 0)
+    turnos["conc_mt"] = kg_a_65_brix(turnos["jugo_kg"], brix_registrado) / fruta
+    turnos["aceite_mt"] = turnos["aceite_kg"] / fruta
+    turnos["grupo_programa"] = turnos["programa"].round().map(grupo_programa)
+    return turnos[["fecha_produccion", "turno", "temporada", "fruta_t", "aceite_kg", "jugo_kg", "conc_mt", "aceite_mt",
+                   "programa", "grupo_programa", "frutos", "eficiencia", "removido_mt", "eboes", "n"]]
+
+
+def separar_turnos_balance(turnos: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(turnos válidos, turnos excluidos con su motivo).
+
+    Se excluyen los turnos con menos de FRUTA_MINIMA_TURNO MT de fruta, sin muestras de los eBOE (sin
+    programa) o con algún valor fuera de RANGOS_BALANCE. Un dato vacío (por ejemplo, sin jugo cargado) no
+    excluye el turno: solo no entra en ese análisis.
+    """
+    motivos = pd.Series("", index=turnos.index)
+    motivos[~(turnos["fruta_t"] >= FRUTA_MINIMA_TURNO)] += f"fruta < {FRUTA_MINIMA_TURNO} MT; "
+    motivos[turnos["programa"].isna()] += "sin muestras de los eBOE; "
+    for columna, minimo, maximo, nombre in RANGOS_BALANCE:
+        fuera = turnos[columna].notna() & ~turnos[columna].between(minimo, maximo)
+        motivos[fuera] += f"{nombre} fuera de {numero(minimo, 0)}–{numero(maximo, 0)}; "
+    excluido = motivos != ""
+    return (turnos[~excluido].reset_index(drop=True),
+            turnos[excluido].assign(motivo=motivos[excluido].str.rstrip("; ")).reset_index(drop=True))
+
+
+def regresion_balance(turnos: pd.DataFrame, variable: str, alfa: float = ALFA) -> dict:
+    """Regresión por turno de `variable` (conc_mt, aceite_mt o removido_mt) con programa, calibre y temporada.
+
+    variable = b0 + b·programa + c·frutos + temporada (categoría; sale si hay una sola). efecto = b, lo que
+    cambia la variable por +1 nivel de programa con el calibre y la temporada fijos, con IC 1 − alfa y p.
+    Devuelve n, r2, efecto, ic_inf, ic_sup y p (vacíos si hay menos de 10 turnos).
+    """
+    datos = turnos.dropna(subset=[variable, "programa", "frutos", "temporada"]).copy()
+    resultado = {"variable": variable, "n": len(datos), "r2": None, "efecto": None, "ic_inf": None, "ic_sup": None,
+                 "p": None}
+    if len(datos) < 10 or datos["programa"].nunique() < 2:
+        return resultado
+    datos["temporada"] = datos["temporada"].astype(int).astype(str)
+    formula = f"{variable} ~ programa + frutos" + (" + C(temporada)" if datos["temporada"].nunique() > 1 else "")
+    modelo = smf.ols(formula, data=datos).fit()
+    ic = modelo.conf_int(alfa).loc["programa"]
+    resultado.update(r2=float(modelo.rsquared), efecto=float(modelo.params["programa"]), ic_inf=float(ic[0]),
+                     ic_sup=float(ic[1]), p=float(modelo.pvalues["programa"]))
+    return resultado
+
+
+def valor_programa(efecto_aceite: float, efecto_conc: float, precio_aceite: float, precio_jugo: float) -> dict:
+    """Valor por MT de fruta de subir un nivel de programa (bajar uno es lo mismo con el signo cambiado).
+
+    efecto_aceite y efecto_conc: kg/MT por +1 nivel (regresion_balance()); precios en USD/kg.
+    usd_aceite = efecto_aceite × precio del aceite; usd_jugo = efecto_conc × precio del concentrado;
+    neto = usd_aceite + usd_jugo (USD/MT). Relación de equilibrio (aceite/concentrado) = −efecto_conc /
+    efecto_aceite: si el aceite vale más que esa cantidad de veces el concentrado, conviene subir (solo
+    cuando subir da más aceite y menos jugo; si no, vacía). relacion_actual = precio aceite / precio jugo.
+    """
+    usd_aceite, usd_jugo = efecto_aceite * precio_aceite, efecto_conc * precio_jugo
+    equilibrio = -efecto_conc / efecto_aceite if efecto_aceite > 0 and efecto_conc < 0 else None
+    return {"usd_aceite": usd_aceite, "usd_jugo": usd_jugo, "neto": usd_aceite + usd_jugo,
+            "equilibrio": equilibrio, "relacion_actual": precio_aceite / precio_jugo}
+
+
+def frase_balance(valor: dict) -> str:
+    """Ejemplo: "Con estos precios, subir un nivel de programa suma USD 0,95 por MT en aceite y resta USD 1,40 en
+    jugo: no conviene (USD −0,45 por MT). Conviene subir si el aceite vale más de 6,2 veces el concentrado (hoy,
+    4,8 veces)."
+    """
+    def parte(usd):
+        return f"{'suma' if usd >= 0 else 'resta'} USD {numero(abs(usd), 2)}"
+
+    neto = valor["neto"]
+    texto = (f"Con estos precios, subir un nivel de programa {parte(valor['usd_aceite'])} por MT en aceite y "
+             f"{parte(valor['usd_jugo'])} en jugo: {'conviene' if neto > 0 else 'no conviene'} "
+             f"(USD {'+' if neto >= 0 else '−'}{numero(abs(neto), 2)} por MT de fruta).")
+    if valor["equilibrio"] is not None:
+        texto += (f" Conviene subir si el aceite vale más de {numero(valor['equilibrio'], 1)} veces el concentrado "
+                  f"(hoy, {numero(valor['relacion_actual'], 1)} veces).")
+    return texto
 
 
 # ---------------------------------------------------------------- resumen
