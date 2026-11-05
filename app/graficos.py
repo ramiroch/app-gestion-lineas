@@ -14,7 +14,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from core.estadistica import ancho_de_clase, cuartiles, curva_normal, es_outlier_iqr, limites_iqr, resumen_descriptivo
-from core.formato import numero
+from core.formato import numero, texto_p
+from core.laboratorio import DIAS_MISMA_NORMALIDAD
 from core.programa import numero_programa
 from core.regresion import recta
 
@@ -172,11 +173,13 @@ def boxplot_temporadas(datos: pd.DataFrame, variable: str, titulo_y: str, unidad
     return estilo(figura, ALTURA_CHICA)
 
 
-def intervalos(medias: pd.DataFrame, titulo_y: str, unidad: str, decimales: int = 2) -> go.Figure:
+def intervalos(medias: pd.DataFrame, titulo_y: str, unidad: str, decimales: int = 2,
+               titulo_x: str = "Temporada", titulo: str = "Media e IC del 95 %") -> go.Figure:
     """Gráfico de intervalos como el de Minitab: la media de cada grupo con su IC del 95 %.
 
     medias es la tabla "medias" de core.comparaciones.comparar_grupos (grupo, n, media,
-    ic_inf, ic_sup). Las medias no se unen con líneas: cada grupo es independiente.
+    ic_inf, ic_sup), o una con esas columnas. Las medias no se unen con líneas: cada grupo es
+    independiente. titulo_x: qué son los grupos (temporada, analista…).
     """
     figura = go.Figure(go.Scatter(
         x=medias["grupo"], y=medias["media"], mode="markers",
@@ -185,11 +188,11 @@ def intervalos(medias: pd.DataFrame, titulo_y: str, unidad: str, decimales: int 
                      arrayminus=medias["media"] - medias["ic_inf"], color=COLOR_DATOS, thickness=2, width=14),
         customdata=list(zip(*(medias[c].map(lambda v: numero(v, decimales)) for c in ("media", "ic_inf", "ic_sup")),
                             medias["n"].map(lambda n: numero(n, 0)))),
-        hovertemplate=f"<b>Temporada %{{x}}</b><br>Media %{{customdata[0]}} {unidad}<br>"
+        hovertemplate=f"<b>{titulo_x} %{{x}}</b><br>Media %{{customdata[0]}} {unidad}<br>"
                       f"IC 95 %: %{{customdata[1]}} a %{{customdata[2]}} {unidad}<br>N %{{customdata[3]}}<extra></extra>",
         showlegend=False))
-    figura.update_layout(yaxis_title=titulo_y, xaxis=dict(type="category", title="Temporada"),
-                         title=dict(text="Media e IC del 95 %", font_size=14))
+    figura.update_layout(yaxis_title=titulo_y, xaxis=dict(type="category", title=titulo_x),
+                         title=dict(text=titulo, font_size=14))
     return estilo(figura, ALTURA_CHICA)
 
 
@@ -539,4 +542,147 @@ def carta_control(tabla: pd.DataFrame, tipo: str, dispersion: str, titulo_y: str
     figura.update_yaxes(title_text=f"{dispersion} ({unidad})", rangemode="tozero", row=2, col=1)
     estilo(figura, ALTURA_CARTA)
     figura.update_layout(margin=dict(t=60, b=10, l=10, r=125), legend=dict(y=1.06), hovermode="closest")
+    return figura
+
+
+# ---------------------------------------------------------------- confiabilidad del laboratorio
+
+# Divergente para "más o menos de lo esperado": azul (menos) – gris claro (lo esperado) – rojo (más).
+ESCALA_DIVERGENTE = [[0, "#2a78d6"], [0.5, "#f2f2f2"], [1, "#e34948"]]
+
+
+def marcar_protocolo(figura: go.Figure, rangos: dict, unidad: str = "g") -> go.Figure:
+    """Agrega al histograma el rango del protocolo de cada lugar: líneas punteadas de su color."""
+    for posicion, (lugar, (minimo, maximo)) in enumerate(rangos.items()):
+        color = COLORES.get(lugar, GRIS)
+        for limite in (minimo, maximo):
+            figura.add_vline(x=limite, line=dict(color=color, width=1.5, dash="dot"))
+        figura.add_annotation(x=(minimo + maximo) / 2, y=1 - 0.09 * posicion, xref="x", yref="paper",
+                              text=f"Protocolo {lugar.lower()}<br>{numero(minimo, 1)}–{numero(maximo, 1)} {unidad}",
+                              showarrow=False, font=dict(size=10, color=color), yanchor="top")
+    return figura
+
+
+def boxplot_por_analista(datos: pd.DataFrame, variable: str, titulo_y: str, unidad: str,
+                         decimales: int = 2) -> go.Figure:
+    """Boxplot de una variable por analista, con Entrada y Salida lado a lado."""
+    figura = go.Figure()
+    for lugar in LUGARES:
+        _cajas(figura, datos[datos["lugar"] == lugar], variable, "analista", str, lugar, COLORES[lugar], unidad,
+               decimales, offsetgroup=lugar)
+    figura.update_layout(boxmode="group", scattermode="group", yaxis_title=titulo_y,
+                         xaxis=dict(type="category", title="Analista", categoryorder="category ascending"))
+    return estilo(figura)
+
+
+def mapa_digitos(tabla: pd.DataFrame, titulo: str) -> go.Figure:
+    """Mapa de calor analista × dígito con el % de veces que se anotó cada dígito (esperado: 10 %).
+
+    tabla: core.laboratorio.preferencia_digitos(). Rojo = más de lo esperado, azul = menos; el N y
+    el valor p del chi² de cada analista van en la etiqueta de la fila.
+    """
+    porcentajes = tabla[[f"pct_{d}" for d in range(10)]].to_numpy(dtype=float)
+    filas = [f"{g} (N {numero(n, 0)}, {'sin prueba' if pd.isna(p) else texto_p(p)})"
+             for g, n, p in zip(tabla["grupo"], tabla["n"], tabla["p"])]
+    desvio = max(5.0, float(np.nanmax(np.abs(porcentajes - 10)))) if porcentajes.size else 5.0
+    figura = go.Figure(go.Heatmap(
+        z=porcentajes, x=[str(d) for d in range(10)], y=filas, zmid=10, zmin=10 - desvio, zmax=10 + desvio,
+        colorscale=ESCALA_DIVERGENTE, xgap=2, ygap=2,
+        text=[[numero(v, 1) for v in fila] for fila in porcentajes], texttemplate="%{text}",
+        textfont=dict(size=11), colorbar=dict(title="%", thickness=12),
+        hovertemplate="<b>%{y}</b><br>Dígito %{x}: %{text} % (esperado 10 %)<extra></extra>"))
+    figura.update_layout(title=dict(text=titulo, font_size=14), xaxis_title="Dígito",
+                         yaxis=dict(autorange="reversed"))
+    return estilo(figura, 120 + 40 * max(len(filas), 1))
+
+
+def grafico_normalidad(tabla: pd.DataFrame, periodos: pd.DataFrame, titulo_y: str, decimales: int = 4) -> go.Figure:
+    """Carta I-MR de la normalidad por día de producción, con los períodos largos sombreados.
+
+    tabla: core.laboratorio.carta_normalidad() (un renglón por día, con fecha_produccion y n); periodos:
+    core.laboratorio.periodos_misma_normalidad() (se sombrean los que tienen largo = True).
+    """
+    figura = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.07, row_heights=[0.63, 0.37])
+    x = np.arange(1, len(tabla) + 1)
+    textos = [f"<b>{f:%d/%m/%Y}</b><br>Normalidad {numero(v, decimales)} N<br>MR {numero(mr, decimales)}<br>"
+              f"{n} muestras" for f, v, mr, n in zip(tabla["fecha_produccion"], tabla["valor"], tabla["disp"], tabla["n"])]
+    for panel, columna, prefijo in ((1, "valor", ""), (2, "disp", "disp_")):
+        figura.add_scatter(x=x, y=tabla[columna], mode="lines+markers" if panel == 1 else "markers",
+                           name="Normalidad del día", showlegend=panel == 1, line=dict(color=COLOR_DATOS, width=1),
+                           marker=dict(color=COLOR_DATOS, size=4), text=textos, hovertemplate="%{text}<extra></extra>",
+                           row=panel, col=1)
+        _limites(figura, x, tabla, prefijo, panel, panel == 1)
+        fuera = (tabla["reglas"].map(bool) if panel == 1 else tabla["fuera_disp"]).to_numpy(dtype=bool)
+        figura.add_scatter(x=x[fuera], y=tabla[columna].to_numpy()[fuera], mode="markers",
+                           name="Fuera de límites", legendgroup="fuera", showlegend=panel == 1 and bool(fuera.any()),
+                           marker=dict(color=COLOR_REGLA_1, symbol="square", size=8, line=dict(color="white", width=1)),
+                           text=[t for t, s in zip(textos, fuera) if s], hovertemplate="%{text}<extra></extra>",
+                           row=panel, col=1)
+    _etiquetas_limites(figura, tabla, "", "y", "I", decimales)
+    _etiquetas_limites(figura, tabla, "disp_", "y2", "MR̄", decimales)
+    largos = periodos[periodos["largo"]]
+    for periodo in largos.to_dict("records"):
+        figura.add_vrect(x0=periodo["primero"] + 0.5, x1=periodo["ultimo"] + 1.5, fillcolor=COLOR_OTRAS_REGLAS,
+                         opacity=0.18, line_width=0, layer="below", row="all", col=1)
+        figura.add_annotation(x=(periodo["primero"] + periodo["ultimo"]) / 2 + 1, y=1, xref="x", yref="paper",
+                              yanchor="bottom", text=f"{periodo['dias']} días", showarrow=False,
+                              font=dict(size=10, color="#a35f00"))
+    if not largos.empty:    # entrada en la leyenda para la franja
+        figura.add_scatter(x=[None], y=[None], mode="markers", name=f"Misma normalidad más de {DIAS_MISMA_NORMALIDAD} días",
+                           marker=dict(symbol="square", size=12, color=COLOR_OTRAS_REGLAS, opacity=0.4), row=1, col=1)
+    if not tabla.empty:     # fechas en el eje X (unas 12 marcas)
+        paso = max(1, len(tabla) // 12)
+        figura.update_xaxes(tickvals=x[::paso], ticktext=[f"{f:%d/%m/%y}" for f in tabla["fecha_produccion"].iloc[::paso]],
+                            row=2, col=1)
+    figura.update_xaxes(title_text="Día de producción (solo días con datos)", row=2, col=1)
+    figura.update_yaxes(title_text=titulo_y, tickformat=f".{decimales}f", row=1, col=1)
+    figura.update_yaxes(title_text="MR", tickformat=f".{decimales}f", rangemode="tozero", row=2, col=1)
+    estilo(figura, 520)
+    figura.update_layout(margin=dict(t=70, b=10, l=10, r=110), legend=dict(y=1.1), hovermode="closest")
+    return figura
+
+
+def dispersion_por_lugar(datos: pd.DataFrame, x: str, y: str, regresiones: pd.DataFrame, titulo_x: str,
+                         titulo_y: str, unidad_y: str, dec_x: int = 2, dec_y: int = 2) -> go.Figure:
+    """Dispersión de y vs x con un panel por lugar (Entrada, Salida), cada uno con su eje Y y su recta.
+
+    regresiones: core.laboratorio.gramaje_vs_resultado() (lugar y las columnas de regresion_lineal()).
+    """
+    datos = datos.dropna(subset=[x, y])
+    regs = {f["lugar"]: f for f in regresiones.to_dict("records")}
+
+    def titulo(lugar):
+        reg = regs.get(lugar)
+        if reg is None or pd.isna(reg["r2"]):
+            return lugar
+        return f"{lugar} · R² {numero(reg['r2'], 2)} · {texto_p(reg['p'])} · N {numero(reg['n'], 0)}"
+
+    figura = make_subplots(rows=1, cols=2, subplot_titles=[titulo(l) for l in LUGARES], horizontal_spacing=0.08)
+    for columna, lugar in enumerate(LUGARES, start=1):
+        sub = datos[datos["lugar"] == lugar]
+        if sub.empty:
+            continue
+        figura.add_scatter(
+            row=1, col=columna, x=sub[x], y=sub[y], mode="markers", name=lugar, showlegend=False,
+            marker=dict(color=COLORES[lugar], size=5, opacity=0.3),
+            customdata=list(zip(sub["fecha_hora"].dt.strftime("%d/%m/%Y %H:%M"), sub["eboe"],
+                                sub["analista"].fillna("—"), sub[x].map(lambda v: numero(v, dec_x)),
+                                sub[y].map(lambda v: numero(v, dec_y)))),
+            hovertemplate=f"<b>{lugar} · eBOE %{{customdata[1]}}</b><br>%{{customdata[0]}} · %{{customdata[2]}}"
+                          f"<br>{titulo_x}: %{{customdata[3]}}<br>{titulo_y}: %{{customdata[4]}}<extra></extra>")
+        reg = regs.get(lugar)
+        if reg is not None and not pd.isna(reg["pendiente"]):
+            extremos = [sub[x].min(), sub[x].max()]
+            valores = recta(reg, extremos)
+            figura.add_scatter(row=1, col=columna, x=extremos, y=valores, mode="lines", showlegend=False,
+                               line=dict(color="white", width=6), hoverinfo="skip")
+            figura.add_scatter(row=1, col=columna, x=extremos, y=valores, mode="lines", showlegend=False,
+                               line=dict(color=COLOR_DATOS, width=2.5),
+                               hovertemplate=f"<b>Recta {lugar.lower()}</b><br>Pendiente "
+                                             f"{numero(reg['pendiente'], 3)} {unidad_y} por g<extra></extra>")
+        figura.update_xaxes(title_text=titulo_x, row=1, col=columna)
+        figura.update_yaxes(title_text=titulo_y, row=1, col=columna)
+    figura.update_annotations(font_size=12)
+    estilo(figura)
+    figura.update_layout(margin=dict(t=60))
     return figura

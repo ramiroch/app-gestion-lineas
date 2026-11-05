@@ -22,7 +22,7 @@ TIPO_EBOE = "BOE"
 LUGARES = {"fruta entrada": "Entrada", "fruta salida": "Salida"}
 COLUMNAS = ["analisis_id", "fecha_hora", "fecha_produccion", "turno", "temporada", "proceso_id",
             "proceso", "eboe", "lugar", "analista", "aceite_fruta", "eficiencia_par", "programa", "tph",
-            "caudal_fase_pesada", "rallado"]
+            "caudal_fase_pesada", "rallado", "peso_muestra_g", "vol_ml", "blanco_ml", "normalidad"]
 TIPO_EMULSION = "emulsión"
 COLUMNAS_EMULSION = ["analisis_id", "fecha_hora", "fecha_produccion", "turno", "temporada", "proceso_id",
                      "proceso", "eboe", "analista", "aceite_emulsion", "brix", "ph", "programa", "tph",
@@ -102,13 +102,16 @@ def tabla_analisis(sesion: Session, planta_id: int) -> pd.DataFrame:
     registra en la Salida: Ok, Poco rallada, Sobre rallada); eficiencia_par
     (fracción) va en las dos filas del par entrada/salida del mismo eBOE y la misma
     fecha_hora, y queda vacía si falta una de las dos; programa y tph salen de la lectura
-    de operación del mismo eBOE y fecha_hora (si la hay).
+    de operación del mismo eBOE y fecha_hora (si la hay). Los datos crudos de la titulación
+    (peso_muestra_g, vol_ml, blanco_ml, normalidad) van tal como se cargaron, para la página de laboratorio.
     """
     planta, filas = _leer(sesion, planta_id, LUGARES)
     for fila in filas:
         a = fila.pop("_analisis")
         fila["lugar"] = LUGARES[a.punto_muestreo.tipo]
         fila["rallado"] = a.rallado
+        fila["peso_muestra_g"], fila["vol_ml"] = a.peso_muestra_g, a.vol_ml
+        fila["blanco_ml"], fila["normalidad"] = a.blanco_ml, a.normalidad
         fila["aceite_fruta"] = aceite_en_fruta(planta, a.vol_ml, a.blanco_ml, a.normalidad, a.peso_muestra_g)
     tabla = _a_tabla(filas, COLUMNAS)
     tabla["eficiencia_par"] = _eficiencias_de_pares(tabla)
