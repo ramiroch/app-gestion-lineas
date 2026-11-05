@@ -784,11 +784,12 @@ COLOR_MEJORA = "#1baf7a"
 
 def columnas_agrupadas(tabla: pd.DataFrame, x: str, grupo: str, y: str, titulo_y: str, unidad: str,
                        decimales: int = 1, panel: str | None = None, nombres_grupo: dict | None = None,
-                       titulo_x: str = "", rango_y: list | None = None) -> go.Figure:
+                       titulo_x: str = "", rango_y: list | None = None, etiquetas: bool = True) -> go.Figure:
     """Columnas agrupadas: una categoría por x y un color por grupo (orden fijo de la paleta).
 
     tabla tiene las columnas x, grupo, y y n (N en el tooltip; N < 3 tenue y con aviso). panel: columna
     para separar en paneles lado a lado (mismo eje Y). nombres_grupo: {valor: nombre en la leyenda}.
+    etiquetas=False saca el valor arriba de cada columna (con muchas columnas se pisan; queda el tooltip).
     """
     paneles = sorted(tabla[panel].unique()) if panel else [None]
     figura = make_subplots(rows=1, cols=len(paneles), shared_yaxes=True, horizontal_spacing=0.04,
@@ -808,7 +809,8 @@ def columnas_agrupadas(tabla: pd.DataFrame, x: str, grupo: str, y: str, titulo_y
                 showlegend=columna == 1, offsetgroup=str(k),
                 marker=dict(color=PALETA[k % len(PALETA)], opacity=[0.3 if c else 1 for c in chicos],
                             line=dict(color="white", width=1)),
-                text=sub[y].map(lambda v: numero(v, decimales)), textposition="outside", cliponaxis=False,
+                text=sub[y].map(lambda v: numero(v, decimales)) if etiquetas else None, textposition="outside",
+                cliponaxis=False,
                 textfont=dict(size=10),
                 customdata=list(zip(sub["n"].map(lambda v: numero(v, 0)),
                                     ["<br><b>⚠ N < 3: poco representativo</b>" if c else "" for c in chicos],
@@ -918,3 +920,19 @@ def barras_importancia(importancia: pd.DataFrame, sin_explicar: float, titulo: s
                                           f"{numero(sin_explicar, 0)} %)", range=[0, datos["pct"].max() * 1.2]),
                          yaxis=dict(title=""))
     return estilo(figura, 120 + 32 * len(datos))
+
+
+# ---------------------------------------------------------------- operación (PLC)
+
+def lineas_por_eboe(tabla: pd.DataFrame, x: str, y: str, titulo_y: str, unidad: str, decimales: int = 0,
+                    titulo_x: str = "") -> go.Figure:
+    """Una línea por eBOE (color fijo de la paleta por número de eBOE), por ejemplo el horómetro por día."""
+    figura = go.Figure()
+    for eboe, sub in tabla.sort_values(x).groupby("eboe", sort=True):
+        figura.add_scatter(
+            x=sub[x], y=sub[y], mode="lines", name=f"eBOE {eboe}", line=dict(color=PALETA[(int(eboe) - 1) % len(PALETA)],
+                                                                             width=2),
+            customdata=sub[y].map(lambda v: numero(v, decimales)),
+            hovertemplate=f"<b>eBOE {eboe}</b> · %{{x|%d/%m/%Y}}<br>{titulo_y}: %{{customdata}} {unidad}<extra></extra>")
+    figura.update_layout(yaxis_title=titulo_y, xaxis=dict(title=titulo_x, tickformat="%d/%m/%y"), hovermode="x unified")
+    return estilo(figura)

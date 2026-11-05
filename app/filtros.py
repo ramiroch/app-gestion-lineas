@@ -19,6 +19,9 @@ from core.analisis import (ATAJO_PERSONALIZADO, Filtros, atajos, filtrar, opcion
 from core.consultas import listar_clientes, listar_plantas, rango_referencia
 from core.db import crear_motor, crear_sesion
 from core.produccion import tabla_produccion, toneladas_por_turno
+from core.models import Planta
+from core.operacion import lecturas_plc, preparar_plc
+from core.parametros import validar_parametros
 
 PLANTA_POR_DEFECTO = "LEDESMA"
 CLAVE = "filtros"
@@ -65,6 +68,24 @@ def produccion_planta(planta_id: int):
         return tabla_produccion(sesion, planta_id)
 
 
+@st.cache_data(ttl=600, show_spinner="Leyendo los datos del PLC…")
+def plc_planta(planta_id: int):
+    """Lecturas del PLC de los eBOE de la planta, con horómetro, duración, día de producción y turno
+    (core.operacion.preparar_plc), en caché 10 minutos. Vacía si no hay datos del PLC."""
+    with crear_sesion(motor()) as sesion:
+        plc = lecturas_plc(sesion, planta_id)
+        if plc.empty:
+            return plc
+        return preparar_plc(plc, sesion.get(Planta, planta_id))
+
+
+@st.cache_data(ttl=600)
+def hora_inicio_planta(planta_id: int):
+    """Hora de inicio del día de producción de la planta (parámetro hora_inicio_dia)."""
+    with crear_sesion(motor()) as sesion:
+        return validar_parametros(sesion.get(Planta, planta_id), ["hora_inicio_dia"])["hora_inicio_dia"]
+
+
 @st.cache_data(ttl=600)
 def rango_planta(planta_id: int, variable: str) -> dict | None:
     """Rango de referencia (objetivo) de una variable de la planta, en caché 10 minutos."""
@@ -103,6 +124,7 @@ def _recargar() -> None:
     tabla_planta.clear()
     tabla_emulsion_planta.clear()
     toneladas_planta.clear()
+    plc_planta.clear()
     produccion_planta.clear()
     rango_planta.clear()
     plantas.clear()
