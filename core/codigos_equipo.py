@@ -41,6 +41,9 @@ ABREVIATURAS_TIPO = {
     "Extractor de prueba": "EXT",
     "Multivane": "MUL",
     "Panel HMI": "HMI",
+    "Centrífuga primaria": "CEN",
+    "Centrífuga secundaria": "CSE",
+    "Pulidora": "PUL",
 }
 
 

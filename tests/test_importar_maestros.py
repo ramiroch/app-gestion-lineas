@@ -23,9 +23,9 @@ PLANILLA_BASE = {
     ],
     "Planta": [
         ["cliente", "nombre", "pais", "blanco_ml", "factor_aceite_fruta",
-         "factor_aceite_emulsion", "hora_inicio_dia", "observaciones", "sigla"],
-        ["CLIENTE A", "Planta Norte", "Argentina", 0.3, 68.0, 3.4, time(6, 0), "nota", "NOR"],
-        ["CLIENTE B", "Planta Sur", "Uruguay", None, None, None, None, None, "SUR"],
+         "factor_aceite_emulsion", "hora_inicio_dia", "observaciones", "sigla", "blanco_centrifugas_ml"],
+        ["CLIENTE A", "Planta Norte", "Argentina", 0.3, 68.0, 3.4, time(6, 0), "nota", "NOR", 0.1],
+        ["CLIENTE B", "Planta Sur", "Uruguay", None, None, None, None, None, "SUR", None],
     ],
     "Turno": [
         ["cliente", "planta", "nombre", "hora_inicio", "hora_fin"],
@@ -201,9 +201,10 @@ def test_celdas_vacias_quedan_vacias(sesion, datos, tmp_path):
 
     norte = sesion.scalars(select(Planta).where(Planta.nombre == "Planta Norte")).one()
     sur = sesion.scalars(select(Planta).where(Planta.nombre == "Planta Sur")).one()
-    assert (norte.blanco_ml, norte.factor_aceite_fruta, norte.hora_inicio_dia) == (0.3, 68.0, time(6, 0))
+    assert (norte.blanco_ml, norte.factor_aceite_fruta, norte.hora_inicio_dia,
+            norte.blanco_centrifugas_ml) == (0.3, 68.0, time(6, 0), 0.1)
     assert (sur.blanco_ml, sur.factor_aceite_fruta, sur.factor_aceite_emulsion,
-            sur.hora_inicio_dia) == (None, None, None, None)   # vacíos en la planilla
+            sur.hora_inicio_dia, sur.blanco_centrifugas_ml) == (None, None, None, None, None)   # vacíos
 
     jex = equipo_por_codigo(sesion, "SUR-JEX-01")
     assert jex.codigo_activo_mc is None

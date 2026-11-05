@@ -33,7 +33,7 @@ Sistema de gestión para las líneas de aceite y jugo de los clientes de Brown. 
 ### Datos maestros
 - Única fuente: `data/maestros_clientes.xlsx`. Se cargan con `python -m core.importar_maestros` (se puede correr muchas veces; las filas con error van a `data/reporte_maestros.csv`).
 - Cada equipo se identifica por su `codigo` (SIGLA_PLANTA-TIPO-NN, por ejemplo LED-BOE-01), único y que **nunca cambia**.
-- **Parámetros de cálculo de la planta** (blanco_ml, factor_aceite_fruta, factor_aceite_emulsion, hora_inicio_dia): opcionales y **sin valor por defecto**. Lo que está vacío en la planilla queda vacío en la base y la pantalla lo muestra como "a definir". Los cálculos los leen **siempre** con `core.parametros.parametros_planta()` (o `validar_parametros()` si ya tienen la planta), pidiendo solo los que necesitan; dan un error claro si falta alguno. Nunca uses los valores de LEDESMA para otra planta.
+- **Parámetros de cálculo de la planta** (blanco_ml, factor_aceite_fruta, factor_aceite_emulsion, hora_inicio_dia, blanco_centrifugas_ml): opcionales y **sin valor por defecto**. Lo que está vacío en la planilla queda vacío en la base y la pantalla lo muestra como "a definir". Los cálculos los leen **siempre** con `core.parametros.parametros_planta()` (o `validar_parametros()` si ya tienen la planta), pidiendo solo los que necesitan; dan un error claro si falta alguno. Nunca uses los valores de LEDESMA para otra planta.
 - **Turnos** (hoja Turno): turno y día de producción se calculan con `core.turnos.turno_de()` y `fecha_produccion()`, nunca se guardan. El turno N cruza la medianoche.
 
 ## Stack (versión 0, local)
@@ -107,6 +107,7 @@ CAF = kg de aceite por tonelada de fruta a la salida del BOE (menor es mejor).
 .venv\Scripts\activate          # activar el entorno (Windows)
 pip install -r requirements.txt
 pip install -e .                # instala el proyecto (core/) en modo editable; una sola vez
+python -m core.crear_base         # crea las tablas nuevas y agrega las columnas nuevas (antes, copiá data/app.db a data/respaldos/)
 python -m core.importar_maestros  # carga los datos maestros desde data/maestros_clientes.xlsx
 python -m core.importar_ledesma   # carga el histórico de LEDESMA (hojas BOE y Resumen)
 python -m core.importar_plc       # carga los CSV del PLC de los eBOE (data/plc/ o la carpeta que se pase)

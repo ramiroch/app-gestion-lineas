@@ -3,13 +3,13 @@
 from datetime import date, datetime, time
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import inspect, select, text
 from sqlalchemy.exc import IntegrityError
 
-from core.crear_base import crear_tablas
+from core.crear_base import agregar_columnas_nuevas, crear_tablas
 from core.db import crear_motor, crear_sesion
-from core.models import (AnalisisScott, Cliente, Equipo, LecturaOperacion, LecturaPLC, Linea, Planta,
-                         Proceso, PuntoMuestreo, RegistroProduccion, Turno, texto_origen)
+from core.models import (AnalisisScott, Cliente, Equipo, LecturaOperacion, LecturaPLC, Linea, MuestraCentrifuga,
+                         Planta, Proceso, PuntoMuestreo, RegistroProduccion, Turno, texto_origen)
 
 TIPOS_PUNTO = ["fruta entrada", "fruta salida", "emulsión"]
 
@@ -366,3 +366,68 @@ def test_lectura_plc_valida_elevador_y_negativos():
         LecturaPLC(elevador=2)
     with pytest.raises(ValueError, match="no puede ser negativo"):
         LecturaPLC(ton_calculadas=-1.0)
+
+
+def _primaria(sesion):
+    planta = crear_ledesma(sesion)
+    equipo = Equipo(codigo="LED-CEN-01", nombre="ESE 230 (1)", tipo="Centrífuga primaria", numero=1,
+                    linea=planta.lineas[0])
+    sesion.add(equipo)
+    return equipo
+
+
+def test_muestra_centrifuga_guarda_datos_crudos_y_es_unica_por_equipo_hora_y_fase(sesion):
+    equipo = _primaria(sesion)
+    momento = datetime(2025, 6, 24, 14, 30)
+    sesion.add_all([
+        MuestraCentrifuga(equipo=equipo, fecha_hora=momento, fase="emulsion", caudal_lh=13000, gramos=3.504,
+                          ml=6.54, normalidad=0.0996, blanco_ml=0.1, solidos_pct=0.5, analista="Bulegio",
+                          operador="Escudero", fruta="N Val S/R", cargado_por="prueba",
+                          origen=texto_origen("CENTRIGUGAS Naranja 25 2.xlsx", "Datos", 3)),
+        MuestraCentrifuga(equipo=equipo, fecha_hora=momento, fase="fase_liviana", aceite_pct_medido=72,
+                          cp_liviana_bar=0.8, cargado_por="prueba"),
+    ])
+    sesion.commit()
+    emulsion = sesion.scalars(select(MuestraCentrifuga).where(MuestraCentrifuga.fase == "emulsion")).one()
+    assert (emulsion.gramos, emulsion.ml, emulsion.blanco_ml, emulsion.equipo.codigo) == (3.504, 6.54, 0.1,
+                                                                                         "LED-CEN-01")
+    assert emulsion.origen == "CENTRIGUGAS Naranja 25 2.xlsx › Datos › fila 3"
+    liviana = sesion.scalars(select(MuestraCentrifuga).where(MuestraCentrifuga.fase == "fase_liviana")).one()
+    assert (liviana.aceite_pct_medido, liviana.caudal_lh, liviana.proceso) == (72, None, None)
+
+    sesion.add(MuestraCentrifuga(equipo=equipo, fecha_hora=momento, fase="emulsion", cargado_por="prueba"))
+    with pytest.raises(IntegrityError):
+        sesion.commit()
+
+
+@pytest.mark.parametrize("campo, valor, mensaje", [
+    ("fase", "Emulsion", "no válida"),                 # la fase llega ya normalizada
+    ("gramos", 0, "mayor que 0"),
+    ("normalidad", -0.1, "mayor que 0"),
+    ("ml", -1, "no puede ser negativo"),
+    ("caudal_lh", -5, "no puede ser negativo"),
+    ("t_descarga_s", -1, "no puede ser negativo"),
+    ("solidos_pct", 101, "entre 0 y 100"),
+    ("aceite_pct_medido", -2, "entre 0 y 100"),
+])
+def test_muestra_centrifuga_valida_valores(campo, valor, mensaje):
+    with pytest.raises(ValueError, match=mensaje):
+        MuestraCentrifuga(**{campo: valor})
+
+
+def test_agregar_columnas_nuevas_a_una_base_vieja():
+    """Una base creada antes de blanco_centrifugas_ml recibe la columna sin perder sus datos."""
+    motor = crear_motor("sqlite://")
+    crear_tablas(motor)
+    with motor.begin() as conexion:
+        conexion.execute(text("INSERT INTO cliente (id, nombre, pais) VALUES (1, 'X', 'Argentina')"))
+        conexion.execute(text("INSERT INTO planta (id, cliente_id, nombre, pais, blanco_ml) "
+                              "VALUES (1, 1, 'Vieja', 'Argentina', 0.2)"))
+        conexion.execute(text("ALTER TABLE planta DROP COLUMN blanco_centrifugas_ml"))
+    assert "blanco_centrifugas_ml" not in {c["name"] for c in inspect(motor).get_columns("planta")}
+
+    assert agregar_columnas_nuevas(motor) == ["planta.blanco_centrifugas_ml"]
+    assert agregar_columnas_nuevas(motor) == []                    # la segunda vez no hay nada
+    with crear_sesion(motor) as sesion:
+        planta = sesion.get(Planta, 1)
+        assert (planta.blanco_ml, planta.blanco_centrifugas_ml) == (0.2, None)

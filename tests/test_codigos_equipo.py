@@ -12,6 +12,9 @@ def test_generar_codigo():
     assert generar_codigo("LED", "BOE", 1) == "LED-BOE-01"
     assert generar_codigo("CTX", "JEX", 3, "A") == "CTX-JEX-A03"
     assert generar_codigo("CVA", "Alimentador JEX", 13) == "CVA-ALJ-13"
+    assert generar_codigo("LED", "Centrífuga primaria", 2) == "LED-CEN-02"
+    assert generar_codigo("LED", "Centrífuga secundaria", 1) == "LED-CSE-01"
+    assert generar_codigo("LED", "Pulidora", 2) == "LED-PUL-02"
 
 
 def test_generar_codigo_valida_entradas():

@@ -1,7 +1,8 @@
 """Modelos de datos.
 
 Maestros: Cliente → Planta → Linea → Equipo → PuntoMuestreo, más Turno, Proceso y
-RangoReferencia. Datos de planta: AnalisisScott, LecturaOperacion, LecturaPLC y RegistroProduccion.
+RangoReferencia. Datos de planta: AnalisisScott, LecturaOperacion, LecturaPLC, MuestraCentrifuga y
+RegistroProduccion.
 
 Cada clase es una tabla de la base. Las relaciones son "uno a muchos":
 un cliente tiene muchas plantas, una planta muchas líneas, etc.
@@ -74,6 +75,8 @@ class Planta(Base):
     - factor_aceite_fruta: aceite en fruta (kg/MT) = (mL − blanco) × N × factor / g.
     - factor_aceite_emulsion: aceite en emulsión (%) = (mL − blanco) × N × factor / g.
     - hora_inicio_dia: hora en que empieza el día de producción.
+    - blanco_centrifugas_ml: blanco de la titulación Scott de las muestras de centrífugas, en mL
+      (distinto del blanco del BOE).
     """
 
     __tablename__ = "planta"
@@ -86,6 +89,7 @@ class Planta(Base):
     factor_aceite_fruta: Mapped[float | None] = mapped_column(Float)
     factor_aceite_emulsion: Mapped[float | None] = mapped_column(Float)
     hora_inicio_dia: Mapped[time | None] = mapped_column(Time)
+    blanco_centrifugas_ml: Mapped[float | None] = mapped_column(Float)
 
     cliente: Mapped["Cliente"] = relationship(back_populates="plantas")
     lineas: Mapped[list["Linea"]] = relationship(back_populates="planta")
@@ -349,6 +353,69 @@ class LecturaPLC(Auditoria, Base):
     @validates("horas_maquina", "minutos", "ton_seteadas", "ton_calculadas")
     def validar_no_negativos(self, clave, valor):
         return _no_negativo(clave, valor)
+
+
+FASES_CENTRIFUGA = ("emulsion", "fase_liviana", "fase_pesada", "descarga")
+
+
+class MuestraCentrifuga(Auditoria, Base):
+    """Muestra de una fase de una centrífuga (primaria, secundaria o pulidora): solo datos crudos.
+
+    fase: una de FASES_CENTRIFUGA. El aceite % se calcula con core/centrifugas.py:
+    (ml − blanco_ml) × normalidad × factor / gramos. En la fase liviana no se titula: el aceite %
+    se anota directo y va en aceite_pct_medido.
+    caudal_lh: caudal medido (L/h); vacío si en la planilla es un cálculo (fase liviana y pesada).
+    solidos_pct: sólidos centrifugables (%). cp_liviana_bar y cp_pesada_bar: contrapresión de cada
+    fase (bar). t_descarga_s: intervalo entre descargas (s).
+    El turno y la fecha de producción no se guardan: se calculan con core/turnos.py.
+    Única por equipo + fecha_hora + fase.
+    """
+
+    __tablename__ = "muestra_centrifuga"
+    __table_args__ = (UniqueConstraint("equipo_id", "fecha_hora", "fase"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    equipo_id: Mapped[int] = mapped_column(ForeignKey("equipo.id"))
+    fecha_hora: Mapped[datetime] = mapped_column(DateTime)
+    fase: Mapped[str] = mapped_column(String(20))
+    proceso_id: Mapped[int | None] = mapped_column(ForeignKey("proceso.id"))
+    fruta: Mapped[str | None] = mapped_column(String(50))  # especie, por ejemplo "N Val S/R"
+    analista: Mapped[str | None] = mapped_column(String(100))  # columna "Químico" de la planilla
+    operador: Mapped[str | None] = mapped_column(String(100))
+    caudal_lh: Mapped[float | None] = mapped_column(Float)
+    gramos: Mapped[float | None] = mapped_column(Float)
+    ml: Mapped[float | None] = mapped_column(Float)
+    normalidad: Mapped[float | None] = mapped_column(Float)
+    blanco_ml: Mapped[float | None] = mapped_column(Float)
+    aceite_pct_medido: Mapped[float | None] = mapped_column(Float)
+    solidos_pct: Mapped[float | None] = mapped_column(Float)
+    cp_liviana_bar: Mapped[float | None] = mapped_column(Float)
+    cp_pesada_bar: Mapped[float | None] = mapped_column(Float)
+    t_descarga_s: Mapped[float | None] = mapped_column(Float)
+    observacion: Mapped[str | None] = mapped_column(Text)
+
+    equipo: Mapped["Equipo"] = relationship()
+    proceso: Mapped["Proceso | None"] = relationship()
+
+    @validates("fase")
+    def validar_fase(self, clave, valor):
+        if valor not in FASES_CENTRIFUGA:
+            raise ValueError(f'Fase "{valor}" no válida. Usá una de: {", ".join(FASES_CENTRIFUGA)}.')
+        return valor
+
+    @validates("gramos", "normalidad")
+    def validar_positivos(self, clave, valor):
+        return _mayor_que_cero(clave, valor)
+
+    @validates("caudal_lh", "ml", "blanco_ml", "cp_liviana_bar", "cp_pesada_bar", "t_descarga_s")
+    def validar_no_negativos(self, clave, valor):
+        return _no_negativo(clave, valor)
+
+    @validates("aceite_pct_medido", "solidos_pct")
+    def validar_porcentaje(self, clave, valor):
+        if valor is not None and not 0 <= valor <= 100:
+            raise ValueError(f'"{clave}" tiene que estar entre 0 y 100 (dice {valor}).')
+        return valor
 
 
 class RegistroProduccion(Auditoria, Base):
