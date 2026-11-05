@@ -7,7 +7,8 @@ import pytest
 from core.factores import (aceite_perdido, agregar_dia_proceso, asignar_quintil, comparar_planta, cortes_quintiles,
                            descomponer, etiquetas_quintiles, frase_aceite_perdido, frase_calibre, frase_categoria,
                            frase_descomposicion, frase_eboe_calibre, frase_modelo, frase_planta, frutos_en_10kg,
-                           frutos_por_eboe, modelo_multivariable, nota_descomposicion, por_categoria, por_quintil,
+                           frase_quintil_eboe, frutos_por_eboe, modelo_multivariable, nota_descomposicion,
+                           por_quintil_eboe, por_categoria, por_quintil,
                            preparar_pares, promedio_por_temporada,
                            residual_planta, resumen_factores, separar_errores, toneladas_por_eboe)
 
@@ -86,6 +87,22 @@ def test_por_quintil_y_frases():
     eboes = frutos_por_eboe(pares)
     assert frase_eboe_calibre(eboes, 2026) == ("En 2026, el eBOE 2 recibe la fruta más chica: 70 frutos en 10 kg "
                                                 "contra 40 del eBOE 3.")
+
+
+def test_eboe_dentro_de_cada_quintil():
+    filas = []
+    for frutos in (40, 70):                                      # Q1 y Q5 con los cortes de abajo
+        for eboe, salida, programa in ((1, 1.0, "N3"), (2, 1.5, "N5")):
+            filas += [_par(n_frutos=frutos, eboe=eboe, aceite_salida=salida, programa=programa)] * 30
+    filas += [_par(n_frutos=55, eboe=1)] * 4                     # 55 frutos → Q2 (el corte entra en el quintil de abajo)
+    tabla = por_quintil_eboe(preparar_pares(pd.DataFrame(filas)), [50.0, 55.0, 60.0, 65.0], SIN_TONELADAS)
+
+    fila = tabla.set_index(["quintil", "eboe"]).loc[(5, 2)]
+    assert (fila["n"], fila["residual"], fila["programa"], fila["chico"]) == (30, 1.5, 5.0, False)
+    assert tabla.set_index(["quintil", "eboe"]).loc[(2, 1), "chico"]          # 4 pares: N < 30
+    assert frase_quintil_eboe(tabla, 2025) == ("En 2025, con fruta del mismo tamaño, el eBOE 2 deja el mayor residual "
+                                                "en 2 de 2 quintiles (programa promedio 5,0 contra 3,0 de los otros).")
+    assert "no hay quintiles" in frase_quintil_eboe(tabla, 2026)
 
 
 def test_descomposicion_suma_y_separa_el_calibre():

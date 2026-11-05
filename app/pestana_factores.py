@@ -10,11 +10,11 @@ import pandas as pd
 import streamlit as st
 
 from core.analisis import filtrar, filtros_sin_periodo, pares_con_emulsion
-from core.factores import (CATEGORIAS, RESPUESTAS, VIF_MAXIMO, aceite_perdido, agregar_dia_proceso, comparar_planta,
+from core.factores import (CATEGORIAS, N_MINIMO_CELDA, RESPUESTAS, VIF_MAXIMO, aceite_perdido, agregar_dia_proceso, comparar_planta,
                            cortes_quintiles, descomponer, etiquetas_quintiles, frase_aceite_perdido, frase_calibre,
                            frase_categoria, frase_descomposicion, frase_eboe_calibre, frase_modelo, frase_planta,
                            frutos_por_eboe, modelo_multivariable, nota_descomposicion, por_categoria, por_quintil,
-                           preparar_pares, promedio_por_temporada,
+                           frase_quintil_eboe, por_quintil_eboe, preparar_pares, promedio_por_temporada,
                            residual_planta, resumen_factores, separar_errores, toneladas_por_eboe)
 from core.formato import numero, texto_p
 from core.precios import (BRIX_REFERENCIA, SIN_PRECIOS, UNIDADES, Precios, guardar_precios, kg_a_65_brix,
@@ -111,7 +111,8 @@ def bloque_limpieza(excluidos: pd.DataFrame, registro: Descargas) -> None:
         registro.tabla(con_coma(lista, 1), "Pares excluidos por calibre")
 
 
-def bloque_calibre(quintiles: pd.DataFrame, eboes: pd.DataFrame, cortes: list[float], registro: Descargas) -> None:
+def bloque_calibre(quintiles: pd.DataFrame, eboes: pd.DataFrame, por_eboe: pd.DataFrame, cortes: list[float],
+                   registro: Descargas) -> None:
     st.subheader("1. Calibre")
     etiquetas = etiquetas_quintiles(cortes)
     st.caption("Quintiles de frutos en 10 kg con cortes de todo el histórico (iguales en las dos temporadas): "
@@ -149,6 +150,23 @@ def bloque_calibre(quintiles: pd.DataFrame, eboes: pd.DataFrame, cortes: list[fl
     registro.tabla(con_coma(eboes.rename(columns={"eboe": "eBOE", "temporada": "Temporada", "n": "N",
                                                   "frutos": "Frutos en 10 kg"}), 1),
                    "Frutos en 10 kg por eBOE", donde=derecha)
+
+    st.markdown("**Cada eBOE dentro de cada calibre** (fruta del mismo tamaño)")
+    for temporada in sorted(por_eboe["temporada"].unique(), reverse=True):
+        st.markdown(f"**{frase_quintil_eboe(por_eboe, temporada)}**")
+    chicos = por_eboe[por_eboe["chico"]]
+    if not chicos.empty:
+        st.warning(f"{len(chicos)} celdas con menos de {N_MINIMO_CELDA} pares (marcadas en la tabla): sus valores son "
+                   "poco confiables.")
+    st.caption("Eficiencia y residual ponderados por las toneladas del turno; programa: promedio del número de programa "
+               "(N3 = 3).")
+    registro.tabla(con_coma(pd.DataFrame({
+        "Calibre": por_eboe["etiqueta"], "Temporada": por_eboe["temporada"].astype(str),
+        "eBOE": por_eboe["eboe"].map(lambda e: f"eBOE {e}"), "N": por_eboe["n"], "Eficiencia (%)": por_eboe["eficiencia"],
+        "Residual (kg/MT)": por_eboe["residual"], "Programa promedio": por_eboe["programa"],
+        "Aviso": por_eboe["chico"].map({True: f"N < {N_MINIMO_CELDA}", False: ""})}).sort_values(
+        ["Temporada", "Calibre", "eBOE"], ascending=[False, True, True]), 2,
+        **{"Eficiencia (%)": 1, "Programa promedio": 1}), "eBOE dentro de cada calibre")
 
 
 def bloque_descomposicion(quintiles: pd.DataFrame, crudos: pd.DataFrame, toneladas: pd.DataFrame, base, nueva,
@@ -321,11 +339,12 @@ def pestana_factores(registro: Descargas) -> None:
     cortes = cortes_quintiles(todos["frutos_10kg"])        # todo el histórico, sin filtros
     quintiles = por_quintil(pares_temporadas, cortes, toneladas)
     eboes = frutos_por_eboe(pares_temporadas)
+    por_eboe = por_quintil_eboe(pares_temporadas, cortes, toneladas)
 
     precios = bloque_precios()
     resumen = st.container()
     bloque_limpieza(excluidos, registro)
-    bloque_calibre(quintiles, eboes, cortes, registro)
+    bloque_calibre(quintiles, eboes, por_eboe, cortes, registro)
     if len(temporadas) >= 2:
         descomposicion = bloque_descomposicion(quintiles, filtrar(crudos, filtros_sin_periodo(filtros)), toneladas,
                                                base, nueva, registro)

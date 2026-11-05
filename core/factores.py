@@ -31,6 +31,7 @@ FRUTOS_MAXIMO = 150         # frutos en 10 kg: más que esto es un error de carg
 N_QUINTILES = 5
 DIA_MAXIMO = 5              # días del proceso: del 5 en adelante van juntos ("5 o más")
 VIF_MAXIMO = 5
+N_MINIMO_CELDA = 30        # pares por eBOE dentro de un quintil: con menos, se avisa
 # respuesta → nombre, unidad, texto de los efectos, decimales
 RESPUESTAS = {
     "eficiencia_pct": {"nombre": "Eficiencia eBOE", "unidad": "%", "efecto": "puntos de eficiencia", "decimales": 2},
@@ -184,6 +185,47 @@ def frase_calibre(tabla: pd.DataFrame, temporada) -> str:
     return (f"En {temporada}, la fruta chica trae {trae}, {remueve}; el residual {residual} de "
             f"{numero(grande['residual'], 2)} a {numero(chica['residual'], 2)} kg/MT y la eficiencia {eficiencia} de "
             f"{numero(grande['eficiencia'], 1)} % a {numero(chica['eficiencia'], 1)} %.")
+
+
+def por_quintil_eboe(pares: pd.DataFrame, cortes: list[float], toneladas: pd.DataFrame) -> pd.DataFrame:
+    """Cada eBOE dentro de cada quintil de calibre y temporada (comparación con fruta del mismo tamaño).
+
+    Eficiencia (%) y residual (kg/MT) ponderados por las toneladas del turno (simples si no hay producción);
+    programa: promedio simple del número de programa (N3 → 3). Columnas: quintil, etiqueta, temporada,
+    eboe, n, frutos, eficiencia, residual, programa y chico (True si n < N_MINIMO_CELDA).
+    """
+    datos = pares.dropna(subset=["frutos_10kg"]).assign(quintil=lambda d: asignar_quintil(d["frutos_10kg"], cortes))
+    etiquetas = etiquetas_quintiles(cortes)
+    filas = []
+    for (quintil, temporada, eboe), sub in datos.groupby(["quintil", "temporada", "eboe"], sort=True):
+        filas.append({"quintil": int(quintil), "etiqueta": etiquetas[int(quintil)], "temporada": temporada,
+                      "eboe": eboe, "n": len(sub), "frutos": float(sub["frutos_10kg"].mean()),
+                      "eficiencia": media_ponderada_por_turno(sub, "eficiencia_pct", toneladas)["valor"],
+                      "residual": media_ponderada_por_turno(sub, "residual", toneladas)["valor"],
+                      "programa": float(sub["programa_num"].mean()) if sub["programa_num"].notna().any() else None})
+    tabla = pd.DataFrame(filas, columns=["quintil", "etiqueta", "temporada", "eboe", "n", "frutos", "eficiencia",
+                                         "residual", "programa"])
+    return tabla.assign(chico=tabla["n"] < N_MINIMO_CELDA)
+
+
+def frase_quintil_eboe(tabla: pd.DataFrame, temporada) -> str:
+    """En cuántos quintiles cada eBOE deja el mayor residual (solo quintiles con N ≥ N_MINIMO_CELDA en todos).
+
+    Ejemplo: "En 2026, con fruta del mismo tamaño, el eBOE 2 deja el mayor residual en 5 de 5 quintiles
+    (programa promedio 4,1 contra 3,6 de los otros)."
+    """
+    sub = tabla[tabla["temporada"] == temporada]
+    eboes = sub["eboe"].nunique()
+    completos = sub.groupby("quintil").filter(lambda g: len(g) == eboes and (g["n"] >= N_MINIMO_CELDA).all())
+    if eboes < 2 or completos.empty:
+        return f"En {temporada} no hay quintiles con al menos {N_MINIMO_CELDA} pares en cada eBOE para comparar."
+    peores = completos.loc[completos.groupby("quintil")["residual"].idxmax(), "eboe"]
+    eboe, veces = peores.value_counts().index[0], int(peores.value_counts().iloc[0])
+    total = completos["quintil"].nunique()
+    propio = completos[completos["eboe"] == eboe]["programa"].mean()
+    otros = completos[completos["eboe"] != eboe]["programa"].mean()
+    return (f"En {temporada}, con fruta del mismo tamaño, el eBOE {int(eboe)} deja el mayor residual en {veces} de "
+            f"{total} quintiles (programa promedio {numero(propio, 1)} contra {numero(otros, 1)} de los otros).")
 
 
 def frase_eboe_calibre(tabla: pd.DataFrame, temporada) -> str:
