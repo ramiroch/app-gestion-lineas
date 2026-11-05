@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from core.calculos import aceite_en_emulsion, aceite_en_fruta, eficiencia_eboe
 from core.models import AnalisisScott, Equipo, LecturaOperacion, Linea, Planta, PuntoMuestreo
+from core.operacion import lecturas_plc
+from core.programa import numero_programa
 from core.turnos import fecha_produccion, turno_de
 
 TIPO_EBOE = "BOE"
@@ -23,11 +25,15 @@ LUGARES = {"fruta entrada": "Entrada", "fruta salida": "Salida"}
 COLUMNAS = ["analisis_id", "fecha_hora", "fecha_produccion", "turno", "temporada", "proceso_id",
             "proceso", "eboe", "lugar", "analista", "aceite_fruta", "eficiencia_par", "programa", "tph",
             "caudal_fase_pesada", "rallado", "peso_muestra_g", "vol_ml", "blanco_ml", "normalidad", "n_frutos",
-            "peso_fruta_kg", "calidad"]
+            "peso_fruta_kg", "calidad", "fruta", "programa_plc", "ton_set_plc", "ton_calc_plc"]
 TIPO_EMULSION = "emulsión"
 COLUMNAS_EMULSION = ["analisis_id", "fecha_hora", "fecha_produccion", "turno", "temporada", "proceso_id",
                      "proceso", "eboe", "analista", "aceite_emulsion", "brix", "ph", "programa", "tph",
-                     "caudal_fase_pesada"]
+                     "caudal_fase_pesada", "programa_plc", "ton_set_plc", "ton_calc_plc"]
+TOLERANCIA_PLC = pd.Timedelta(minutes=10)      # lectura del PLC más cercana al análisis: ± 10 min
+# Columnas de la lectura del PLC → columnas que se agregan a cada análisis
+COLUMNAS_UNION_PLC = {"programa": "programa_plc", "ton_seteadas": "ton_set_plc", "ton_calculadas": "ton_calc_plc"}
+FUENTES = ["PLC", "Laboratorio"]
 ATAJO_MES = "Último mes"
 ATAJO_SEMANA = "Última semana"
 ATAJO_PERSONALIZADO = "Personalizado"
@@ -115,8 +121,9 @@ def tabla_analisis(sesion: Session, planta_id: int) -> pd.DataFrame:
         fila["peso_muestra_g"], fila["vol_ml"] = a.peso_muestra_g, a.vol_ml
         fila["blanco_ml"], fila["normalidad"] = a.blanco_ml, a.normalidad
         fila["n_frutos"], fila["peso_fruta_kg"], fila["calidad"] = a.n_frutos, a.peso_fruta_kg, a.calidad
+        fila["fruta"] = a.fruta
         fila["aceite_fruta"] = aceite_en_fruta(planta, a.vol_ml, a.blanco_ml, a.normalidad, a.peso_muestra_g)
-    tabla = _a_tabla(filas, COLUMNAS)
+    tabla = unir_plc(_a_tabla(filas, COLUMNAS), lecturas_plc(sesion, planta_id))
     tabla["eficiencia_par"] = _eficiencias_de_pares(tabla)
     return tabla.drop(columns="_equipo_id").sort_values(["fecha_hora", "eboe", "lugar"], ignore_index=True)
 
@@ -133,8 +140,41 @@ def tabla_emulsion(sesion: Session, planta_id: int) -> pd.DataFrame:
         a = fila.pop("_analisis")
         fila["aceite_emulsion"] = aceite_en_emulsion(planta, a.vol_ml, a.blanco_ml, a.normalidad, a.peso_muestra_g)
         fila["brix"], fila["ph"] = a.brix, a.ph
-    tabla = _a_tabla(filas, COLUMNAS_EMULSION)
+    tabla = unir_plc(_a_tabla(filas, COLUMNAS_EMULSION), lecturas_plc(sesion, planta_id))
     return tabla.drop(columns="_equipo_id").sort_values(["fecha_hora", "eboe"], ignore_index=True)
+
+
+def unir_plc(tabla: pd.DataFrame, plc: pd.DataFrame, tolerancia: pd.Timedelta = TOLERANCIA_PLC) -> pd.DataFrame:
+    """Agrega a cada análisis la lectura del PLC más cercana del mismo eBOE (± tolerancia).
+
+    tabla lleva _equipo_id y fecha_hora; plc: core.operacion.lecturas_plc(). Agrega programa_plc (tal como
+    lo registra el PLC: "N3" o "9"), ton_set_plc y ton_calc_plc (TON seteadas y calculadas); quedan vacías
+    si no hay lectura a menos de la tolerancia. Mantiene el orden de las filas.
+    """
+    tabla = tabla.drop(columns=list(COLUMNAS_UNION_PLC.values()), errors="ignore")
+    if tabla.empty or plc.empty:
+        return tabla.assign(**{c: None for c in COLUMNAS_UNION_PLC.values()})
+    izquierda = tabla.reset_index().sort_values("fecha_hora")
+    derecha = (plc.rename(columns={"equipo_id": "_equipo_id", "fecha_hora": "_fecha_plc", **COLUMNAS_UNION_PLC})
+               [["_equipo_id", "_fecha_plc", *COLUMNAS_UNION_PLC.values()]].sort_values("_fecha_plc"))
+    unida = pd.merge_asof(izquierda, derecha, left_on="fecha_hora", right_on="_fecha_plc", by="_equipo_id",
+                          direction="nearest", tolerance=tolerancia)
+    return unida.set_index("index").sort_index().drop(columns="_fecha_plc").rename_axis(None)
+
+
+def con_fuente(tabla: pd.DataFrame, fuente: str) -> pd.DataFrame:
+    """La tabla con el programa y la MTPH de la fuente elegida ("PLC" o "Laboratorio").
+
+    PLC: programa = programa_plc, solo si es N0–N9 (los programas numéricos del PLC, como "9", no se pueden
+    comparar con los del laboratorio y quedan vacíos), y tph = TON calculadas del PLC (vacía si son 0: el
+    elevador no llevaba fruta). Laboratorio: lo anotado en la planilla (sin cambios).
+    """
+    if fuente not in FUENTES:
+        raise ValueError(f"Fuente desconocida: {fuente}. Las válidas son: {', '.join(FUENTES)}.")
+    if fuente == "Laboratorio":
+        return tabla
+    programa = tabla["programa_plc"].where(tabla["programa_plc"].map(numero_programa).notna())
+    return tabla.assign(programa=programa, tph=tabla["ton_calc_plc"].where(tabla["ton_calc_plc"] > 0))
 
 
 def _eficiencias_de_pares(tabla: pd.DataFrame) -> pd.Series:

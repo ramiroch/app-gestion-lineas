@@ -21,14 +21,14 @@ from dataclasses import replace
 import pandas as pd
 import streamlit as st
 
-from core.analisis import (ATAJO_PERSONALIZADO, atajos, filtrar, filtros_sin_periodo, opciones, pares_con_emulsion,
+from core.analisis import (ATAJO_PERSONALIZADO, FUENTES, atajos, con_fuente, filtrar, filtros_sin_periodo, opciones, pares_con_emulsion,
                            rango_de_atajo)
 from core.comparaciones import comparar_grupos, frase_resultado
 from core.estadistica import limites_iqr, media_ponderada_por_turno, resumen_descriptivo
 from core.formato import numero, texto_p
 from core.mensual import eficiencia_proceso_por_mes, eje_de_meses, por_mes_y_eboe
 from core.parametros import ParametrosIncompletos
-from core.programa import (N_MINIMO, N_MINIMO_RANKING, combinaciones, de_combinaciones, frase_programa, frase_uso,
+from core.programa import (N_MINIMO, N_MINIMO_RANKING, combinaciones, de_combinaciones, frase_programa, frase_uso, numero_programa,
                            grilla, mejores_y_peores, rallado_por_programa, uso_de_programas)
 from core.proceso import (INDICADORES_EBOE, INDICADORES_TOTALES, comparar_resumenes, filtrar_produccion,
                           resumen_proceso)
@@ -689,8 +689,18 @@ if filtros_elegidos() is None:      # la planta no tiene análisis: la barra ya 
     st.stop()
 
 def pestana_programa_completa(registro: Descargas) -> None:
-    pestana_programa(datos, registro)
-    bloque_uso_programas(datos, registro)
+    fuente = st.radio("Fuente del programa y la MTPH", FUENTES, horizontal=True, key="programa_fuente")
+    con_datos = con_fuente(datos, fuente)
+    if fuente == "PLC":
+        sin_plc = con_datos["programa"].map(numero_programa).isna() & (con_datos["lugar"] == "Entrada")
+        st.caption("PLC: programa y TON calculadas de la lectura del PLC más cercana del mismo eBOE (± 10 min). Las "
+                   "muestras sin lectura del PLC o con un programa del PLC que no es N0–N9 (por ejemplo \"9\") no "
+                   f"entran: {numero(sin_plc.sum(), 0)} de {numero((con_datos['lugar'] == 'Entrada').sum(), 0)} "
+                   "muestras de entrada. El filtro de programa de la barra usa el programa del laboratorio.")
+    else:
+        st.caption("Laboratorio: programa y Ton/H anotados en la planilla (la Ton/H es el setpoint).")
+    pestana_programa(con_datos, registro)
+    bloque_uso_programas(con_datos, registro)
 
 
 PESTANAS = {

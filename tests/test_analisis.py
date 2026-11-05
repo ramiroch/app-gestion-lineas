@@ -7,7 +7,7 @@ import pytest
 
 from core.analisis import (ATAJO_MES, ATAJO_PERSONALIZADO, ATAJO_SEMANA, Filtros, analisis_filtrados,
                            atajos, filtrar, filtros_sin_periodo, opciones, pares_con_emulsion, rango_de_atajo, tabla_analisis,
-                           tabla_emulsion)
+                           tabla_emulsion, con_fuente, unir_plc)
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
 from core.parametros import ParametrosIncompletos
@@ -184,3 +184,23 @@ def test_filtros_sin_periodo_saca_fechas_y_procesos():
 def test_planta_inexistente(sesion):
     with pytest.raises(ValueError, match="No existe la planta"):
         tabla_analisis(sesion, 999)
+
+
+def test_unir_plc_toma_la_lectura_mas_cercana_del_mismo_eboe():
+    tabla = pd.DataFrame({"_equipo_id": [1, 1, 2, 1], "fecha_hora": pd.to_datetime(
+        ["2026-07-01 10:07", "2026-07-01 10:03", "2026-07-01 10:03", "2026-07-01 12:00"])})
+    plc = pd.DataFrame({"equipo_id": [1, 1, 2], "fecha_hora": pd.to_datetime(
+        ["2026-07-01 10:00:01", "2026-07-01 10:05:01", "2026-07-01 09:55:00"]),
+        "programa": ["N3", "9", "N5"], "ton_seteadas": [12.0, 11.0, 10.0], "ton_calculadas": [10.8, 0.0, 9.0]})
+    unida = unir_plc(tabla, plc)
+    assert unida["programa_plc"].tolist()[:3] == ["9", "9", "N5"]          # 10:07 y 10:03 → 10:05:01; eBOE 2 → 09:55
+    assert pd.isna(unida["programa_plc"].iloc[3])                          # 12:00: ninguna a ± 10 min
+    assert unida["fecha_hora"].tolist() == tabla["fecha_hora"].tolist()    # mismo orden
+    assert unir_plc(tabla, plc.iloc[0:0])["ton_calc_plc"].isna().all()
+
+    plc_unida = con_fuente(unida.assign(programa="N1", tph=12.0), "PLC")
+    assert pd.isna(plc_unida["programa"].iloc[0]) and plc_unida["programa"].iloc[2] == "N5"     # "9" no es N0–N9
+    assert pd.isna(plc_unida["tph"].iloc[0]) and plc_unida["tph"].iloc[2] == 9.0     # 0 t calculadas: sin dato
+    assert con_fuente(unida.assign(programa="N1"), "Laboratorio")["programa"].eq("N1").all()
+    with pytest.raises(ValueError, match="Fuente desconocida"):
+        con_fuente(unida, "SCADA")
