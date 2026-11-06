@@ -222,3 +222,6 @@ __marimo__/
 # Proyecto: datos de clientes y entorno virtual (no se suben)
 data/
 .venv/
+
+# Resultados de Minitab con datos de la planta (ver tests/datos_minitab/README.md)
+tests/datos_minitab/*.csv
