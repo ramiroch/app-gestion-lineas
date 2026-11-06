@@ -66,8 +66,12 @@ ACEITE_DE_FASE = {"emulsion": "aceite_emulsion", "fase_liviana": "aceite_liviana
                   "descarga": "aceite_descarga"}
 A_LA_UNIDAD = {("min", "s"): 60}               # rango en minutos, dato en segundos
 COLUMNAS_MUESTRAS = ["id", "codigo", "equipo", "tipo", "volumen_descarga_l", "destino", "fecha_hora", "temporada",
-                     "proceso", "fase", "fruta", "caudal_lh", "aceite_pct", "titulada", "solidos_pct", "solidos_marca",
-                     "cp_liviana_bar", "cp_liviana_marca", "cp_pesada_bar", "t_descarga_s", "revisar", "copiada"]
+                     "proceso_id", "proceso", "fase", "fruta", "analista", "caudal_lh", "aceite_pct", "titulada",
+                     "solidos_pct", "solidos_marca", "solidos_texto", "cp_liviana_bar", "cp_liviana_marca",
+                     "cp_pesada_bar", "t_descarga_s", "revisar", "copiada", "fecha_original", "origen"]
+ORDEN_EQUIPOS = ["ESE 230 (1)", "ESE 230 (2)", "ESB 130", "MSD 50", "OSD 60"]   # colores fijos por equipo
+NOMBRES_FASE = {"emulsion": "Emulsión", "fase_liviana": "Fase liviana", "fase_pesada": "Fase pesada",
+                "descarga": "Descarga"}
 
 
 # ---------------------------------------------------------------- lectura
@@ -92,11 +96,12 @@ def tabla_muestras(sesion: Session, planta_id: int) -> pd.DataFrame:
         registros.append({
             "id": m.id, "codigo": e.codigo, "equipo": e.nombre, "tipo": e.tipo, "volumen_descarga_l": e.volumen_descarga_l,
             "destino": e.destino_fase_pesada, "fecha_hora": m.fecha_hora, "temporada": temporada or m.fecha_hora.year,
-            "proceso": proceso, "fase": m.fase, "fruta": m.fruta, "caudal_lh": m.caudal_lh,
-            "aceite_pct": _aceite(m, factor) if titulada else m.aceite_pct_medido, "titulada": titulada,
-            "solidos_pct": m.solidos_pct, "solidos_marca": m.solidos_marca, "cp_liviana_bar": m.cp_liviana_bar,
-            "cp_liviana_marca": m.cp_liviana_marca, "cp_pesada_bar": m.cp_pesada_bar, "t_descarga_s": m.t_descarga_s,
-            "revisar": m.revisar, "copiada": REVISAR_COPIADA in (m.revisar or "")})
+            "proceso_id": m.proceso_id, "proceso": proceso, "fase": m.fase, "fruta": m.fruta, "analista": m.analista,
+            "caudal_lh": m.caudal_lh, "aceite_pct": _aceite(m, factor) if titulada else m.aceite_pct_medido,
+            "titulada": titulada, "solidos_pct": m.solidos_pct, "solidos_marca": m.solidos_marca,
+            "solidos_texto": m.solidos_texto, "cp_liviana_bar": m.cp_liviana_bar, "cp_liviana_marca": m.cp_liviana_marca,
+            "cp_pesada_bar": m.cp_pesada_bar, "t_descarga_s": m.t_descarga_s, "revisar": m.revisar,
+            "copiada": REVISAR_COPIADA in (m.revisar or ""), "fecha_original": m.fecha_original, "origen": m.origen})
     return con_turno(pd.DataFrame(registros, columns=COLUMNAS_MUESTRAS), planta)
 
 
@@ -161,7 +166,7 @@ def por_muestreo(tabla: pd.DataFrame) -> pd.DataFrame:
     base = tabla.groupby(clave, as_index=False).agg(
         equipo=("equipo", "first"), tipo=("tipo", "first"), volumen_descarga_l=("volumen_descarga_l", "first"),
         destino=("destino", "first"), temporada=("temporada", "first"), fecha_produccion=("fecha_produccion", "first"),
-        turno=("turno", "first"),
+        turno=("turno", "first"), proceso_id=("proceso_id", "first"),
         revisar=("revisar", lambda s: "; ".join(sorted({m for v in s.dropna() for m in v.split("; ")}))))
     for fase, nombre in ACEITE_DE_FASE.items():
         de_fase = tabla.loc[tabla["fase"] == fase, clave + ["aceite_pct"]].rename(columns={"aceite_pct": nombre})
@@ -348,6 +353,9 @@ def agua_por_eboe(balance: pd.DataFrame, turnos: pd.DataFrame, analisis: pd.Data
                       "agua_lab_m3h": lab["median"].get(clave), "n_lab": int(lab["count"].get(clave, 0))})
     tabla = pd.DataFrame(filas, columns=["fecha_produccion", "turno", "temporada", "modo", "caudal_pesada_m3h",
                                          "eboe_en_marcha", "eboe_por_defecto", "agua_lab_m3h", "n_lab"])
+    ventanas = turnos.set_index(["fecha_produccion", "turno"])[["etiqueta", "desde", "hasta"]]
+    tabla = tabla.join(ventanas, on=["fecha_produccion", "turno"])
+    tabla["momento"] = tabla["desde"] + (tabla["hasta"] - tabla["desde"]) / 2      # para dibujar en el tiempo
     tabla["agua_por_eboe_m3h"] = tabla["caudal_pesada_m3h"] / tabla["eboe_en_marcha"]
     return tabla
 
@@ -355,7 +363,8 @@ def agua_por_eboe(balance: pd.DataFrame, turnos: pd.DataFrame, analisis: pd.Data
 # ---------------------------------------------------------------- resumen por temporada y equipo
 
 def valores_por_variable(tabla: pd.DataFrame, balance: pd.DataFrame, incluir_copiadas: bool = False) -> pd.DataFrame:
-    """Tabla larga (temporada, equipo, tipo, variable, valor, no_medible, fuera_fisico) para resumir.
+    """Tabla larga (temporada, equipo, tipo, variable, valor, fecha_hora, turno, analista, no_medible, fuera_fisico)
+    para resumir y para los boxplots.
 
     Las muestras copiadas quedan afuera salvo incluir_copiadas=True; en el balance, la eficiencia y la fase
     pesada de los muestreos con la pesada o la descarga copiadas, y la pérdida en descarga de los muestreos con la
@@ -368,7 +377,8 @@ def valores_por_variable(tabla: pd.DataFrame, balance: pd.DataFrame, incluir_cop
         datos = datos[datos[columna].notna()]
         partes.append(pd.DataFrame({
             "temporada": datos["temporada"], "equipo": datos["equipo"], "tipo": datos["tipo"], "variable": variable,
-            "valor": datos[columna].astype(float),
+            "valor": datos[columna].astype(float), "fecha_hora": datos["fecha_hora"], "turno": datos["turno"],
+            "analista": datos["analista"] if "analista" in datos else None,
             "no_medible": False if no_medible is None else no_medible.loc[datos.index],
             "fuera_fisico": False if fuera_fisico is None else fuera_fisico.loc[datos.index]}))
 
@@ -482,3 +492,94 @@ def relacion_boe(tabla: pd.DataFrame, emulsion_boe: pd.DataFrame, fruta_boe: pd.
     resultado = pd.concat(partes, axis=1).reset_index()
     resultado["temporada"] = resultado["fecha_produccion"].dt.year
     return resultado.dropna(subset=["aceite_emulsion_cen"])
+
+
+# ---------------------------------------------------------------- para la página (filtros, tarjetas, pérdidas, revisar)
+
+def filtrar_centrifugas(tabla: pd.DataFrame, filtros) -> pd.DataFrame:
+    """Muestras (o balance) dentro de los filtros globales que les aplican: fechas de producción, turno y proceso.
+
+    El eBOE y el programa de la barra no aplican a las centrífugas.
+    """
+    seleccion = pd.Series(True, index=tabla.index)
+    if filtros.desde is not None:
+        seleccion &= tabla["fecha_produccion"] >= pd.Timestamp(filtros.desde)
+    if filtros.hasta is not None:
+        seleccion &= tabla["fecha_produccion"] <= pd.Timestamp(filtros.hasta)
+    if filtros.turnos:
+        seleccion &= tabla["turno"].isin(filtros.turnos)
+    if filtros.procesos:
+        seleccion &= tabla["proceso_id"].isin(filtros.procesos)
+    return tabla[seleccion]
+
+
+def resumen_temporadas(tabla: pd.DataFrame, balance: pd.DataFrame, turnos: pd.DataFrame, produccion: pd.DataFrame,
+                       incluir_copiadas: bool = False) -> pd.DataFrame:
+    """Tarjetas por temporada: caudal de emulsión de las primarias (mediana, L/h), turnos en paralelo y una sola,
+    eficiencia de la primaria (mediana, %), pérdida en descarga (mediana kg/h; kg ESTIMADOS y las horas que cubren,
+    sin extrapolar) y pérdida por tonelada (mediana de los días, kg/MT). Cada valor con su N."""
+    primarias = tabla[(tabla["tipo"] == PRIMARIA) & (tabla["fase"] == "emulsion") & tabla["caudal_lh"].notna()]
+    balances = balance if incluir_copiadas else balance[~balance["copiada"]]
+    eficiencia = balances[(balances["tipo"] == PRIMARIA) & balances["eficiencia_pct"].notna()]
+    integrado = integrar_descarga(balance, incluir_copiadas)
+    por_dia = perdida_por_tonelada(balance, produccion, incluir_copiadas).dropna(subset=["kg_mt"])
+    filas = []
+    for temporada in sorted(set(tabla["temporada"]) | set(balance["temporada"])):
+        caudal = primarias.loc[primarias["temporada"] == temporada, "caudal_lh"]
+        ef = eficiencia.loc[eficiencia["temporada"] == temporada, "eficiencia_pct"]
+        descarga = integrado[integrado["temporada"] == temporada]
+        dias = por_dia.loc[por_dia["fecha_produccion"].dt.year == temporada, "kg_mt"]
+        modos = turnos.loc[turnos["temporada"] == temporada, "modo"].value_counts()
+        filas.append({"temporada": temporada, "caudal_mediana_lh": caudal.median(), "n_caudal": len(caudal),
+                      "turnos_paralelo": int(modos.get(PARALELO, 0)), "turnos_una_sola": int(modos.get(UNA_SOLA, 0)),
+                      "eficiencia_mediana": ef.median(), "n_eficiencia": len(ef),
+                      "n_fuera_fisico": int(eficiencia.loc[eficiencia["temporada"] == temporada, "fuera_fisico"].sum()),
+                      "descarga_mediana_kgh": descarga["perdida_descarga_kgh"].median(), "n_descarga": len(descarga),
+                      "kg_estimados": descarga["kg"].sum(), "horas_estimadas": descarga["horas"].sum(),
+                      "kg_mt_mediana": dias.median(), "n_dias": len(dias)})
+    return pd.DataFrame(filas)
+
+
+def perdida_descarga_mensual(balance: pd.DataFrame, incluir_copiadas: bool = False) -> pd.DataFrame:
+    """Pérdida en descarga por mes (del día de producción) y equipo: N, mediana kg/h, kg ESTIMADOS y horas."""
+    datos = integrar_descarga(balance, incluir_copiadas)
+    datos = datos.assign(mes=datos["fecha_produccion"].dt.to_period("M").dt.to_timestamp())
+    return datos.groupby(["mes", "equipo"], as_index=False).agg(
+        n=("perdida_descarga_kgh", "size"), mediana_kgh=("perdida_descarga_kgh", "median"), kg=("kg", "sum"),
+        horas=("horas", "sum"))
+
+
+def perdida_pesada_por_destino(balance: pd.DataFrame, incluir_copiadas: bool = False) -> pd.DataFrame:
+    """Aceite en la fase pesada por temporada, equipo y estado: "calculado" (va al canal: pérdida del proceso),
+    "recirculado al BOE", "sin datos (no se muestrea)", "a definir", "no aplica"…
+
+    Columnas: temporada, equipo, destino, estado, n_muestreos, n (con kg/h calculado), mediana_kgh.
+    """
+    datos = balance if incluir_copiadas else balance[~balance["copiada"]]
+    datos = datos.assign(destino=datos["destino"].fillna(A_DEFINIR))
+    return datos.groupby(["temporada", "equipo", "destino", "estado_pesada"], as_index=False).agg(
+        n_muestreos=("estado_pesada", "size"), n=("perdida_pesada_kgh", "count"),
+        mediana_kgh=("perdida_pesada_kgh", "median")).rename(columns={"estado_pesada": "estado"})
+
+
+def para_revisar(tabla: pd.DataFrame) -> pd.DataFrame:
+    """Muestras marcadas para revisar, una fila por muestra con sus motivos, ordenadas por fecha y equipo."""
+    marcadas = tabla[tabla["revisar"].notna()]
+    return pd.DataFrame({
+        "fecha_hora": marcadas["fecha_hora"], "fecha_produccion": marcadas["fecha_produccion"],
+        "turno": marcadas["turno"], "temporada": marcadas["temporada"], "proceso": marcadas["proceso"],
+        "equipo": marcadas["equipo"], "fase": marcadas["fase"].map(NOMBRES_FASE), "motivo": marcadas["revisar"],
+        "fecha_original": marcadas["fecha_original"], "origen": marcadas["origen"],
+    }).sort_values(["fecha_hora", "equipo", "fase"], ignore_index=True)
+
+
+def motivos(revisar: pd.DataFrame) -> list[str]:
+    """Motivos distintos de la tabla de para_revisar() (una muestra puede tener varios, separados por "; ")."""
+    return sorted({m for texto in revisar["motivo"] for m in texto.split("; ")})
+
+
+def con_motivo(revisar: pd.DataFrame, elegidos: list[str]) -> pd.DataFrame:
+    """Filas de para_revisar() que tienen alguno de los motivos elegidos (todas si no se eligió ninguno)."""
+    if not elegidos:
+        return revisar
+    return revisar[revisar["motivo"].map(lambda texto: any(m in texto.split("; ") for m in elegidos))]

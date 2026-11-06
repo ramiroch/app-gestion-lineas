@@ -784,8 +784,10 @@ COLOR_MEJORA = "#1baf7a"
 
 def columnas_agrupadas(tabla: pd.DataFrame, x: str, grupo: str, y: str, titulo_y: str, unidad: str,
                        decimales: int = 1, panel: str | None = None, nombres_grupo: dict | None = None,
-                       titulo_x: str = "", rango_y: list | None = None, etiquetas: bool = True) -> go.Figure:
-    """Columnas agrupadas: una categoría por x y un color por grupo (orden fijo de la paleta).
+                       titulo_x: str = "", rango_y: list | None = None, etiquetas: bool = True,
+                       colores: dict | None = None) -> go.Figure:
+    """Columnas agrupadas: una categoría por x y un color por grupo (orden fijo de la paleta, o colores={grupo: color}
+    para que el color siga a la entidad, por ejemplo al equipo).
 
     tabla tiene las columnas x, grupo, y y n (N en el tooltip; N < 3 tenue y con aviso). panel: columna
     para separar en paneles lado a lado (mismo eje Y). nombres_grupo: {valor: nombre en la leyenda}.
@@ -807,7 +809,8 @@ def columnas_agrupadas(tabla: pd.DataFrame, x: str, grupo: str, y: str, titulo_y
             figura.add_bar(
                 row=1, col=columna, x=sub[x].astype(str), y=sub[y], name=nombre, legendgroup=nombre,
                 showlegend=columna == 1, offsetgroup=str(k),
-                marker=dict(color=PALETA[k % len(PALETA)], opacity=[0.3 if c else 1 for c in chicos],
+                marker=dict(color=(colores or {}).get(g, PALETA[k % len(PALETA)]),
+                            opacity=[0.3 if c else 1 for c in chicos],
                             line=dict(color="white", width=1)),
                 text=sub[y].map(lambda v: numero(v, decimales)) if etiquetas else None, textposition="outside",
                 cliponaxis=False,
@@ -935,4 +938,140 @@ def lineas_por_eboe(tabla: pd.DataFrame, x: str, y: str, titulo_y: str, unidad: 
             customdata=sub[y].map(lambda v: numero(v, decimales)),
             hovertemplate=f"<b>eBOE {eboe}</b> · %{{x|%d/%m/%Y}}<br>{titulo_y}: %{{customdata}} {unidad}<extra></extra>")
     figura.update_layout(yaxis_title=titulo_y, xaxis=dict(title=titulo_x, tickformat="%d/%m/%y"), hovermode="x unified")
+    return estilo(figura)
+
+
+# ---------------------------------------------------------------- centrífugas
+
+COLOR_BANDA_PLANTA = "#1baf7a"     # banda de referencia de la planta (verde de la paleta, muy tenue)
+OPACIDAD_BANDA = 0.12
+
+
+def color_equipo(equipo: str, orden: list[str]) -> str:
+    """Color fijo por equipo (sigue al equipo, no a su posición en el gráfico)."""
+    return PALETA[orden.index(equipo) % len(PALETA)] if equipo in orden else GRIS
+
+
+def boxplot_por_equipo(valores: pd.DataFrame, titulo_y: str, unidad: str, orden: list[str], decimales: int = 2,
+                       bandas: dict | None = None, color_banda: str = COLOR_BANDA_PLANTA,
+                       nombre_banda: str = "Referencia") -> go.Figure:
+    """Una caja por equipo y temporada (color por equipo), con N debajo de cada caja (⚠ si N < 3).
+
+    valores: columnas equipo, temporada, valor, fecha_hora, turno, analista (core.analisis_centrifugas.
+    valores_por_variable de una variable). Cajas y bigotes con limites_iqr (cuartiles de Minitab); los outliers
+    se marcan, no se borran. bandas: {equipo: (mínimo, máximo)} (uno de los dos puede ser None) dibujadas detrás
+    de las cajas de ese equipo.
+    """
+    figura = go.Figure()
+    datos = valores.dropna(subset=["valor"])
+    grupos = sorted(datos.groupby(["equipo", "temporada"]).groups,
+                    key=lambda g: (orden.index(g[0]) if g[0] in orden else len(orden), g[1]))
+    etiquetas = []
+    for equipo, temporada in grupos:
+        sub = datos[(datos["equipo"] == equipo) & (datos["temporada"] == temporada)]
+        n = len(sub)
+        etiqueta = f"{equipo}<br>{temporada}<br>N {numero(n, 0)}{' ⚠' if n < 3 else ''}"
+        etiquetas.append((equipo, etiqueta))
+        lim, mediana = limites_iqr(sub["valor"]), cuartiles(sub["valor"])[1]
+        color = color_equipo(equipo, orden)
+        aviso = "<br><b>⚠ N < 3: poco representativo</b>" if n < 3 else ""
+        figura.add_box(x=[etiqueta], q1=[lim["q1"]], median=[mediana], q3=[lim["q3"]],
+                       lowerfence=[lim["bigote_inferior"]], upperfence=[lim["bigote_superior"]], name=equipo,
+                       showlegend=False, marker_color=color, line_width=1.5, opacity=0.4 if n < 3 else 1,
+                       hovertemplate=_texto_caja(f"{equipo} · {temporada}", lim, mediana, decimales).replace(
+                           "<extra></extra>", aviso + "<extra></extra>"))
+        outliers = sub[es_outlier_iqr(sub["valor"]).astype(bool).to_numpy()]
+        if not outliers.empty:
+            figura.add_scatter(
+                x=[etiqueta] * len(outliers), y=outliers["valor"], mode="markers", showlegend=False,
+                marker=dict(symbol="circle-open", size=8, color=color, line_width=2),
+                customdata=list(zip(outliers["fecha_hora"].dt.strftime("%d/%m/%Y %H:%M"), outliers["turno"],
+                                    outliers["analista"].fillna("—"),
+                                    outliers["valor"].map(lambda v: numero(v, decimales)))),
+                hovertemplate=f"<b>%{{customdata[3]}} {unidad}</b> (outlier)<br>{equipo} · %{{customdata[0]}} · turno "
+                              "%{customdata[1]}<br>Analista: %{customdata[2]}<extra></extra>")
+    _bandas_por_categoria(figura, etiquetas, bandas or {}, datos["valor"], color_banda, nombre_banda)
+    figura.update_layout(yaxis_title=titulo_y, xaxis=dict(type="category", categoryorder="array",
+                                                          categoryarray=[e for _, e in etiquetas]))
+    return estilo(figura)
+
+
+def _bandas_por_categoria(figura: go.Figure, etiquetas: list, bandas: dict, valores: pd.Series, color: str,
+                          nombre: str) -> None:
+    """Rectángulo detrás de cada caja con la banda de su equipo; un solo límite → hasta el borde de los datos."""
+    if valores.empty:
+        return
+    piso, techo = min(0.0, float(valores.min())), float(valores.max()) * 1.05
+    hay = False
+    for posicion, (equipo, _) in enumerate(etiquetas):
+        if equipo not in bandas:
+            continue
+        minimo, maximo = bandas[equipo]
+        figura.add_shape(type="rect", xref="x", yref="y", x0=posicion - 0.45, x1=posicion + 0.45,
+                         y0=piso if minimo is None else minimo,
+                         y1=max(techo, minimo or 0) if maximo is None else maximo,
+                         fillcolor=color, opacity=OPACIDAD_BANDA, line_width=0, layer="below")
+        hay = True
+    if hay:          # una entrada de leyenda para la banda
+        figura.add_scatter(x=[None], y=[None], mode="markers", name=nombre,
+                           marker=dict(symbol="square", size=12, color=color, opacity=0.35))
+
+
+def agua_en_el_tiempo(agua: pd.DataFrame, decimales: int = 2) -> go.Figure:
+    """Agua por eBOE calculada desde las centrífugas contra el caudal del laboratorio del BOE, por turno.
+
+    agua: core.analisis_centrifugas.agua_por_eboe (momento, agua_por_eboe_m3h, agua_lab_m3h, n_lab, etiqueta,
+    desde, hasta, eboe_en_marcha). Fondo gris en los turnos con las primarias en paralelo.
+    """
+    figura = go.Figure()
+    datos = agua.sort_values("momento")
+    # una fila vacía en cada hueco de más de 12 h: la línea se corta en los días sin datos
+    huecos = datos[datos["momento"].diff() > pd.Timedelta(hours=12)]
+    cortes = pd.DataFrame({"momento": huecos["momento"] - pd.Timedelta(hours=6)})
+    datos = pd.concat([datos, cortes]).sort_values("momento", ignore_index=True)
+    for _, turno in datos[datos["modo"] == "en paralelo"].iterrows():
+        figura.add_vrect(x0=turno["desde"] - pd.Timedelta(hours=1), x1=turno["hasta"] + pd.Timedelta(hours=1),
+                         fillcolor=GRIS, opacity=0.18, line_width=0, layer="below")
+    comun = list(zip(datos["fecha_produccion"].dt.strftime("%d/%m/%Y"), datos["turno"], datos["etiqueta"],
+                     datos["eboe_en_marcha"].map(lambda v: numero(v, 0)), datos["n_lab"].map(lambda v: numero(v, 0))))
+    for columna, nombre, color in (("agua_por_eboe_m3h", "Calculada (centrífugas)", PALETA[0]),
+                                   ("agua_lab_m3h", "Laboratorio del BOE", PALETA[1])):
+        figura.add_scatter(
+            x=datos["momento"], y=datos[columna], mode="lines+markers", name=nombre,
+            line=dict(color=color, width=2), marker=dict(size=5, color=color),
+            customdata=[c + (numero(v, decimales),) for c, v in zip(comun, datos[columna])],
+            hovertemplate=f"<b>{nombre}</b>: %{{customdata[5]}} m³/h por eBOE<br>Día %{{customdata[0]}} · turno "
+                          "%{customdata[1]} · primarias %{customdata[2]}<br>eBOE en marcha %{customdata[3]} · N lab "
+                          "%{customdata[4]}<extra></extra>")
+    figura.add_scatter(x=[None], y=[None], mode="markers", name="Primarias en paralelo",
+                       marker=dict(symbol="square", size=12, color=GRIS, opacity=0.4))
+    figura.update_layout(yaxis_title="Agua por eBOE (m³/h)", xaxis=dict(title="", tickformat="%d/%m/%y"))
+    return estilo(figura)
+
+
+def lineas_en_el_tiempo(tabla: pd.DataFrame, x: str, series: dict, titulo_y: str, unidad: str, decimales: int = 2,
+                        extra: tuple | None = None) -> go.Figure:
+    """Una línea por serie en el tiempo (por ejemplo, por día de producción), con el N de cada punto.
+
+    series: {columna: (nombre, columna de N)}. extra: (columna, nombre) que se agrega al tooltip (por ejemplo el
+    programa medio del día). Mismo eje Y para todas las series (nunca dos ejes).
+    """
+    figura = go.Figure()
+    datos = tabla.sort_values(x)
+    for k, (columna, (nombre, columna_n)) in enumerate(series.items()):
+        sub = datos.dropna(subset=[columna])
+        if extra:
+            texto_extra = sub[extra[0]].map(lambda v: f"<br>{extra[1]}: {numero(v, 1)}" if pd.notna(v) else "")
+        else:
+            texto_extra = pd.Series("", index=sub.index)
+        chicos = (sub[columna_n] < 3).tolist()
+        figura.add_scatter(
+            x=sub[x], y=sub[columna], mode="lines+markers", name=nombre, line=dict(color=PALETA[k], width=2),
+            marker=dict(size=6, color=PALETA[k], opacity=[0.3 if c else 1 for c in chicos]),
+            customdata=list(zip(sub[columna].map(lambda v: numero(v, decimales)),
+                                sub[columna_n].map(lambda v: numero(v, 0)), texto_extra,
+                                ["<br><b>⚠ N < 3</b>" if c else "" for c in chicos])),
+            hovertemplate=f"<b>{nombre}</b> · %{{x|%d/%m/%Y}}<br>{titulo_y}: %{{customdata[0]}} {unidad} · N "
+                          "%{customdata[1]}%{customdata[2]}%{customdata[3]}<extra></extra>")
+    figura.update_layout(yaxis_title=titulo_y, xaxis=dict(title="Día de producción", tickformat="%d/%m/%y"))
     return estilo(figura)

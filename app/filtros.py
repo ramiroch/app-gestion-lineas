@@ -21,7 +21,8 @@ from core.db import crear_motor, crear_sesion
 from core.produccion import tabla_produccion, toneladas_por_turno
 from core.models import Planta
 from core.operacion import lecturas_plc, preparar_plc
-from core.parametros import validar_parametros
+from core.parametros import ParametrosIncompletos, validar_parametros
+from core.analisis_centrifugas import balance_por_muestreo, por_muestreo, rangos_centrifugas, tabla_muestras
 
 PLANTA_POR_DEFECTO = "LEDESMA"
 CLAVE = "filtros"
@@ -93,6 +94,34 @@ def rango_planta(planta_id: int, variable: str) -> dict | None:
         return rango_referencia(sesion, planta_id, variable)
 
 
+@st.cache_data(ttl=600, show_spinner="Leyendo las muestras de centrífugas…")
+def centrifugas_planta(planta_id: int):
+    """(muestras, balance por muestreo) de las centrífugas de la planta (core.analisis_centrifugas), en caché
+    10 minutos. Vacías si la planta no tiene muestras."""
+    with crear_sesion(motor()) as sesion:
+        muestras = tabla_muestras(sesion, planta_id)
+    if muestras.empty:
+        return muestras, muestras
+    return muestras, balance_por_muestreo(por_muestreo(muestras))
+
+
+@st.cache_data(ttl=600)
+def rangos_centrifugas_planta(planta_id: int) -> dict:
+    """Rangos de referencia de las centrífugas de la planta (core.analisis_centrifugas.rangos_centrifugas)."""
+    with crear_sesion(motor()) as sesion:
+        return rangos_centrifugas(sesion, planta_id)
+
+
+@st.cache_data(ttl=600)
+def umbral_paralelo_planta(planta_id: int) -> float | None:
+    """Parámetro umbral_paralelo_lh de la planta (L/h); None si no está definido."""
+    with crear_sesion(motor()) as sesion:
+        try:
+            return validar_parametros(sesion.get(Planta, planta_id), ["umbral_paralelo_lh"])["umbral_paralelo_lh"]
+        except ParametrosIncompletos:
+            return None
+
+
 def planta_elegida() -> int | None:
     """Id de la planta elegida en la barra (None si todavía no se dibujó)."""
     etiqueta = _guardado().get("planta")
@@ -128,6 +157,9 @@ def _recargar() -> None:
     produccion_planta.clear()
     rango_planta.clear()
     plantas.clear()
+    centrifugas_planta.clear()
+    rangos_centrifugas_planta.clear()
+    umbral_paralelo_planta.clear()
 
 
 def _preparar(campo: str, por_defecto, validos=None):

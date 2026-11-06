@@ -5,8 +5,11 @@ from datetime import datetime, time
 import pandas as pd
 import pytest
 
+from core.analisis import Filtros
 from core.analisis_centrifugas import (A_DEFINIR, CALCULADO, INCOMPLETO, NO_APLICA, PARALELO, RECIRCULADO, SIN_DATOS,
-                                       SIN_TITULACION, UNA_SOLA, agua_por_eboe, balance_por_muestreo,
+                                       SIN_TITULACION, UNA_SOLA, agua_por_eboe, balance_por_muestreo, con_motivo,
+                                       filtrar_centrifugas, motivos, para_revisar, perdida_descarga_mensual,
+                                       perdida_pesada_por_destino, resumen_temporadas,
                                        caudal_nominal_primaria, integrar_descarga, perdida_descarga_temporada,
                                        perdida_por_tonelada, por_muestreo, primarias_por_turno, rangos_centrifugas,
                                        relacion_boe, resumen_por_temporada, tabla_muestras, valores_por_variable)
@@ -29,10 +32,11 @@ NORMAL = {"emulsion": 0.8, "fase_liviana": 75, "fase_pesada": 0.05, "descarga": 
 def muestra(codigo, fecha_hora, fase, aceite=None, turno="T", temporada=2026, **datos):
     nombre, tipo, volumen, destino = EQUIPOS[codigo]
     return {"id": None, "codigo": codigo, "equipo": nombre, "tipo": tipo, "volumen_descarga_l": volumen,
-            "destino": destino, "fecha_hora": pd.Timestamp(fecha_hora), "temporada": temporada, "proceso": 1,
-            "fase": fase, "fruta": "N Val S/R", "caudal_lh": None, "aceite_pct": aceite, "titulada": True,
-            "solidos_pct": None, "solidos_marca": None, "cp_liviana_bar": None, "cp_liviana_marca": None,
-            "cp_pesada_bar": None, "t_descarga_s": None, "revisar": None, "copiada": False,
+            "destino": destino, "fecha_hora": pd.Timestamp(fecha_hora), "temporada": temporada, "proceso_id": 10,
+            "proceso": 1, "fase": fase, "fruta": "N Val S/R", "analista": "Pérez", "caudal_lh": None, "aceite_pct": aceite, "titulada": True,
+            "solidos_pct": None, "solidos_marca": None, "solidos_texto": None, "cp_liviana_bar": None,
+            "cp_liviana_marca": None, "cp_pesada_bar": None, "t_descarga_s": None, "revisar": None, "copiada": False,
+            "fecha_original": None, "origen": "planilla › Datos › fila 3",
             "fecha_produccion": pd.Timestamp(fecha_hora).normalize(), "turno": turno} | datos
 
 
@@ -291,3 +295,61 @@ def test_tabla_muestras_y_rangos_desde_la_base():
     assert (rangos[("t_descarga", "Pulidora")]["minimo"], rangos[("t_descarga", "Pulidora")]["maximo"]) == (1800, 3600)
     assert rangos[("cp_pesada", "Centrífuga primaria")]["genera_alerta"] is False
     assert len(rangos) == 3                                                       # el del BOE no entra
+
+
+# ---------------------------------------------------------------- para la página
+
+def test_filtrar_centrifugas_por_fechas_turno_y_proceso():
+    datos = tabla(muestreo("CEN-1", "2026-07-01 14:00"), muestreo("CEN-1", "2026-07-02 22:00", turno="N"),
+                  muestreo("CEN-1", "2026-07-03 14:00"))
+    assert len(filtrar_centrifugas(datos, Filtros(desde=pd.Timestamp("2026-07-02").date()))) == 8
+    assert set(filtrar_centrifugas(datos, Filtros(turnos=["N"]))["turno"]) == {"N"}
+    assert filtrar_centrifugas(datos, Filtros(procesos=[99])).empty
+    assert len(filtrar_centrifugas(datos, Filtros(eboes=[1], programas=["N3"]))) == 12      # no aplican
+
+
+def test_resumen_temporadas_con_n_y_horas_estimadas():
+    datos = tabla(muestreo("CEN-1", "2026-07-01 08:00", 15000), muestreo("CEN-2", "2026-07-01 10:00", 14000),
+                  muestreo("CEN-1", "2026-07-01 12:00", 18000))
+    balance = balance_por_muestreo(por_muestreo(datos))
+    turnos = primarias_por_turno(datos, 17000)
+    produccion = pd.DataFrame({"fecha_produccion": [pd.Timestamp("2026-07-01")], "fruta_t": [500.0]})
+    fila = resumen_temporadas(datos, balance, turnos, produccion).iloc[0]
+    assert (fila["caudal_mediana_lh"], fila["n_caudal"]) == (15000, 3)
+    assert (fila["n_eficiencia"], fila["n_descarga"], fila["n_dias"]) == (3, 3, 1)
+    assert fila["horas_estimadas"] == 4                       # 08:00 → 12:00 (CEN-1) + 0 (último) + 0 (CEN-2 único)
+    assert fila["kg_estimados"] == pytest.approx(balance.iloc[0]["perdida_descarga_kgh"] * 4)
+    assert fila["kg_mt_mediana"] == pytest.approx(fila["kg_estimados"] / 500)
+
+
+def test_perdidas_por_mes_y_fase_pesada_por_destino():
+    hora = "2026-08-10 09:00"
+    datos = tabla(muestreo("CEN-1", "2026-07-30 08:00"), muestreo("CEN-1", "2026-07-30 10:00"), muestreo("CEN-1", hora),
+                  [muestra("SEC-M", hora, "fase_liviana", 95), muestra("SEC-M", hora, "descarga", 2.0, t_descarga_s=500)])
+    balance = balance_por_muestreo(por_muestreo(datos))
+    mensual = perdida_descarga_mensual(balance).set_index(["mes", "equipo"])
+    assert mensual.loc[(pd.Timestamp("2026-07-01"), "ESE 230 (1)"), "n"] == 2
+    assert mensual.loc[(pd.Timestamp("2026-08-01"), "MSD 50"), "horas"] == 0
+    destino = perdida_pesada_por_destino(balance).set_index(["equipo", "estado"])
+    assert destino.loc[("ESE 230 (1)", RECIRCULADO), "n"] == 3
+    assert destino.loc[("MSD 50", SIN_DATOS), "n_muestreos"] == 1 and destino.loc[("MSD 50", SIN_DATOS), "n"] == 0
+
+
+def test_para_revisar_y_filtro_por_motivo():
+    datos = tabla(muestreo("CEN-2", "2026-07-01 08:00", copiadas=("fase_pesada",)),
+                  [muestra("SEC-M", "2026-07-01 08:00", "descarga", 2.0,
+                           revisar="secundaria no indicada, asumida MSD 50; fecha corregida por el Día")])
+    revisar = para_revisar(datos)
+    assert len(revisar) == 2 and set(revisar["fase"]) == {"Fase pesada", "Descarga"}
+    assert motivos(revisar) == ["copiada de la otra primaria", "fecha corregida por el Día",
+                                "secundaria no indicada, asumida MSD 50"]
+    assert con_motivo(revisar, ["fecha corregida por el Día"])["equipo"].tolist() == ["MSD 50"]
+    assert len(con_motivo(revisar, [])) == 2
+
+
+def test_agua_trae_la_ventana_del_turno():
+    datos = _turnos()
+    agua = agua_por_eboe(balance_por_muestreo(por_muestreo(datos)), primarias_por_turno(datos, 16000),
+                         pd.DataFrame(columns=["fecha_produccion", "turno", "lugar", "eboe", "caudal_fase_pesada"]))
+    tarde = agua[agua["turno"] == "T"].iloc[0]
+    assert tarde["momento"] == pd.Timestamp("2026-07-01 15:10") and tarde["etiqueta"] == "en paralelo (inferido)"
