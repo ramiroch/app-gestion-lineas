@@ -62,13 +62,17 @@ def test_los_balances_de_masa_y_de_aceite_cierran():
 
 
 def test_balance_completo_y_sin_volumen():
-    balance = balance_centrifuga(15000, 0.8, 75, 0.05, 0.2, volumen_descarga_l=10, t_descarga_s=300)
+    datos = {"caudal_emulsion": 15000, "aceite_emulsion_pct": 0.8, "aceite_liviana_pct": 75,
+             "aceite_pesada_pct": 0.05, "aceite_descarga_pct": 0.2, "t_descarga_s": 300}
+    balance = balance_centrifuga(**datos, volumen_descarga_l=10)
     assert balance["caudal_descarga"] == pytest.approx(120)
     assert balance["caudal_liviana"] == pytest.approx(caudal_fase_liviana(15000, 0.008, 0.75, 0.0005, 0.002, 120))
     assert balance["perdida_descarga_kgh"] == pytest.approx(0.002 * densidad(0.002) * 120)
 
-    sin_volumen = balance_centrifuga(15000, 0.8, 75, 0.05, 0.2, volumen_descarga_l=None, t_descarga_s=300)
+    sin_volumen = balance_centrifuga(**datos, volumen_descarga_l=None)
     assert all(valor is None for valor in sin_volumen.values())          # nada con un volumen inventado
+    with pytest.raises(TypeError):
+        balance_centrifuga(15000, 0.8, 75, 0.05, 0.2, 10, 300)           # por posición no se puede
 
 
 def test_eficiencia_fuera_de_rango_fisico_se_devuelve_marcada():
@@ -131,7 +135,9 @@ def test_igual_que_la_planilla_en_p_u_y_v(muestreos, indice):
     x3, x4, x5, x6 = a3 / 100, l[15] / 100, a5 / 100, a6 / 100
 
     # con 16 L el balance de aceite es el mismo que el de la planilla: caudal de liviana y U
-    balance = balance_centrifuga(m3, a3, l[15], a5, a6, VOLUMEN_PLANILLA, t)
+    balance = balance_centrifuga(caudal_emulsion=m3, aceite_emulsion_pct=a3, aceite_liviana_pct=l[15],
+                                 aceite_pesada_pct=a5, aceite_descarga_pct=a6, volumen_descarga_l=VOLUMEN_PLANILLA,
+                                 t_descarga_s=t)
     assert balance["caudal_liviana"] == pytest.approx(l[12], rel=1e-9)
     assert balance["eficiencia"].pct == pytest.approx(100 * e[20], rel=1e-9)
 

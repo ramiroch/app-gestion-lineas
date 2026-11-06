@@ -143,10 +143,13 @@ def alimentacion_secundaria(caudales_liviana: list[float], aceites_pct: list[flo
     return total, sum(m * x for m, x in zip(caudales_liviana, aceites_pct)) / total
 
 
-def balance_centrifuga(caudal_emulsion: float, aceite_emulsion_pct: float, aceite_liviana_pct: float,
+def balance_centrifuga(*, caudal_emulsion: float, aceite_emulsion_pct: float, aceite_liviana_pct: float,
                        aceite_pesada_pct: float, aceite_descarga_pct: float, volumen_descarga_l: float | None,
                        t_descarga_s: float) -> dict:
     """Balance completo de una centrífuga a partir de un muestreo (aceites en %, como en la planilla).
+
+    El * obliga a pasar todo con nombre (balance_centrifuga(caudal_emulsion=..., ...)): son 5 números
+    parecidos y el orden se confunde fácil.
 
     Devuelve caudal_descarga, caudal_liviana y caudal_pesada (L/h), eficiencia (Eficiencia) y
     perdida_pesada_kgh y perdida_descarga_kgh. Sin volumen por descarga, todo queda en None ("a definir").
