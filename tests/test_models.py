@@ -115,6 +115,8 @@ def test_destino_de_la_fase_pesada_y_rango_que_no_genera_alerta(sesion):
                   destino_fase_pesada="canal (pérdida)").destino_fase_pesada == "canal (pérdida)"
     with pytest.raises(ValueError, match="no válido"):
         Equipo(codigo="LED-CEN-01", nombre="ESE 230", tipo="Centrífuga primaria", numero=1, destino_fase_pesada="río")
+    assert Equipo(codigo="LED-PUL-01", nombre="OSD 60", tipo="Pulidora", numero=1,
+                  destino_fase_pesada="no aplica").destino_fase_pesada == "no aplica"     # la pulidora no tiene
     planta = crear_ledesma(sesion)
     sesion.add_all([RangoReferencia(planta=planta, variable="CP fase pesada", minimo=2, maximo=3, genera_alerta=False),
                     RangoReferencia(planta=planta, variable="Sólidos centrifugables", maximo=2)])

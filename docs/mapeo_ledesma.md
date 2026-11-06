@@ -190,3 +190,26 @@ Los cálculos están en `core/centrifugas.py`. Bloques de 4 filas por muestreo: 
 - Secundaria no indicada: en 2026 la col. X dice "0" cuando el operario no eligió el equipo (confirmado por la planta). Si hay datos se asume la única secundaria del mes: 46 muestreos de agosto de 2026 pasan a MSD 50, marcados "secundaria no indicada, asumida MSD 50".
 - Destino de la fase pesada: la de las primarias ESE 230 recircula al BOE (no es pérdida); la de las secundarias MSD 50 y ESB 130 va al canal (pérdida). La secundaria casi no tiene muestras de fase pesada (59 en 2025, ninguna en 2026).
 - Claves repetidas que no se resuelven con la fecha: cinco pares en 2025 (filas 691/695, 4299/4303, 4315/4319, 4627/4631, 5323/5327; misma primaria y hora, uno sin caudal: probablemente uno era la otra primaria) y el 14/08/2026 03:10 (filas 6475 y 6503, procesos 6 y 7).
+
+### Rangos de referencia de centrífugas (RangoReferencia, hoja de maestros)
+
+| Variable | Equipo | Rango | Fuente | Alerta |
+|---|---|---|---|---|
+| Sólidos centrifugables | Primaria | ≤ 2 % | GEA 2019 | sí |
+| CP fase pesada | Primaria | 2–3 bar | GEA 2019 | **no** (alertas por carta de control, Fase I = 2025) |
+| CP fase liviana | Primaria | 0,5–1,5 bar | GEA 2019 | sí |
+| Aceite en fase liviana | Primaria | 75–85 % | GEA 2019 | sí (se usa el de la planta) |
+| Intervalo de descarga | Primaria | 180–240 s | GEA 2019 | sí |
+| Caudal de emulsión | Primaria (ESE 230) | 12.000–16.000 L/h | GEA 2019 | sí |
+| Intervalo de descarga | Pulidora (3 etapas) | 30–60 min | GEA 2019 | sí |
+| Aceite en emulsión | Primaria | 0,70–1,10 % | Planilla LEDESMA (hoja Tablas) | sí |
+| Aceite en fase pesada | Primaria | 0,05–0,20 % | Planilla LEDESMA | sí |
+| Aceite en fase liviana | Primaria | 70–80 % | Planilla LEDESMA | sí |
+| Aceite en descarga | Primaria | ≤ 0,5 % | Planilla LEDESMA | sí |
+| Aceite en fase liviana | Secundaria | 90–95 % | Planilla LEDESMA | sí |
+| Aceite en descarga | Secundaria | ≤ 0,75 % | Planilla LEDESMA | sí |
+| Aceite en descarga | Pulidora | ≤ 0,75 % | Planilla LEDESMA | sí (la descarga de la pulidora no se titula) |
+
+Los GEA van sin fruta (son del fabricante); los de la planilla, con fruta Naranja. Si hay los dos para la misma variable y equipo, se usa el de la planta. La hoja Tablas también tiene categorías que no son rangos (fase liviana 61–69 % "Atención", 40–60 % "Emulsión estable (mayonesa)") y "Temperatura 35" sin unidad ni punto: no se cargaron.
+
+Primarias en paralelo (inferido): en 2025 las dos primarias se muestreaban a la misma hora (510 de 695 muestreos), a ~18.000 L/h cada una; en 2026, una por ronda, alternando.

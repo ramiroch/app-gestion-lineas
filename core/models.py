@@ -17,7 +17,7 @@ from sqlalchemy import (Boolean, Date, DateTime, Float, ForeignKey, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
 
 ESTADOS_EQUIPO = ("Operativo", "Pendiente de instalación", "Fuera de servicio")
-DESTINOS_FASE_PESADA = ("recircula al BOE", "canal (pérdida)")
+DESTINOS_FASE_PESADA = ("recircula al BOE", "canal (pérdida)", "no aplica")   # no aplica: pulidora
 
 
 class Base(DeclarativeBase):
