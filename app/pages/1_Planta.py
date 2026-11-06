@@ -8,7 +8,8 @@ from core.db import crear_motor, crear_sesion
 
 PENDIENTE = "Pendiente de instalación"
 COLUMNAS = {"codigo": "Código", "nombre": "Nombre", "tipo": "Tipo", "numero": "N.º",
-            "modelo": "Modelo", "numero_serie": "N.º de serie", "estado": "Estado"}
+            "modelo": "Modelo", "numero_serie": "N.º de serie", "estado": "Estado",
+            "volumen_descarga": "Volumen por descarga"}
 ESTILO_PENDIENTE = "background-color: rgba(255, 170, 0, 0.18)"
 ESTILO_PUNTO = "color: gray; font-style: italic"
 
@@ -77,18 +78,16 @@ planta = leer(detalle_planta, id_planta[nombre_planta])
 
 st.header(planta["nombre"])
 st.caption(f"Cliente: {planta['cliente']} · País: {planta['pais']}")
-blanco, fruta, emulsion, hora, blanco_cen, volumen = (
-    planta["blanco_ml"], planta["factor_aceite_fruta"], planta["factor_aceite_emulsion"], planta["hora_inicio_dia"],
-    planta["blanco_centrifugas_ml"], planta["volumen_descarga_l"])
-c1, c2, c3, c4 = st.columns(4)
+blanco, fruta, emulsion, hora, blanco_cen = (planta["blanco_ml"], planta["factor_aceite_fruta"],
+                                             planta["factor_aceite_emulsion"], planta["hora_inicio_dia"],
+                                             planta["blanco_centrifugas_ml"])
+c1, c2, c3, c4, c5 = st.columns(5)
 mostrar_parametro(c1, "Blanco", None if blanco is None else f"{numero_es(blanco, 2)} mL")
 mostrar_parametro(c2, "Factor aceite en fruta", None if fruta is None else numero_es(fruta, 4))
 mostrar_parametro(c3, "Factor aceite en emulsión", None if emulsion is None else numero_es(emulsion, 4))
 mostrar_parametro(c4, "Inicio del día de producción", None if hora is None else hora.strftime("%H:%M"))
-c5, c6, _, _ = st.columns(4)
 mostrar_parametro(c5, "Blanco de centrífugas", None if blanco_cen is None else f"{numero_es(blanco_cen, 2)} mL")
-mostrar_parametro(c6, "Volumen por descarga", None if volumen is None else f"{numero_es(volumen, 1)} L")
-if None in (blanco, fruta, emulsion, hora, blanco_cen, volumen):
+if None in (blanco, fruta, emulsion, hora, blanco_cen):
     st.caption("Los parámetros «a definir» se completan en la hoja Planta de "
                "data/maestros_clientes.xlsx. Sin ellos no se pueden calcular análisis de esta planta.")
 

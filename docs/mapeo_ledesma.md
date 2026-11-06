@@ -158,3 +158,20 @@ La app tiene que generar para naranja (temporadas 2025 y 2026) los mismos análi
 | 11 | Comparación anual | Tabla con Tucumán, otras plantas y LEDESMA (fruta procesada, aceite en fruta, eficiencia eBOE, rendimiento, eficiencia de aceite, residuales, eficiencia de centrífugas). **Los datos de Tucumán y otras plantas y los de centrífugas no están en el archivo: se cargan aparte** |
 
 Conclusiones de septiembre que conviene contrastar con naranja: diferencias significativas de aceite en fruta entre campañas (ANOVA); la pérdida de eficiencia viene de más eventos de bajo rendimiento, no de un menor máximo; la variación entre campañas es mayor que la variación dentro de cada campaña.
+
+## 10. Centrífugas de aceite (archivo "CENTRIGUGAS Naranja 25 2.xlsx", hoja Datos)
+
+Los cálculos están en `core/centrifugas.py`. Bloques de 4 filas por muestreo: Emulsión (alimentación, 3), fase liviana (4), fase pesada (5) y descarga (6). x = aceite en fracción; ρ(x) = 0,852·x + 0,997·(1 − x) kg/L.
+
+| Cálculo | Planilla | App |
+|---|---|---|
+| Aceite % (col. P) | (mL − 0,1) × N × 3,45 / g | Igual, con blanco_centrifugas_ml y factor_aceite_emulsion de la planta |
+| Caudal de fase liviana (col. M) | [M3·ρ3·(x3 − x5) − 16/t·3600·ρ6·(x6 − x5)] / [ρ4·(x4 − x5)] | Igual, con el volumen por descarga **del equipo** (Equipo.volumen_descarga_l), no 16 L fijo |
+| Eficiencia (col. U) | M4·ρ4·x4 / (M3·ρ3·x3) | Igual, en %; menor que 0 o mayor que 100 → marcada "fuera de rango físico" |
+| Caudal de fase pesada (col. M) | [M3·ρ3 − M4·ρ4 − 16/t·3600·ρ6·**(x6 − x5)**] / ρ5 | Balance de masa total **sin** (x6 − x5): ese factor solo va en el balance de aceite. Da ~0,6 % menos (mediana) |
+| Aceite perdido en descarga (col. V) | x6 · ρ6 · **t** (t = segundos entre descargas, usado como caudal) | x6 · ρ6 · caudal de descarga, con caudal = volumen × 3600 / t. **La planilla sobreestima la pérdida t² / (V · 3600) veces: ~4,3 con t = 500 s y 16 L** (mediana 1,00 → 0,26 kg/h) |
+| Aceite perdido en emulsión, liviana y pesada (col. V) | x · ρ · caudal | Igual (la pesada, con su caudal corregido) |
+
+- Volumen por descarga = espacio de sólidos del tambor, sin porcentajes: ESE 230 (1) y (2) 16 L; MSD 50 2 L (fabricante 1,5–2 L, a confirmar si la descarga es parcial o total); ESB 130 y OSD 60 a definir. Si falta, el balance y la pérdida en descarga quedan "a definir": no hay valor por defecto.
+- Verificación (`tests/test_centrifugas.py`): con las versiones de la planilla, las fórmulas dan igual que P, U y V en las filas 3, 2251, 4539, 5619 y 8831; en toda la hoja coinciden 1.861 de 1.867 muestreos. Los 6 distintos son errores de la planilla y se importan con `revisar`: fila 1683 (la descarga usa N 0,01), 3011 (aceite de emulsión escrito a mano), 6399 (valores pegados), 1787, 3527 y 5571 (falta la fórmula del caudal de fase liviana: Excel da eficiencia 0). 9 muestreos dan eficiencia negativa.
+- Secundaria: se alimenta con la suma de las fases livianas de las primarias; aceite ponderado por caudal (col. Y y AB). Mismo balance, con el volumen de su equipo.

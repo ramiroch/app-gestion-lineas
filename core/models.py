@@ -77,7 +77,6 @@ class Planta(Base):
     - hora_inicio_dia: hora en que empieza el día de producción.
     - blanco_centrifugas_ml: blanco de la titulación Scott de las muestras de centrífugas, en mL
       (distinto del blanco del BOE).
-    - volumen_descarga_l: volumen que larga una centrífuga en cada descarga, en L (balance de la primaria).
     """
 
     __tablename__ = "planta"
@@ -91,7 +90,6 @@ class Planta(Base):
     factor_aceite_emulsion: Mapped[float | None] = mapped_column(Float)
     hora_inicio_dia: Mapped[time | None] = mapped_column(Time)
     blanco_centrifugas_ml: Mapped[float | None] = mapped_column(Float)
-    volumen_descarga_l: Mapped[float | None] = mapped_column(Float)
 
     cliente: Mapped["Cliente"] = relationship(back_populates="plantas")
     lineas: Mapped[list["Linea"]] = relationship(back_populates="planta")
@@ -121,6 +119,8 @@ class Equipo(Base):
     estado: uno de ESTADOS_EQUIPO; por defecto "Operativo".
     modelo, serie_mc, numero_serie, codigo_activo_mc y numero_activo_fijo son
     opcionales porque muchas veces no se conocen al dar de alta el equipo.
+    volumen_descarga_l: solo centrífugas; volumen que larga en cada descarga, en L (igual al espacio
+    de sólidos del tambor). Vacío = a definir: sin él no se calcula la pérdida en descarga.
     """
 
     __tablename__ = "equipo"
@@ -138,6 +138,7 @@ class Equipo(Base):
     codigo_activo_mc: Mapped[str | None] = mapped_column(String(50))  # Maintenance Connection
     # "FIXED ASSET NBR" de MC. No es único: hay números repetidos entre equipos.
     numero_activo_fijo: Mapped[str | None] = mapped_column(String(50))
+    volumen_descarga_l: Mapped[float | None] = mapped_column(Float)
 
     linea: Mapped["Linea"] = relationship(back_populates="equipos")
     puntos_muestreo: Mapped[list["PuntoMuestreo"]] = relationship(back_populates="equipo")
@@ -160,6 +161,10 @@ class Equipo(Base):
                 f'Estado "{estado}" no válido. Usá uno de: {", ".join(ESTADOS_EQUIPO)}.'
             )
         return estado
+
+    @validates("volumen_descarga_l")
+    def validar_volumen(self, clave, valor):
+        return _mayor_que_cero(clave, valor)
 
 
 class PuntoMuestreo(Base):
@@ -358,7 +363,7 @@ class LecturaPLC(Auditoria, Base):
 
 
 FASES_CENTRIFUGA = ("emulsion", "fase_liviana", "fase_pesada", "descarga")
-MARCAS_SOLIDOS = ("menor que",)
+MARCAS_SOLIDOS = ("menor que", "rango")   # "<1" → 1; ">7 y <8" → 7,5 (punto medio)
 
 
 class MuestraCentrifuga(Auditoria, Base):

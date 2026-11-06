@@ -58,7 +58,7 @@ def test_detalle_planta_con_parametros(sesion):
     assert detalle["blanco_ml"] == 0.3                     # cargado
     assert detalle["factor_aceite_fruta"] is None          # no cargado: queda vacío
     assert detalle["hora_inicio_dia"] is None
-    assert detalle["blanco_centrifugas_ml"] is None and detalle["volumen_descarga_l"] is None
+    assert detalle["blanco_centrifugas_ml"] is None
 
 
 def test_detalle_planta_lineas_equipos_y_puntos(sesion):
@@ -90,6 +90,16 @@ def test_filas_equipos_pone_los_puntos_debajo_de_su_equipo(sesion):
     ]
     assert filas[0]["modelo"] == "6107E" and filas[1]["modelo"] is None
     assert filas[1]["tipo"] == "fruta entrada"
+    assert [f["volumen_descarga"] for f in filas] == ["", "", "", ""]       # no son centrífugas
+
+
+def test_filas_equipos_muestra_el_volumen_de_las_centrifugas():
+    equipos = [{"codigo": "X-CEN-01", "nombre": "ESE 230", "tipo": "Centrífuga primaria", "numero": 1,
+                "modelo": None, "numero_serie": None, "estado": "Operativo", "volumen_descarga_l": 16.0,
+                "puntos": []},
+               {"codigo": "X-PUL-01", "nombre": "OSD 60", "tipo": "Pulidora", "numero": 1, "modelo": None,
+                "numero_serie": None, "estado": "Operativo", "volumen_descarga_l": None, "puntos": []}]
+    assert [f["volumen_descarga"] for f in filas_equipos(equipos)] == ["16 L", "a definir"]
 
 
 def test_rango_referencia():

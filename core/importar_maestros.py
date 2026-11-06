@@ -35,12 +35,12 @@ RUTA_REPORTE = CARPETA_DATOS / "reporte_maestros.csv"
 COLUMNAS = {
     "Cliente": ["nombre", "pais_casa_matriz"],
     "Planta": ["cliente", "nombre", "pais", "blanco_ml", "factor_aceite_fruta",
-               "factor_aceite_emulsion", "hora_inicio_dia", "blanco_centrifugas_ml",
-               "volumen_descarga_l"],
+               "factor_aceite_emulsion", "hora_inicio_dia", "blanco_centrifugas_ml"],
     "Turno": ["cliente", "planta", "nombre", "hora_inicio", "hora_fin"],
     "Linea": ["cliente", "planta", "nombre"],
     "Equipo": ["codigo", "cliente", "planta", "linea", "nombre", "tipo", "numero", "modelo",
-               "serie_mc", "numero_serie", "codigo_activo_mc", "numero_activo_fijo", "estado"],
+               "serie_mc", "numero_serie", "codigo_activo_mc", "numero_activo_fijo", "estado",
+               "volumen_descarga_l"],
     "PuntoMuestreo": ["cliente", "planta", "equipo (codigo)", "tipo", "nombre"],
     "RangoReferencia": ["planta", "variable", "punto o equipo", "fruta", "minimo", "maximo",
                         "unidad", "fuente"],
@@ -207,7 +207,6 @@ def _fila_planta(sesion: Session, datos: dict):
         "factor_aceite_emulsion": _numero(datos, "factor_aceite_emulsion"),
         "hora_inicio_dia": _hora(datos, "hora_inicio_dia"),
         "blanco_centrifugas_ml": _numero(datos, "blanco_centrifugas_ml"),
-        "volumen_descarga_l": _numero(datos, "volumen_descarga_l"),
     }
     return _buscar(cliente.plantas, nombre=campos["nombre"]), campos
 
@@ -238,6 +237,9 @@ def _fila_equipo(sesion: Session, datos: dict):
     if linea is None:
         raise ErrorFila(f'La línea "{datos["linea"]}" de la planta "{datos["planta"]}" no existe '
                         "en la hoja Linea (o su fila tuvo un error).")
+    volumen = _numero(datos, "volumen_descarga_l")
+    if volumen is not None and volumen <= 0:
+        raise ErrorFila(f"El volumen por descarga tiene que ser mayor que 0 (dice {volumen}).")
     estado = datos["estado"] or _defecto(Equipo, "estado")
     if estado not in ESTADOS_EQUIPO:
         raise ErrorFila(f'Estado "{estado}" no válido. Usá uno de: {", ".join(ESTADOS_EQUIPO)}.')
@@ -253,6 +255,7 @@ def _fila_equipo(sesion: Session, datos: dict):
         "numero_serie": _texto(datos["numero_serie"]),
         "codigo_activo_mc": _texto(datos["codigo_activo_mc"]),
         "numero_activo_fijo": _texto(datos["numero_activo_fijo"]),
+        "volumen_descarga_l": volumen,
     }
     existente = sesion.scalars(select(Equipo).where(Equipo.codigo == campos["codigo"])).first()
     return existente, campos

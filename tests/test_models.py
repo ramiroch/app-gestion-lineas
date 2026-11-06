@@ -103,6 +103,13 @@ def test_equipo_pendiente_de_instalacion(sesion):
     assert guardado.linea.planta.nombre == "LEDESMA"
 
 
+def test_volumen_por_descarga_opcional_y_mayor_que_cero():
+    assert Equipo(codigo="LED-CSE-01", nombre="ESB 130", tipo="Centrífuga secundaria", numero=1).volumen_descarga_l \
+        is None
+    with pytest.raises(ValueError, match="mayor que 0"):
+        Equipo(codigo="LED-CEN-01", nombre="ESE 230 (1)", tipo="Centrífuga primaria", numero=1, volumen_descarga_l=0)
+
+
 def test_estado_invalido_da_error():
     with pytest.raises(ValueError, match="no válido"):
         Equipo(codigo="LED-BOE-09", nombre="eBOE 9", tipo="eBOE", numero=9, estado="Roto")

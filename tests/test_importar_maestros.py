@@ -23,10 +23,9 @@ PLANILLA_BASE = {
     ],
     "Planta": [
         ["cliente", "nombre", "pais", "blanco_ml", "factor_aceite_fruta",
-         "factor_aceite_emulsion", "hora_inicio_dia", "observaciones", "sigla", "blanco_centrifugas_ml",
-         "volumen_descarga_l"],
-        ["CLIENTE A", "Planta Norte", "Argentina", 0.3, 68.0, 3.4, time(6, 0), "nota", "NOR", 0.1, 16],
-        ["CLIENTE B", "Planta Sur", "Uruguay", None, None, None, None, None, "SUR", None, None],
+         "factor_aceite_emulsion", "hora_inicio_dia", "observaciones", "sigla", "blanco_centrifugas_ml"],
+        ["CLIENTE A", "Planta Norte", "Argentina", 0.3, 68.0, 3.4, time(6, 0), "nota", "NOR", 0.1],
+        ["CLIENTE B", "Planta Sur", "Uruguay", None, None, None, None, None, "SUR", None],
     ],
     "Turno": [
         ["cliente", "planta", "nombre", "hora_inicio", "hora_fin"],
@@ -41,17 +40,17 @@ PLANILLA_BASE = {
     ],
     # Columnas (índice): 0 cliente, 1 planta, 2 linea, 3 nombre, 4 tipo, 5 numero, 6 modelo,
     # 7 serie_mc, 8 numero_serie, 9 codigo_activo_mc, 10 numero_activo_fijo, 11 estado,
-    # 12 observaciones, 13 codigo
+    # 12 observaciones, 13 codigo, 14 volumen_descarga_l
     "Equipo": [
         ["cliente", "planta", "linea", "nombre", "tipo", "numero", "modelo", "serie_mc",
          "numero_serie", "codigo_activo_mc", "numero_activo_fijo", "estado", "observaciones",
-         "codigo"],
+         "codigo", "volumen_descarga_l"],
         ["CLIENTE A", "Planta Norte", "Línea 1", "BOE N°1", "BOE", 1, "6107E", None,
-         "6107E-001", None, 100, "Operativo", None, "NOR-BOE-01"],
+         "6107E-001", None, 100, "Operativo", None, "NOR-BOE-01", None],
         ["CLIENTE A", "Planta Norte", "Línea 1", "BOE N°2", "BOE", 2, None, None,
-         None, None, 100, "Pendiente de instalación", None, "NOR-BOE-02"],
+         None, None, 100, "Pendiente de instalación", None, "NOR-BOE-02", None],
         ["CLIENTE B", "Planta Sur", "Línea 1", "JEX N°1", "JEX", 1, "720", 750,
-         "701-001", None, None, None, None, "SUR-JEX-01"],
+         "701-001", None, None, None, None, "SUR-JEX-01", None],
     ],
     "PuntoMuestreo": [
         ["Nota: por ahora solo Planta Norte.", None, None, None, None],
@@ -203,9 +202,9 @@ def test_celdas_vacias_quedan_vacias(sesion, datos, tmp_path):
     norte = sesion.scalars(select(Planta).where(Planta.nombre == "Planta Norte")).one()
     sur = sesion.scalars(select(Planta).where(Planta.nombre == "Planta Sur")).one()
     assert (norte.blanco_ml, norte.factor_aceite_fruta, norte.hora_inicio_dia,
-            norte.blanco_centrifugas_ml, norte.volumen_descarga_l) == (0.3, 68.0, time(6, 0), 0.1, 16)
+            norte.blanco_centrifugas_ml) == (0.3, 68.0, time(6, 0), 0.1)
     assert (sur.blanco_ml, sur.factor_aceite_fruta, sur.factor_aceite_emulsion,
-            sur.hora_inicio_dia, sur.blanco_centrifugas_ml, sur.volumen_descarga_l) == (None,) * 6   # vacíos
+            sur.hora_inicio_dia, sur.blanco_centrifugas_ml) == (None,) * 5   # vacíos
 
     jex = equipo_por_codigo(sesion, "SUR-JEX-01")
     assert jex.codigo_activo_mc is None
@@ -262,6 +261,16 @@ def test_estado_invalido_va_al_reporte(sesion, datos, tmp_path):
 
     assert len(errores) == 1
     assert 'Estado "Roto" no válido' in errores[0][2]
+
+
+def test_volumen_por_descarga_del_equipo(sesion, datos, tmp_path):
+    datos["Equipo"][3][14] = 16              # SUR-JEX-01 (en la prueba da igual el tipo)
+    datos["Equipo"][2][14] = 0               # NOR-BOE-02: 0 no es un volumen
+    _, errores, _ = importar_maestros(sesion, escribir_planilla(tmp_path / "m.xlsx", datos))
+
+    assert equipo_por_codigo(sesion, "SUR-JEX-01").volumen_descarga_l == 16
+    assert equipo_por_codigo(sesion, "NOR-BOE-01").volumen_descarga_l is None     # vacío: a definir
+    assert len(errores) == 1 and "volumen por descarga tiene que ser mayor que 0" in errores[0][2]
 
 
 def test_hijo_de_una_fila_con_error_tambien_falla(sesion, datos, tmp_path):

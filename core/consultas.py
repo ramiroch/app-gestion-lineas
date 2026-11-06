@@ -7,6 +7,7 @@ así las páginas solo muestran datos y no dependen de la base.
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from core.centrifugas import texto_volumen
 from core.models import Cliente, Equipo, Linea, Planta, RangoReferencia
 
 
@@ -49,7 +50,6 @@ def detalle_planta(sesion: Session, planta_id: int) -> dict | None:
         "factor_aceite_emulsion": planta.factor_aceite_emulsion,
         "hora_inicio_dia": planta.hora_inicio_dia,
         "blanco_centrifugas_ml": planta.blanco_centrifugas_ml,
-        "volumen_descarga_l": planta.volumen_descarga_l,
         "lineas": [
             {"nombre": linea.nombre,
              "equipos": [_equipo(e) for e in sorted(linea.equipos, key=lambda e: e.codigo)]}
@@ -67,6 +67,7 @@ def _equipo(equipo: Equipo) -> dict:
         "modelo": equipo.modelo,
         "numero_serie": equipo.numero_serie,
         "estado": equipo.estado,
+        "volumen_descarga_l": equipo.volumen_descarga_l,
         "puntos": [{"tipo": p.tipo, "nombre": p.nombre}
                    for p in sorted(equipo.puntos_muestreo, key=lambda p: p.id)],
     }
@@ -75,19 +76,21 @@ def _equipo(equipo: Equipo) -> dict:
 def filas_equipos(equipos: list[dict]) -> list[dict]:
     """Arma las filas de la tabla de equipos: cada equipo y, debajo, sus puntos de muestreo.
 
-    Cada fila tiene codigo, nombre, tipo, numero, modelo, numero_serie, estado y
+    Cada fila tiene codigo, nombre, tipo, numero, modelo, numero_serie, estado, volumen_descarga
+    (texto: "16 L", "a definir" en una centrífuga sin volumen, vacío en los demás equipos) y
     es_punto (True en las filas de puntos de muestreo, que solo llevan nombre y tipo).
     """
     filas = []
     for equipo in equipos:
         fila = {clave: equipo[clave] for clave in
                 ("codigo", "nombre", "tipo", "numero", "modelo", "numero_serie", "estado")}
+        fila["volumen_descarga"] = texto_volumen(equipo["tipo"], equipo["volumen_descarga_l"])
         fila["es_punto"] = False
         filas.append(fila)
         for punto in equipo["puntos"]:
             filas.append({"codigo": "", "nombre": f"↳ {punto['nombre']}", "tipo": punto["tipo"],
                           "numero": None, "modelo": None, "numero_serie": None, "estado": None,
-                          "es_punto": True})
+                          "volumen_descarga": "", "es_punto": True})
     return filas
 
 

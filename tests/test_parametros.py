@@ -27,8 +27,7 @@ def crear_planta(sesion, **parametros) -> int:
 
 
 COMPLETOS = {"blanco_ml": 0.2, "factor_aceite_fruta": 68.8416, "factor_aceite_emulsion": 3.45,
-             "hora_inicio_dia": time(5, 0), "blanco_centrifugas_ml": 0.1,
-             "volumen_descarga_l": 16.0}
+             "hora_inicio_dia": time(5, 0), "blanco_centrifugas_ml": 0.1}
 
 
 def test_devuelve_los_parametros(sesion):
@@ -55,8 +54,8 @@ def test_faltan_todos(sesion):
         parametros_planta(sesion, crear_planta(sesion))
 
     assert ("no tiene definidos el blanco (mL), el factor de aceite en fruta, el factor de "
-            "aceite en emulsión, la hora de inicio del día de producción, el blanco de centrífugas (mL) y el "
-            "volumen por descarga de las centrífugas (L). Completalos"
+            "aceite en emulsión, la hora de inicio del día de producción y el blanco de centrífugas (mL). "
+            "Completalos"
             ) in str(error.value)
 
 
@@ -67,8 +66,6 @@ def test_factor_cero_o_blanco_negativo(sesion):
         parametros_planta(sesion, crear_planta(sesion, **(COMPLETOS | {"blanco_ml": -0.1})))
     with pytest.raises(ParametrosIncompletos, match=r"el blanco de centrífugas \(mL\) negativo"):
         parametros_planta(sesion, crear_planta(sesion, **(COMPLETOS | {"blanco_centrifugas_ml": -0.1})))
-    with pytest.raises(ParametrosIncompletos, match="volumen por descarga de las centrífugas .L. en 0"):
-        parametros_planta(sesion, crear_planta(sesion, **(COMPLETOS | {"volumen_descarga_l": 0})))
 
 
 def test_blanco_de_centrifugas_es_aparte_del_del_boe(sesion):
