@@ -175,3 +175,12 @@ Los cálculos están en `core/centrifugas.py`. Bloques de 4 filas por muestreo: 
 - Volumen por descarga = espacio de sólidos del tambor, sin porcentajes: ESE 230 (1) y (2) 16 L; MSD 50 2 L (fabricante 1,5–2 L, a confirmar si la descarga es parcial o total); ESB 130 y OSD 60 a definir. Si falta, el balance y la pérdida en descarga quedan "a definir": no hay valor por defecto.
 - Verificación (`tests/test_centrifugas.py`): con las versiones de la planilla, las fórmulas dan igual que P, U y V en las filas 3, 2251, 4539, 5619 y 8831; en toda la hoja coinciden 1.861 de 1.867 muestreos. Los 6 distintos son errores de la planilla y se importan con `revisar`: fila 1683 (la descarga usa N 0,01), 3011 (aceite de emulsión escrito a mano), 6399 (valores pegados), 1787, 3527 y 5571 (falta la fórmula del caudal de fase liviana: Excel da eficiencia 0). 9 muestreos dan eficiencia negativa.
 - Secundaria: se alimenta con la suma de las fases livianas de las primarias; aceite ponderado por caudal (col. Y y AB). Mismo balance, con el volumen de su equipo.
+
+### Importación (`core/importar_centrifugas.py`)
+
+- Se lee la hoja Datos entera. Bloques de 4 filas (emulsión, fase liviana, fase pesada, descarga); las fases se normalizan ("F Livina", "Fase livina", "FASE PESADA"…). Una fila que no encaja en un bloque o un bloque de plantilla sin datos se salta con su motivo.
+- Primaria: L a W. Secundaria: X a AG, una vez por muestreo ("130" → ESB 130; "0" o vacío → sin secundaria). De la secundaria se guardan fase liviana (AB, % directo), fase pesada (Z/AA) y descarga (Z/AA/AC); su alimentación se calcula.
+- Normalidad: emulsión y descarga N 0,1 (I); fase pesada N 0,01 (J), en primaria y secundaria.
+- Fecha: misma convención que el BOE (comprobado: después de las 23:10 viene la 01:10 con la misma Fecha en 126 casos; la Fecha cambia a las 05:00 en 122).
+- Se marcan para revisar (se importan igual): ESB 130 como primaria, eficiencia fuera de rango físico, valor pegado sin g y mL, fase pesada copiada de la otra primaria, normalidad dudosa en la descarga (fila 1683) o fase pesada calculada con N 0,1 en la planilla (secundaria 2025), aceite % de la planilla distinto del recalculado (fila 3011), planilla sin caudal de fase liviana (filas 1787, 3527, 5571) y fecha fuera de secuencia (el Día cambia y la Fecha no, o la Fecha va para atrás).
+- Misma clave (equipo + fecha_hora + fase) con datos distintos: no se carga ninguna (regla general).

@@ -113,6 +113,7 @@ python -m core.crear_base         # crea las tablas nuevas y agrega las columnas
 python -m core.importar_maestros  # carga los datos maestros desde data/maestros_clientes.xlsx
 python -m core.importar_ledesma   # carga el histórico de LEDESMA (hojas BOE y Resumen)
 python -m core.importar_plc       # carga los CSV del PLC de los eBOE (data/plc/ o la carpeta que se pase)
+python -m core.importar_centrifugas  # carga la planilla de centrífugas (--simular: solo arma el reporte)
 streamlit run app/app.py        # abrir la app
 pytest                          # correr las pruebas
 ```
