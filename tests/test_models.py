@@ -421,6 +421,7 @@ def test_muestra_centrifuga_guarda_datos_crudos_y_es_unica_por_equipo_hora_y_fas
     ("solidos_pct", 101, "entre 0 y 100"),
     ("aceite_pct_medido", -2, "entre 0 y 100"),
     ("solidos_marca", "aprox", "no válida"),
+    ("cp_liviana_marca", "dudoso", "no válida"),
 ])
 def test_muestra_centrifuga_valida_valores(campo, valor, mensaje):
     with pytest.raises(ValueError, match=mensaje):

@@ -364,6 +364,7 @@ class LecturaPLC(Auditoria, Base):
 
 FASES_CENTRIFUGA = ("emulsion", "fase_liviana", "fase_pesada", "descarga")
 MARCAS_SOLIDOS = ("menor que", "rango")   # "<1" → 1; ">7 y <8" → 7,5 (punto medio)
+MARCAS_CP = ("cero a confirmar",)         # CP liviana de la pulidora en 0: se guarda como viene
 
 
 class MuestraCentrifuga(Auditoria, Base):
@@ -376,8 +377,10 @@ class MuestraCentrifuga(Auditoria, Base):
     solidos_pct: sólidos centrifugables (%). Si la planilla trae texto ("<1"), el texto original va en
     solidos_texto, el número en solidos_pct y solidos_marca dice cómo leerlo (una de MARCAS_SOLIDOS).
     cp_liviana_bar y cp_pesada_bar: contrapresión de cada fase (bar). t_descarga_s: intervalo entre
-    descargas (s). revisar: motivo por el que la fila se importó tal cual pero hay que mirarla (por
-    ejemplo, una secundaria anotada como primaria); vacío si está bien.
+    descargas (s). cp_liviana_marca: cómo leer la CP liviana (una de MARCAS_CP). revisar: motivo por el
+    que la fila se importó tal cual pero hay que mirarla (por ejemplo, una secundaria anotada como
+    primaria); vacío si está bien. fecha_original: la Fecha de la planilla cuando el importador la
+    corrigió (vacía si no se corrigió); sirve para deshacer la corrección.
     El turno y la fecha de producción no se guardan: se calculan con core/turnos.py.
     Única por equipo + fecha_hora + fase.
     """
@@ -404,9 +407,11 @@ class MuestraCentrifuga(Auditoria, Base):
     solidos_marca: Mapped[str | None] = mapped_column(String(20))
     cp_liviana_bar: Mapped[float | None] = mapped_column(Float)
     cp_pesada_bar: Mapped[float | None] = mapped_column(Float)
+    cp_liviana_marca: Mapped[str | None] = mapped_column(String(30))
     t_descarga_s: Mapped[float | None] = mapped_column(Float)
     observacion: Mapped[str | None] = mapped_column(Text)
     revisar: Mapped[str | None] = mapped_column(String(200))
+    fecha_original: Mapped[date | None] = mapped_column(Date)
 
     equipo: Mapped["Equipo"] = relationship()
     proceso: Mapped["Proceso | None"] = relationship()
@@ -417,10 +422,11 @@ class MuestraCentrifuga(Auditoria, Base):
             raise ValueError(f'Fase "{valor}" no válida. Usá una de: {", ".join(FASES_CENTRIFUGA)}.')
         return valor
 
-    @validates("solidos_marca")
+    @validates("solidos_marca", "cp_liviana_marca")
     def validar_marca(self, clave, valor):
-        if valor is not None and valor not in MARCAS_SOLIDOS:
-            raise ValueError(f'Marca de sólidos "{valor}" no válida. Usá una de: {", ".join(MARCAS_SOLIDOS)}.')
+        marcas = MARCAS_SOLIDOS if clave == "solidos_marca" else MARCAS_CP
+        if valor is not None and valor not in marcas:
+            raise ValueError(f'Marca "{valor}" no válida en {clave}. Usá una de: {", ".join(marcas)}.')
         return valor
 
     @validates("gramos", "normalidad")

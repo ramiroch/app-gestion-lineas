@@ -8,7 +8,8 @@ from sqlalchemy import select
 
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
-from core.importar_centrifugas import (REVISAR_COPIADA, REVISAR_ESB_PRIMARIA, REVISAR_FECHA, REVISAR_FISICO,
+from core.importar_centrifugas import (REVISAR_COPIADA, REVISAR_DIA, REVISAR_ESB_PRIMARIA, REVISAR_FECHA,
+                                       REVISAR_FECHA_CORREGIDA, REVISAR_FISICO,
                                        REVISAR_NORMALIDAD, REVISAR_NORMALIDAD_PESADA, REVISAR_PEGADO,
                                        REVISAR_SIN_LIVIANA, importar_centrifugas, leer_solidos, normalizar_equipo,
                                        normalizar_fase, texto_resumen)
@@ -76,7 +77,7 @@ def planilla_completa():
                     extra={"emulsion": {"X": 130}, "liviana": {"AB": 90}, "descarga": {"Z": 4.0, "AA": 0.7, "AC": 500}})
     # 15: hora "5;10" (Día 2, Fecha +1) sin secundaria ("0"); descarga titulada con N 0,01 según la planilla
     filas += bloque("5;10", fecha=datetime(2025, 6, 25), dia=2,
-                    cambios={"descarga": {"P": _aceite(2.0, 0.01, 9.0)}}, extra={"emulsion": {"X": 0}})
+                    cambios={"descarga": {"P": _aceite(2.0, 0.01, 9.0)}}, extra={"emulsion": {"X": 0, "AH": 20, "AI": 0}})
     # 19: emulsión sin g ni mL, solo el % pegado; la planilla da eficiencia 0 (sin caudal de fase liviana)
     filas += bloque(time(7, 10), fecha=datetime(2025, 6, 25), dia=2,
                     cambios={"emulsion": {"N": None, "O": None, "P": 0.7, "U": 0}})
@@ -84,13 +85,15 @@ def planilla_completa():
     filas += bloque("09.10", "ESB 130", fecha=datetime(2025, 6, 25), dia=2,
                     extra={"emulsion": {"X": "MSD 50"}, "pesada": {"Z": 3.0, "AA": 1.8, "AB": _aceite(1.8, 0.1, 3.0)},
                            "descarga": {"Z": 4.0, "AA": None, "AC": 500}})          # descarga sin mL: incompleta
-    # 27: Día 3 pero con la Fecha del Día 2 (fuera de secuencia)
-    filas += bloque(time(11, 10), fecha=datetime(2025, 6, 25), dia=3)
+    # 27: Día 3 pero con la Fecha del Día 2 → se corrige a la del Día 2 + 1 (26/06); pulidora sin CP (AI vacío)
+    filas += bloque(time(11, 10), fecha=datetime(2025, 6, 25), dia=3, extra={"emulsion": {"AH": 25}})
     # 31: bloque de plantilla sin datos
     filas += [{"A": 1, "B": 3, "D": datetime(2025, 6, 25), "E": time(13, 10), "I": 0.1, "J": 0.01, "K": f,
                "L": "ESE 230 (1)", "X": "ESB 130"} for f in FASES]
     # 35: fila suelta (fase pesada fuera de un bloque)
     filas.append({"A": 1, "B": 3, "D": datetime(2025, 6, 25), "E": time(15, 10), "K": "F Pesada", "N": 2.0, "O": 3.0})
+    # 36: la Fecha avanza (27/06) y el Día sigue en 3: el Día está mal, la Fecha se deja
+    filas += bloque(time(9, 10), fecha=datetime(2025, 6, 27), dia=3)
     return filas
 
 
@@ -174,7 +177,13 @@ def test_secundaria_una_vez_por_muestreo_y_sin_emulsion(importado):
     # "130" → ESB 130 a la madrugada; "0" → sin secundaria
     assert ("LED-CSE-01", datetime(2025, 6, 25, 1, 10), "fase_liviana") in muestras
     assert not [k for k in muestras if k[0].startswith("LED-CSE") and k[1] == datetime(2025, 6, 25, 5, 10)]
-    assert not [k for k in muestras if k[0] == "LED-PUL-01"]                            # pulidora: todavía no
+    pulidora = {(fh, fase): m for (codigo, fh, fase), m in muestras.items() if codigo == "LED-PUL-01"}
+    assert (pulidora[(hora, "descarga")].t_descarga_s, pulidora[(hora, "fase_liviana")].cp_liviana_bar) == (900, 1)
+    assert pulidora[(hora, "fase_liviana")].cp_liviana_marca is None and pulidora[(hora, "descarga")].gramos is None
+    cero = pulidora[(datetime(2025, 6, 25, 5, 10), "fase_liviana")]
+    assert (cero.cp_liviana_bar, cero.cp_liviana_marca, cero.revisar) == (0, "cero a confirmar", None)
+    assert (datetime(2025, 6, 26, 11, 10), "fase_liviana") not in pulidora              # AI vacío: queda vacío
+    assert pulidora[(datetime(2025, 6, 26, 11, 10), "descarga")].t_descarga_s == 1500
 
 
 def test_fecha_de_produccion_como_el_boe(sesion, importado):
@@ -199,9 +208,10 @@ def test_marcas_para_revisar(importado):
     _, _, muestras = importado
     revisar = lambda codigo, fh, fase: muestras[(codigo, fh, fase)].revisar or ""        # noqa: E731
     h1, h2, h3 = datetime(2025, 6, 24, 14, 30), datetime(2025, 6, 25, 1, 10), datetime(2025, 6, 25, 5, 10)
-    h4, h5, h6 = datetime(2025, 6, 25, 7, 10), datetime(2025, 6, 25, 9, 10), datetime(2025, 6, 25, 11, 10)
+    h4, h5, h6 = datetime(2025, 6, 25, 7, 10), datetime(2025, 6, 25, 9, 10), datetime(2025, 6, 26, 11, 10)
     assert revisar("LED-CEN-02", h1, "fase_pesada") == REVISAR_COPIADA
-    assert revisar("LED-CEN-02", h1, "descarga") == ""                 # la regla de copia es solo para la pesada
+    assert revisar("LED-CEN-02", h1, "descarga") == REVISAR_COPIADA      # misma regla que la fase pesada
+    assert revisar("LED-CEN-02", h1, "emulsion") == ""                   # la emulsión es la misma: no es copia
     assert all(revisar("LED-CEN-01", h2, f) == REVISAR_FISICO for f in ("emulsion", "fase_liviana", "descarga"))
     assert revisar("LED-CEN-01", h3, "descarga") == REVISAR_NORMALIDAD
     pegada = muestras[("LED-CEN-01", h4, "emulsion")]
@@ -210,7 +220,12 @@ def test_marcas_para_revisar(importado):
     assert revisar("LED-CSE-01", h5, "emulsion") == REVISAR_ESB_PRIMARIA
     assert revisar("LED-CSE-02", h5, "fase_pesada") == REVISAR_NORMALIDAD_PESADA
     assert muestras[("LED-CSE-02", h5, "descarga")].gramos is None                    # titulación incompleta
-    assert revisar("LED-CEN-01", h6, "emulsion") == REVISAR_FECHA
+    corregida = muestras[("LED-CEN-01", h6, "emulsion")]                                # Fecha 25/06 → 26/06
+    assert (corregida.revisar, corregida.fecha_original) == (REVISAR_FECHA_CORREGIDA, date(2025, 6, 25))
+    assert muestras[("LED-PUL-01", h6, "descarga")].revisar == REVISAR_FECHA_CORREGIDA
+    dia_mal = muestras[("LED-CEN-01", datetime(2025, 6, 27, 9, 10), "emulsion")]
+    assert (dia_mal.revisar, dia_mal.fecha_original) == (REVISAR_DIA, None)
+    assert muestras[("LED-CEN-01", h1, "emulsion")].fecha_original is None
 
 
 def test_reporte_de_saltadas_y_resumen(importado):
@@ -219,11 +234,18 @@ def test_reporte_de_saltadas_y_resumen(importado):
     assert saltadas[31].startswith("Bloque sin datos (filas 31–34")
     assert saltadas[35].startswith("Fila de fase_pesada fuera de un bloque")
     assert "titulación incompleta" in _motivos(reporte, "aviso")[26]
-    assert resumen["filas_leidas"] == 33 and resumen["creados"] == len(muestras)
-    assert resumen["pulidora_sin_importar"] == 1
+    assert resumen["filas_leidas"] == 37 and resumen["creados"] == len(muestras)
+    assert resumen["cp_cero"] == 1
     assert resumen["revisar"][REVISAR_FISICO] == 4
     texto = texto_resumen(resumen, reporte)
-    assert "Filas leídas:" in texto and "Para revisar:" in texto and "Pulidora OSD 60: 1 bloques" in texto
+    assert "Filas leídas:" in texto and "Para revisar:" in texto and "cero a confirmar" in texto
+
+
+def test_sin_corregir_fechas_solo_marca(sesion, tmp_path):
+    importar_centrifugas(sesion, escribir(tmp_path / "cen.xlsx", planilla_completa()), corregir_fechas=False)
+    muestra = sesion.scalars(select(MuestraCentrifuga).where(MuestraCentrifuga.fecha_hora == datetime(2025, 6, 25, 11, 10))
+                             .where(MuestraCentrifuga.fase == "emulsion")).one()
+    assert (muestra.revisar, muestra.fecha_original) == (REVISAR_FECHA, None)
 
 
 def test_correr_dos_veces_no_duplica(sesion, tmp_path):

@@ -5,12 +5,16 @@ Estructura (detalle en docs/mapeo_ledesma.md, sección 10):
   hoja entera (los datos siguen debajo de la tabla de Excel). Una fila que no encaja en un bloque se salta.
 - Primaria: columnas L a W. Secundaria: X a AG, una vez por muestreo; "130" → ESB 130, "0" o vacío → sin
   secundaria. Su alimentación (emulsión) no se guarda: se calcula con alimentacion_secundaria().
-- Pulidora OSD 60 (AH, AI): todavía no se importa (falta definir cómo guardarla).
+- Pulidora OSD 60 (AH, AI de la fila de emulsión): sin titulación; dos muestras por muestreo, "descarga" con
+  t_descarga_s = AH × 60 y "fase_liviana" con cp_liviana_bar = AI. Una CP en 0 se guarda como viene, con
+  cp_liviana_marca = "cero a confirmar".
 - Normalidad: emulsión y descarga N 0,1 (columna I); fase pesada N 0,01 (columna J).
 - Fase liviana: el % se anota directo → aceite_pct_medido. En las otras fases se guardan g y mL; si solo hay
   un % (pegado), va a aceite_pct_medido y la muestra se marca para revisar.
 - Fecha: la columna Fecha es el día de producción (igual que en el BOE): de 00:00 a 04:59 la muestra es del
-  día siguiente. Se usa resolver_fechas() de importar_ledesma.
+  día siguiente. Se usa resolver_fechas() de importar_ledesma. Si el Día cambia y la Fecha no (o la Fecha
+  va para atrás), la Fecha se corrige con la del Día anterior + 1 (fecha_original guarda la de la planilla).
+  Si la Fecha avanza y el Día no, el que está mal es el Día: la Fecha se deja y se marca.
 - No se importan los resultados de la planilla (P, U, V): se recalculan. Solo se comparan con lo recalculado
   para marcar las filas con errores de planilla (campo revisar). Nada se descarta por estar marcado.
 - Se puede correr muchas veces: lo que ya existe (equipo + fecha_hora + fase) se actualiza.
@@ -24,6 +28,7 @@ import re
 import sys
 import unicodedata
 from collections import Counter, defaultdict
+from datetime import timedelta
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -36,7 +41,7 @@ from core.db import crear_motor, crear_sesion
 from core.duplicados import separar_repetidas
 from core.importar_ledesma import (ErrorFila, Reporte, _fecha, normalizar_hora, normalizar_texto,
                                    resolver_fechas, resolver_procesos)
-from core.models import Cliente, MuestraCentrifuga, Planta, Proceso, texto_origen
+from core.models import MARCAS_CP, Cliente, MuestraCentrifuga, Planta, Proceso, texto_origen
 from core.parametros import validar_parametros
 from core.turnos import fecha_produccion
 
@@ -62,6 +67,8 @@ COLUMNAS = {
 ORDEN_BLOQUE = ("emulsion", "fase_liviana", "fase_pesada", "descarga")
 EQUIPOS_SECUNDARIA = {"130": "ESB 130"}          # abreviaturas de la columna X
 SIN_SECUNDARIA = {"0"}
+PULIDORA = "OSD 60"
+FASES_COPIABLES = ("fase_pesada", "descarga")
 DATOS_FASE = ("caudal", "g", "ml", "aceite", "t_descarga", "solidos", "cp_liviana", "cp_pesada", "observacion")
 DATOS_SECUNDARIA = ("sec_g", "sec_ml", "sec_aceite", "sec_t_descarga", "sec_cp_liviana", "sec_cp_pesada")
 DATOS_CRUDOS = ["caudal_lh", "gramos", "ml", "normalidad", "aceite_pct_medido", "solidos_texto", "cp_liviana_bar",
@@ -78,6 +85,9 @@ REVISAR_NORMALIDAD_PESADA = "la planilla calcula la fase pesada con N 0,1 (acá 
 REVISAR_ACEITE = "el aceite % de la planilla no coincide con el de g y mL"
 REVISAR_SIN_LIVIANA = "en la planilla falta el caudal de fase liviana (Excel da eficiencia 0)"
 REVISAR_FECHA = "fecha fuera de secuencia"
+REVISAR_FECHA_CORREGIDA = "fecha corregida por el Día"
+REVISAR_DIA = "Día fuera de secuencia (la Fecha avanza y el Día no)"
+MOTIVOS_DE_FECHA = (REVISAR_FECHA, REVISAR_FECHA_CORREGIDA, REVISAR_DIA)
 LARGO_REVISAR = 200
 
 
@@ -234,11 +244,13 @@ def _limpiar(valor):
 # ---------------------------------------------------------------- importación
 
 def importar_centrifugas(sesion: Session, ruta: Path = RUTA_EXCEL, cliente: str = "LEDESMA",
-                         planta: str = "LEDESMA", guardar: bool = True) -> tuple[dict, ReporteCentrifugas]:
+                         planta: str = "LEDESMA", guardar: bool = True,
+                         corregir_fechas: bool = True) -> tuple[dict, ReporteCentrifugas]:
     """Carga la hoja Datos en MuestraCentrifuga. Devuelve (resumen, reporte).
 
-    resumen: filas leídas, muestras creadas/actualizadas, muestras por equipo y año, motivos de revisión,
-    bloques de pulidora sin importar. guardar=False arma todo y deshace (para simular).
+    resumen: filas leídas, muestras creadas/actualizadas, muestras por equipo y año, motivos de revisión.
+    guardar=False arma todo y deshace (para simular). corregir_fechas=False solo marca las fechas fuera de
+    secuencia (sirve para comparar).
     """
     ruta = Path(ruta)
     la_planta = sesion.scalars(select(Planta).join(Cliente).where(
@@ -252,12 +264,9 @@ def importar_centrifugas(sesion: Session, ruta: Path = RUTA_EXCEL, cliente: str 
     reporte = ReporteCentrifugas()
     filas = leer_hoja(load_workbook(ruta, data_only=True, read_only=True)[HOJA])
     resumen = {"filas_leidas": len(filas), "creados": 0, "actualizados": 0, "procesos_creados": 0,
-               "por_equipo": Counter(), "revisar": Counter(), "pulidora_sin_importar": 0}
+               "por_equipo": Counter(), "revisar": Counter(), "cp_cero": 0}
 
-    bloques = _con_fecha(armar_bloques(filas, reporte), la_planta, reporte)
-    resumen["pulidora_sin_importar"] = sum(
-        1 for b in bloques if any(b["filas"]["emulsion"][1].get(c) is not None
-                                  for c in ("pul_t_descarga_min", "pul_cp_liviana")))
+    bloques = _con_fecha(armar_bloques(filas, reporte), la_planta, reporte, corregir_fechas)
     muestras = []
     for bloque in bloques:
         try:
@@ -267,8 +276,8 @@ def importar_centrifugas(sesion: Session, ruta: Path = RUTA_EXCEL, cliente: str 
     _marcar_copiadas(muestras)
 
     para_guardar = []
-    for secundaria in (False, True):     # por separado: la primaria y la secundaria comparten n.º de fila
-        grupo = [(m["fila"], m) for m in muestras if m["secundaria"] == secundaria]
+    for equipo in ("primaria", "secundaria", "pulidora"):     # por separado: comparten n.º de fila
+        grupo = [(m["fila"], m) for m in muestras if m["grupo"] == equipo]
         grupo, errores, avisos = separar_repetidas(HOJA, grupo, ["equipo", "fecha_hora", "fase"], DATOS_CRUDOS)
         for hoja, fila, motivo in errores:
             reporte.agregar(hoja, fila, "rechazada", motivo)
@@ -283,8 +292,13 @@ def importar_centrifugas(sesion: Session, ruta: Path = RUTA_EXCEL, cliente: str 
     return resumen, reporte
 
 
-def _con_fecha(bloques: list[dict], planta: Planta, reporte: Reporte) -> list[dict]:
-    """Proceso, fecha_hora real y control de la secuencia de fechas, con las reglas del BOE."""
+def _con_fecha(bloques: list[dict], planta: Planta, reporte: Reporte, corregir: bool = True) -> list[dict]:
+    """Proceso, fecha_hora real (reglas del BOE) y control de la secuencia de Día y Fecha de cada proceso.
+
+    - El Día cambia y la Fecha no, o la Fecha va para atrás: la Fecha es la del Día anterior + 1 (si ese Día
+      ya apareció; si no, solo se marca). Se guarda la de la planilla en fecha_original.
+    - La Fecha avanza y el Día no: la Fecha se deja (el Día está mal) y se marca.
+    """
     filas = []
     for bloque in bloques:
         numero, datos = bloque["filas"]["emulsion"]
@@ -302,23 +316,44 @@ def _con_fecha(bloques: list[dict], planta: Planta, reporte: Reporte) -> list[di
                                "hora": hora, "bloque": bloque}))
     filas = resolver_fechas(resolver_procesos(filas, reporte, HOJA), planta, reporte, HOJA)
 
-    resultado, anterior = [], {}        # (temporada, proceso) → (día, fecha de producción)
+    resultado = []
+    anterior = {}       # (temporada, proceso) → (día, fecha de producción) del último bloque bien fechado
+    por_dia = {}        # (temporada, proceso, día) → fecha de producción de ese Día
     for numero, datos in filas:
-        bloque = datos["bloque"]
-        bloque.update(fecha_hora=datos["fecha_hora"], proceso=datos["proceso"], dia=datos["dia"],
-                      temporada=_fecha(datos["fecha"]).year, revisar=[])
+        bloque, dia = datos["bloque"], datos["dia"]
+        bloque.update(fecha_hora=datos["fecha_hora"], proceso=datos["proceso"], dia=dia,
+                      temporada=_fecha(datos["fecha"]).year, revisar=[], fecha_original=None)
         produccion = fecha_produccion(planta, datos["fecha_hora"])
         clave = (bloque["temporada"], datos["proceso"])
         if clave in anterior:
             dia_antes, produccion_antes = anterior[clave]
-            if produccion < produccion_antes or (datos["dia"] != dia_antes) != (produccion != produccion_antes):
-                bloque["revisar"].append(REVISAR_FECHA)
+            cambia_dia, cambia_fecha = dia != dia_antes, produccion != produccion_antes
+            if produccion < produccion_antes or (cambia_dia and not cambia_fecha):
+                dia_previo = por_dia.get((*clave, dia - 1)) if corregir else None
+                if dia_previo is None:
+                    bloque["revisar"].append(REVISAR_FECHA)
+                    reporte.agregar(HOJA, numero, "revisar",
+                                    f"{REVISAR_FECHA}: Día {dia}, día de producción {produccion:%d/%m/%Y}; el bloque "
+                                    f"anterior del proceso {datos['proceso']} es Día {dia_antes}, "
+                                    f"{produccion_antes:%d/%m/%Y}.")
+                else:
+                    corregida = dia_previo + timedelta(days=1)
+                    bloque["fecha_hora"] += corregida - produccion
+                    bloque["fecha_original"] = _fecha(datos["fecha"])
+                    bloque["revisar"].append(REVISAR_FECHA_CORREGIDA)
+                    reporte.agregar(HOJA, numero, "revisar",
+                                    f"{REVISAR_FECHA_CORREGIDA}: proceso {datos['proceso']}, Día {dia}, Fecha "
+                                    f"{bloque['fecha_original']:%d/%m/%Y} → día de producción {corregida:%d/%m/%Y} "
+                                    f"(el Día {dia - 1} es del {dia_previo:%d/%m/%Y}).")
+                    produccion = corregida
+            elif cambia_fecha and not cambia_dia:
+                bloque["revisar"].append(REVISAR_DIA)
                 reporte.agregar(HOJA, numero, "revisar",
-                                f"{REVISAR_FECHA}: Día {datos['dia']}, día de producción {produccion:%d/%m/%Y}; el "
-                                f"bloque anterior del proceso {datos['proceso']} es Día {dia_antes}, "
-                                f"{produccion_antes:%d/%m/%Y}.")
-        if not bloque["revisar"]:                 # un bloque con la fecha mal no sirve de referencia
-            anterior[clave] = (datos["dia"], produccion)
+                                f"{REVISAR_DIA}: proceso {datos['proceso']}, Día {dia} del {produccion:%d/%m/%Y}; el "
+                                f"bloque anterior es el mismo Día del {produccion_antes:%d/%m/%Y}. Se deja la Fecha.")
+        if REVISAR_FECHA not in bloque["revisar"]:    # un bloque con la fecha mal no sirve de referencia
+            anterior[clave] = (dia, produccion)
+            por_dia.setdefault((*clave, dia), produccion)
         resultado.append(bloque)
     return resultado
 
@@ -334,7 +369,8 @@ def _muestras_del_bloque(bloque: dict, equipos: dict, parametros: dict, archivo:
     primaria = equipos[nombre]
     comunes = {"fecha_hora": bloque["fecha_hora"], "proceso": (bloque["temporada"], bloque["proceso"]),
                "fruta": normalizar_texto(emulsion["fruta"]), "analista": normalizar_texto(emulsion["analista"], True),
-               "operador": normalizar_texto(emulsion["operador"], True), "archivo": archivo}
+               "operador": normalizar_texto(emulsion["operador"], True), "archivo": archivo,
+               "fecha_original": bloque["fecha_original"]}
     revisar_bloque = list(bloque["revisar"])
     if primaria.tipo != "Centrífuga primaria":
         revisar_bloque.append(REVISAR_ESB_PRIMARIA if nombre == "ESB 130" else f"{nombre} anotada como 1° centrífuga")
@@ -353,7 +389,38 @@ def _muestras_del_bloque(bloque: dict, equipos: dict, parametros: dict, archivo:
             if muestra is not None:
                 muestra["revisar"] = list(bloque["revisar"]) + muestra["revisar"]
                 muestras.append(muestra)
+    return muestras + _pulidora(bloque, equipos, comunes, reporte)
+
+
+def _pulidora(bloque: dict, equipos: dict, comunes: dict, reporte: Reporte) -> list[dict]:
+    """Muestras de la pulidora (AH: minutos entre descargas, AI: CP liviana) de la fila de emulsión."""
+    numero, emulsion = bloque["filas"]["emulsion"]
+    minutos, cp = _numero(emulsion["pul_t_descarga_min"]), _numero(emulsion["pul_cp_liviana"])
+    if minutos is None and cp is None:
+        return []
+    if PULIDORA not in equipos:
+        reporte.agregar(HOJA, numero, "rechazada", f'La pulidora "{PULIDORA}" no existe en los datos maestros: no '
+                                                   "se importan sus datos.")
+        return []
+    muestras = []
+    if minutos is not None:
+        muestras.append(_vacia(numero, equipos[PULIDORA], "descarga", "pulidora", comunes)
+                        | {"t_descarga_s": minutos * 60})
+    if cp is not None:
+        muestras.append(_vacia(numero, equipos[PULIDORA], "fase_liviana", "pulidora", comunes)
+                        | {"cp_liviana_bar": cp, "cp_liviana_marca": MARCAS_CP[0] if cp == 0 else None})
+    for muestra in muestras:
+        muestra["revisar"] = list(bloque["revisar"])
     return muestras
+
+
+def _vacia(numero: int, equipo, fase: str, grupo: str, comunes: dict) -> dict:
+    """Muestra con todos los datos vacíos (se completan después)."""
+    return {"fila": numero, "equipo": equipo.codigo, "equipo_obj": equipo, "fase": fase, "revisar": [],
+            "grupo": grupo, "caudal_lh": None, "gramos": None, "ml": None, "normalidad": None, "blanco_ml": None,
+            "aceite_pct_medido": None, "t_descarga_s": None, "cp_liviana_bar": None, "cp_liviana_marca": None,
+            "cp_pesada_bar": None, "observacion": None, "solidos_pct": None, "solidos_texto": None,
+            "solidos_marca": None} | comunes
 
 
 def _secundaria(bloque: dict, equipos: dict, reporte: Reporte):
@@ -377,14 +444,10 @@ def _muestra(bloque: dict, fase: str, prefijo: str, equipo, comunes: dict, param
     numero, datos = bloque["filas"][fase]
     valor = lambda clave: datos.get(prefijo + clave)            # noqa: E731
     g, ml, aceite = _numero(valor("g")), _numero(valor("ml")), _numero(valor("aceite"))
-    muestra = {"fila": numero, "equipo": equipo.codigo, "equipo_obj": equipo, "fase": fase, "revisar": [],
-               "secundaria": bool(prefijo),
-               "caudal_lh": _numero(datos["caudal"]) if fase == "emulsion" and not prefijo else None,
-               "gramos": None, "ml": None, "normalidad": None, "blanco_ml": None, "aceite_pct_medido": None,
-               "t_descarga_s": _numero(valor("t_descarga")), "cp_liviana_bar": _numero(valor("cp_liviana")),
-               "cp_pesada_bar": _numero(valor("cp_pesada")),
-               "observacion": None if prefijo else datos["observacion"],
-               "solidos_pct": None, "solidos_texto": None, "solidos_marca": None} | comunes
+    muestra = _vacia(numero, equipo, fase, "secundaria" if prefijo else "primaria", comunes) | {
+        "caudal_lh": _numero(datos["caudal"]) if fase == "emulsion" and not prefijo else None,
+        "t_descarga_s": _numero(valor("t_descarga")), "cp_liviana_bar": _numero(valor("cp_liviana")),
+        "cp_pesada_bar": _numero(valor("cp_pesada")), "observacion": None if prefijo else datos["observacion"]}
     if not prefijo:
         try:
             muestra["solidos_pct"], muestra["solidos_texto"], muestra["solidos_marca"] = leer_solidos(datos["solidos"])
@@ -471,14 +534,14 @@ def _aceite_de(muestra: dict, parametros: dict) -> float | None:
 
 
 def _marcar_copiadas(muestras: list[dict]) -> None:
-    """Fase pesada de una primaria con los mismos g y mL que la de otra primaria del mismo muestreo."""
-    primera = {}                       # fecha_hora → (g, mL) de la fase pesada de la primera primaria
+    """Fase pesada o descarga de una primaria con los mismos g y mL que la de otra primaria del mismo muestreo."""
+    primera = {}                       # (fecha_hora, fase) → (equipo, (g, mL)) de la primera primaria
     for muestra in muestras:
-        if muestra["fase"] != "fase_pesada" or muestra["equipo_obj"].tipo != "Centrífuga primaria" \
+        if muestra["fase"] not in FASES_COPIABLES or muestra["equipo_obj"].tipo != "Centrífuga primaria" \
                 or muestra["gramos"] is None:
             continue
         datos = (muestra["gramos"], muestra["ml"])
-        anterior = primera.setdefault(muestra["fecha_hora"], (muestra["equipo"], datos))
+        anterior = primera.setdefault((muestra["fecha_hora"], muestra["fase"]), (muestra["equipo"], datos))
         if anterior[0] != muestra["equipo"] and anterior[1] == datos:
             muestra["revisar"].append(REVISAR_COPIADA)
 
@@ -522,8 +585,8 @@ def _guardar(sesion: Session, planta: Planta, muestras: list[dict], resumen: dic
         motivos = list(dict.fromkeys(muestra["revisar"]))       # sin repetir, en orden
         campos = {c: muestra[c] for c in ("fecha_hora", "fase", "fruta", "analista", "operador", "caudal_lh", "gramos",
                                           "ml", "normalidad", "blanco_ml", "aceite_pct_medido", "solidos_pct",
-                                          "solidos_texto", "solidos_marca", "cp_liviana_bar", "cp_pesada_bar",
-                                          "t_descarga_s", "observacion")}
+                                          "solidos_texto", "solidos_marca", "cp_liviana_bar", "cp_liviana_marca",
+                                          "cp_pesada_bar", "t_descarga_s", "observacion", "fecha_original")}
         campos |= {"equipo_id": muestra["equipo_obj"].id, "proceso_id": procesos[clave_proceso].id,
                    "revisar": "; ".join(motivos)[:LARGO_REVISAR] or None, "cargado_por": CARGADO_POR,
                    "origen": texto_origen(muestra["archivo"], HOJA, muestra["fila"])}
@@ -543,9 +606,10 @@ def _guardar(sesion: Session, planta: Planta, muestras: list[dict], resumen: dic
             existentes[clave] = nuevo
             resumen["creados"] += 1
         resumen["por_equipo"][(muestra["proceso"][0], muestra["equipo_obj"].nombre, muestra["fase"])] += 1
+        resumen["cp_cero"] += campos["cp_liviana_marca"] is not None
         for motivo in motivos:
             resumen["revisar"][motivo] += 1
-            if motivo != REVISAR_FECHA:          # la fecha ya se anotó por bloque
+            if motivo not in MOTIVOS_DE_FECHA:          # la fecha ya se anotó por bloque
                 reporte.agregar(HOJA, muestra["fila"], "revisar", f"{muestra['equipo']} {muestra['fase']}: {motivo}.")
 
 
@@ -574,9 +638,8 @@ def texto_resumen(resumen: dict, reporte: ReporteCentrifugas, ruta_reporte: Path
         por_equipo[(anio, equipo)][fase] = n
     for (anio, equipo), fases in sorted(por_equipo.items()):
         lineas.append(f"      {anio} {equipo:<12} " + " · ".join(f"{f} {fases.get(f, 0)}" for f in ORDEN_BLOQUE))
-    if resumen["pulidora_sin_importar"]:
-        lineas.append(f"  Pulidora OSD 60: {resumen['pulidora_sin_importar']} bloques con datos (AH, AI) sin importar "
-                      "(falta definir cómo guardarlos).")
+    if resumen["cp_cero"]:
+        lineas.append(f"  CP liviana en 0 (marca \"cero a confirmar\", sin revisar): {resumen['cp_cero']} muestras.")
     lineas.append(f"  Detalle en {ruta_reporte}")
     return "\n".join(lineas)
 
