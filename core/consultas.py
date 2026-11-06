@@ -7,7 +7,7 @@ así las páginas solo muestran datos y no dependen de la base.
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from core.centrifugas import texto_volumen
+from core.centrifugas import A_DEFINIR, TIPOS_CENTRIFUGA, texto_volumen
 from core.models import Cliente, Equipo, Linea, Planta, RangoReferencia
 
 
@@ -68,6 +68,7 @@ def _equipo(equipo: Equipo) -> dict:
         "numero_serie": equipo.numero_serie,
         "estado": equipo.estado,
         "volumen_descarga_l": equipo.volumen_descarga_l,
+        "destino_fase_pesada": equipo.destino_fase_pesada,
         "puntos": [{"tipo": p.tipo, "nombre": p.nombre}
                    for p in sorted(equipo.puntos_muestreo, key=lambda p: p.id)],
     }
@@ -77,7 +78,8 @@ def filas_equipos(equipos: list[dict]) -> list[dict]:
     """Arma las filas de la tabla de equipos: cada equipo y, debajo, sus puntos de muestreo.
 
     Cada fila tiene codigo, nombre, tipo, numero, modelo, numero_serie, estado, volumen_descarga
-    (texto: "16 L", "a definir" en una centrífuga sin volumen, vacío en los demás equipos) y
+    (texto: "16 L", "a definir" en una centrífuga sin volumen, vacío en los demás equipos),
+    destino_fase_pesada ("a definir" en una centrífuga sin destino, vacío en los demás) y
     es_punto (True en las filas de puntos de muestreo, que solo llevan nombre y tipo).
     """
     filas = []
@@ -85,19 +87,22 @@ def filas_equipos(equipos: list[dict]) -> list[dict]:
         fila = {clave: equipo[clave] for clave in
                 ("codigo", "nombre", "tipo", "numero", "modelo", "numero_serie", "estado")}
         fila["volumen_descarga"] = texto_volumen(equipo["tipo"], equipo["volumen_descarga_l"])
+        fila["destino_fase_pesada"] = equipo.get("destino_fase_pesada") or (
+            A_DEFINIR if equipo["tipo"] in TIPOS_CENTRIFUGA else "")
         fila["es_punto"] = False
         filas.append(fila)
         for punto in equipo["puntos"]:
             filas.append({"codigo": "", "nombre": f"↳ {punto['nombre']}", "tipo": punto["tipo"],
                           "numero": None, "modelo": None, "numero_serie": None, "estado": None,
-                          "volumen_descarga": "", "es_punto": True})
+                          "volumen_descarga": "", "destino_fase_pesada": "", "es_punto": True})
     return filas
 
 
 def rango_referencia(sesion: Session, planta_id: int, variable: str) -> dict | None:
     """Rango de referencia (objetivo) de una variable para la planta, de RangoReferencia.
 
-    Devuelve {"minimo", "maximo", "unidad", "fuente"} (mínimo o máximo pueden faltar) o None si la
+    Devuelve {"minimo", "maximo", "unidad", "fuente", "genera_alerta"} (mínimo o máximo pueden faltar;
+    genera_alerta False = solo referencia) o None si la
     planta no tiene esa variable cargada. La variable se compara sin distinguir mayúsculas.
     """
     rango = sesion.scalars(
@@ -105,4 +110,5 @@ def rango_referencia(sesion: Session, planta_id: int, variable: str) -> dict | N
         .where(RangoReferencia.variable.ilike(variable))).first()
     if rango is None:
         return None
-    return {"minimo": rango.minimo, "maximo": rango.maximo, "unidad": rango.unidad, "fuente": rango.fuente}
+    return {"minimo": rango.minimo, "maximo": rango.maximo, "unidad": rango.unidad, "fuente": rango.fuente,
+            "genera_alerta": rango.genera_alerta is not False}

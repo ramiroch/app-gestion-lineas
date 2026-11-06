@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
-from core.models import (ESTADOS_EQUIPO, Cliente, Equipo, Linea, Planta, PuntoMuestreo,
+from core.models import (DESTINOS_FASE_PESADA, ESTADOS_EQUIPO, Cliente, Equipo, Linea, Planta, PuntoMuestreo,
                          RangoReferencia, Turno)
 
 CARPETA_DATOS = Path(__file__).resolve().parent.parent / "data"
@@ -40,10 +40,10 @@ COLUMNAS = {
     "Linea": ["cliente", "planta", "nombre"],
     "Equipo": ["codigo", "cliente", "planta", "linea", "nombre", "tipo", "numero", "modelo",
                "serie_mc", "numero_serie", "codigo_activo_mc", "numero_activo_fijo", "estado",
-               "volumen_descarga_l"],
+               "volumen_descarga_l", "destino_fase_pesada"],
     "PuntoMuestreo": ["cliente", "planta", "equipo (codigo)", "tipo", "nombre"],
     "RangoReferencia": ["planta", "variable", "punto o equipo", "fruta", "minimo", "maximo",
-                        "unidad", "fuente"],
+                        "unidad", "fuente", "genera_alerta"],
 }
 
 # Columnas que identifican un registro: dos filas con los mismos valores son el mismo registro.
@@ -118,6 +118,17 @@ def _texto(valor) -> str | None:
     if isinstance(valor, float) and valor.is_integer():
         valor = int(valor)
     return None if valor is None else str(valor)
+
+
+def _si_no(valor, por_defecto: bool) -> bool:
+    """ "sí"/"si"/"no" (o vacío → por_defecto)."""
+    texto = _texto(valor)
+    if texto is None:
+        return por_defecto
+    texto = texto.lower().replace("í", "i")
+    if texto in ("si", "no"):
+        return texto == "si"
+    raise ErrorFila(f'Tiene que decir "sí" o "no" (dice "{valor}").')
 
 
 def _numero(datos: dict, columna: str) -> float | None:
@@ -240,6 +251,10 @@ def _fila_equipo(sesion: Session, datos: dict):
     volumen = _numero(datos, "volumen_descarga_l")
     if volumen is not None and volumen <= 0:
         raise ErrorFila(f"El volumen por descarga tiene que ser mayor que 0 (dice {volumen}).")
+    destino = _texto(datos["destino_fase_pesada"])
+    if destino is not None and destino not in DESTINOS_FASE_PESADA:
+        raise ErrorFila(f'Destino de la fase pesada "{destino}" no válido. Usá uno de: '
+                        f'{", ".join(DESTINOS_FASE_PESADA)}.')
     estado = datos["estado"] or _defecto(Equipo, "estado")
     if estado not in ESTADOS_EQUIPO:
         raise ErrorFila(f'Estado "{estado}" no válido. Usá uno de: {", ".join(ESTADOS_EQUIPO)}.')
@@ -256,6 +271,7 @@ def _fila_equipo(sesion: Session, datos: dict):
         "codigo_activo_mc": _texto(datos["codigo_activo_mc"]),
         "numero_activo_fijo": _texto(datos["numero_activo_fijo"]),
         "volumen_descarga_l": volumen,
+        "destino_fase_pesada": destino,
     }
     existente = sesion.scalars(select(Equipo).where(Equipo.codigo == campos["codigo"])).first()
     return existente, campos
@@ -292,6 +308,7 @@ def _fila_rango(sesion: Session, datos: dict):
         "maximo": _numero(datos, "maximo"),
         "unidad": _texto(datos["unidad"]),
         "fuente": _texto(datos["fuente"]),
+        "genera_alerta": _si_no(datos["genera_alerta"], por_defecto=True),
     }
     if campos["minimo"] is not None and campos["maximo"] is not None \
             and campos["minimo"] > campos["maximo"]:

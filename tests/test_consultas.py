@@ -100,6 +100,8 @@ def test_filas_equipos_muestra_el_volumen_de_las_centrifugas():
                {"codigo": "X-PUL-01", "nombre": "OSD 60", "tipo": "Pulidora", "numero": 1, "modelo": None,
                 "numero_serie": None, "estado": "Operativo", "volumen_descarga_l": None, "puntos": []}]
     assert [f["volumen_descarga"] for f in filas_equipos(equipos)] == ["16 L", "a definir"]
+    equipos[0]["destino_fase_pesada"] = "recircula al BOE"
+    assert [f["destino_fase_pesada"] for f in filas_equipos(equipos)] == ["recircula al BOE", "a definir"]
 
 
 def test_rango_referencia():
@@ -113,6 +115,7 @@ def test_rango_referencia():
         sesion.commit()
 
         assert rango_referencia(sesion, planta.id, "eficiencia eboe") == {"minimo": 80.0, "maximo": 90.0,
-                                                                          "unidad": "%", "fuente": None}
+                                                                          "unidad": "%", "fuente": None,
+                                                                          "genera_alerta": True}
         assert rango_referencia(sesion, planta.id, "°Brix emulsión")["minimo"] is None
         assert rango_referencia(sesion, planta.id, "Rendimiento eBOE") is None

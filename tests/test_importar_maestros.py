@@ -40,11 +40,11 @@ PLANILLA_BASE = {
     ],
     # Columnas (índice): 0 cliente, 1 planta, 2 linea, 3 nombre, 4 tipo, 5 numero, 6 modelo,
     # 7 serie_mc, 8 numero_serie, 9 codigo_activo_mc, 10 numero_activo_fijo, 11 estado,
-    # 12 observaciones, 13 codigo, 14 volumen_descarga_l
+    # 12 observaciones, 13 codigo, 14 volumen_descarga_l, 15 destino_fase_pesada
     "Equipo": [
         ["cliente", "planta", "linea", "nombre", "tipo", "numero", "modelo", "serie_mc",
          "numero_serie", "codigo_activo_mc", "numero_activo_fijo", "estado", "observaciones",
-         "codigo", "volumen_descarga_l"],
+         "codigo", "volumen_descarga_l", "destino_fase_pesada"],
         ["CLIENTE A", "Planta Norte", "Línea 1", "BOE N°1", "BOE", 1, "6107E", None,
          "6107E-001", None, 100, "Operativo", None, "NOR-BOE-01", None],
         ["CLIENTE A", "Planta Norte", "Línea 1", "BOE N°2", "BOE", 2, None, None,
@@ -60,9 +60,9 @@ PLANILLA_BASE = {
         ["CLIENTE A", "Planta Norte", "NOR-BOE-01", "fruta salida", "BOE 1 – Fruta salida"],
     ],
     "RangoReferencia": [
-        ["planta", "variable", "punto o equipo", "fruta", "minimo", "maximo", "unidad", "fuente"],
-        ["Planta Norte", "Eficiencia BOE", "BOE (todos)", "Limón", 80, 90, "%", "prueba"],
-        ["Planta Norte", "°Brix emulsión", "Emulsión", "Limón", None, 5, "°Brix", "prueba"],
+        ["planta", "variable", "punto o equipo", "fruta", "minimo", "maximo", "unidad", "fuente", "genera_alerta"],
+        ["Planta Norte", "Eficiencia BOE", "BOE (todos)", "Limón", 80, 90, "%", "prueba", None],
+        ["Planta Norte", "°Brix emulsión", "Emulsión", "Limón", None, 5, "°Brix", "prueba", "No"],
     ],
 }
 
@@ -271,6 +271,17 @@ def test_volumen_por_descarga_del_equipo(sesion, datos, tmp_path):
     assert equipo_por_codigo(sesion, "SUR-JEX-01").volumen_descarga_l == 16
     assert equipo_por_codigo(sesion, "NOR-BOE-01").volumen_descarga_l is None     # vacío: a definir
     assert len(errores) == 1 and "volumen por descarga tiene que ser mayor que 0" in errores[0][2]
+
+
+def test_destino_de_la_fase_pesada_y_genera_alerta(sesion, datos, tmp_path):
+    datos["Equipo"][1] += ["recircula al BOE"]
+    datos["Equipo"][2] += ["al río"]                    # no válido
+    _, errores, _ = importar_maestros(sesion, escribir_planilla(tmp_path / "m.xlsx", datos))
+
+    assert equipo_por_codigo(sesion, "NOR-BOE-01").destino_fase_pesada == "recircula al BOE"
+    assert len(errores) == 1 and 'Destino de la fase pesada "al río" no válido' in errores[0][2]
+    alertas = {r.variable: r.genera_alerta for r in sesion.scalars(select(RangoReferencia))}
+    assert alertas == {"Eficiencia BOE": True, "°Brix emulsión": False}     # vacío = sí
 
 
 def test_hijo_de_una_fila_con_error_tambien_falla(sesion, datos, tmp_path):

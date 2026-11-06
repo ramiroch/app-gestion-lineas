@@ -3,11 +3,14 @@
 Estructura (detalle en docs/mapeo_ledesma.md, sección 10):
 - Bloques de 4 filas por primaria y por muestreo: emulsión, fase liviana, fase pesada y descarga. Se lee la
   hoja entera (los datos siguen debajo de la tabla de Excel). Una fila que no encaja en un bloque se salta.
-- Primaria: columnas L a W. Secundaria: X a AG, una vez por muestreo; "130" → ESB 130, "0" o vacío → sin
-  secundaria. Su alimentación (emulsión) no se guarda: se calcula con alimentacion_secundaria().
+- Primaria: columnas L a W. Secundaria: X a AG, una vez por muestreo; "130" → ESB 130. "0" o vacío = el
+  operario no eligió el equipo: si hay datos de secundaria (g, mL, t o % de fase liviana) se asume la única
+  secundaria usada ese mes (revisar = "secundaria no indicada, asumida …"); si ese mes se usó más de una, o
+  ninguna, no se asume y se saltan con su motivo. Sin datos, no hay secundaria. Su alimentación (emulsión)
+  no se guarda: se calcula con alimentacion_secundaria().
 - Pulidora OSD 60 (AH, AI de la fila de emulsión): sin titulación; dos muestras por muestreo, "descarga" con
   t_descarga_s = AH × 60 y "fase_liviana" con cp_liviana_bar = AI. Una CP en 0 se guarda como viene, con
-  cp_liviana_marca = "cero a confirmar".
+  cp_liviana_marca = "no medible (valor cercano a 0 o manómetro a revisar)".
 - Normalidad: emulsión y descarga N 0,1 (columna I); fase pesada N 0,01 (columna J).
 - Fase liviana: el % se anota directo → aceite_pct_medido. En las otras fases se guardan g y mL; si solo hay
   un % (pegado), va a aceite_pct_medido y la muestra se marca para revisar.
@@ -66,7 +69,7 @@ COLUMNAS = {
 }
 ORDEN_BLOQUE = ("emulsion", "fase_liviana", "fase_pesada", "descarga")
 EQUIPOS_SECUNDARIA = {"130": "ESB 130"}          # abreviaturas de la columna X
-SIN_SECUNDARIA = {"0"}
+NO_INDICADA = {"0"}                               # el operario no eligió la secundaria
 PULIDORA = "OSD 60"
 FASES_COPIABLES = ("fase_pesada", "descarga")
 DATOS_FASE = ("caudal", "g", "ml", "aceite", "t_descarga", "solidos", "cp_liviana", "cp_pesada", "observacion")
@@ -85,6 +88,7 @@ REVISAR_NORMALIDAD_PESADA = "la planilla calcula la fase pesada con N 0,1 (acá 
 REVISAR_ACEITE = "el aceite % de la planilla no coincide con el de g y mL"
 REVISAR_SIN_LIVIANA = "en la planilla falta el caudal de fase liviana (Excel da eficiencia 0)"
 REVISAR_FECHA = "fecha fuera de secuencia"
+REVISAR_ASUMIDA = "secundaria no indicada, asumida {}"
 REVISAR_FECHA_CORREGIDA = "fecha corregida por el Día"
 REVISAR_DIA = "Día fuera de secuencia (la Fecha avanza y el Día no)"
 MOTIVOS_DE_FECHA = (REVISAR_FECHA, REVISAR_FECHA_CORREGIDA, REVISAR_DIA)
@@ -122,7 +126,7 @@ def normalizar_equipo(valor) -> str | None:
     if valor is None:
         return None
     texto = str(int(valor)) if isinstance(valor, float) and valor.is_integer() else " ".join(str(valor).split())
-    if not texto or texto in SIN_SECUNDARIA:
+    if not texto or texto in NO_INDICADA:
         return None
     return EQUIPOS_SECUNDARIA.get(texto, texto)
 
@@ -267,6 +271,9 @@ def importar_centrifugas(sesion: Session, ruta: Path = RUTA_EXCEL, cliente: str 
                "por_equipo": Counter(), "revisar": Counter(), "cp_cero": 0}
 
     bloques = _con_fecha(armar_bloques(filas, reporte), la_planta, reporte, corregir_fechas)
+    por_mes = secundarias_por_mes(bloques)
+    for bloque in bloques:
+        bloque["secundarias_del_mes"] = por_mes.get((bloque["fecha_hora"].year, bloque["fecha_hora"].month), set())
     muestras = []
     for bloque in bloques:
         try:
@@ -274,6 +281,7 @@ def importar_centrifugas(sesion: Session, ruta: Path = RUTA_EXCEL, cliente: str 
         except ErrorFila as error:
             reporte.agregar(HOJA, bloque["fila"], "rechazada", str(error))
     _marcar_copiadas(muestras)
+    resumen["secundaria_asumida"] = Counter(b["secundaria_asumida"] for b in bloques if b.get("secundaria_asumida"))
 
     para_guardar = []
     for equipo in ("primaria", "secundaria", "pulidora"):     # por separado: comparten n.º de fila
@@ -382,13 +390,16 @@ def _muestras_del_bloque(bloque: dict, equipos: dict, parametros: dict, archivo:
     for muestra in muestras:
         muestra["revisar"] = revisar_bloque + muestra["revisar"]
 
-    secundaria = _secundaria(bloque, equipos, reporte)
+    secundaria, asumida = _secundaria(bloque, equipos, reporte)
     if secundaria is not None:
+        revisar_secundaria = list(bloque["revisar"]) + ([REVISAR_ASUMIDA.format(secundaria.nombre)] if asumida else [])
         for fase in ORDEN_BLOQUE[1:]:           # su emulsión es la suma de las livianas: no es un dato crudo
             muestra = _muestra(bloque, fase, "sec_", secundaria, comunes, parametros, reporte)
             if muestra is not None:
-                muestra["revisar"] = list(bloque["revisar"]) + muestra["revisar"]
+                muestra["revisar"] = revisar_secundaria + muestra["revisar"]
                 muestras.append(muestra)
+        if asumida:
+            bloque["secundaria_asumida"] = secundaria.nombre
     return muestras + _pulidora(bloque, equipos, comunes, reporte)
 
 
@@ -423,19 +434,56 @@ def _vacia(numero: int, equipo, fase: str, grupo: str, comunes: dict) -> dict:
             "solidos_marca": None} | comunes
 
 
-def _secundaria(bloque: dict, equipos: dict, reporte: Reporte):
-    """Equipo de la secundaria (columna X de cualquier fila del bloque) o None si no hay."""
+def secundarias_por_mes(bloques: list[dict]) -> dict[tuple[int, int], set[str]]:
+    """{(año, mes): nombres de las secundarias anotadas en la columna X ese mes}."""
+    resultado = defaultdict(set)
+    for bloque in bloques:
+        nombre = _nombre_secundaria(bloque)
+        if nombre is not None:
+            resultado[(bloque["fecha_hora"].year, bloque["fecha_hora"].month)].add(nombre)
+    return dict(resultado)
+
+
+def tiene_datos_secundaria(bloque: dict) -> bool:
+    """¿Hay datos de secundaria en el bloque? (% de fase liviana, g o mL de pesada o descarga, t de descarga)."""
+    filas = {fase: datos for fase, (_, datos) in bloque["filas"].items()}
+    valores = [filas["fase_liviana"]["sec_aceite"], filas["descarga"]["sec_t_descarga"]] + [
+        filas[fase][c] for fase in ("fase_pesada", "descarga") for c in ("sec_g", "sec_ml")]
+    return any(_numero(v) is not None for v in valores)
+
+
+def _nombre_secundaria(bloque: dict) -> str | None:
     valores = [d["sec_equipo"] for _, d in bloque["filas"].values() if d["sec_equipo"] is not None]
-    nombre = normalizar_equipo(valores[0]) if valores else None
+    return normalizar_equipo(valores[0]) if valores else None
+
+
+def _secundaria(bloque: dict, equipos: dict, reporte: Reporte):
+    """(equipo de la secundaria, asumida) o (None, False) si no hay.
+
+    Sin equipo en la columna X ("0" o vacío) pero con datos: se asume la única secundaria anotada ese mes.
+    """
+    valores = [d["sec_equipo"] for _, d in bloque["filas"].values() if d["sec_equipo"] is not None]
+    nombre = _nombre_secundaria(bloque)
     if nombre is None:
-        return None
+        if not tiene_datos_secundaria(bloque):
+            return None, False
+        del_mes = sorted(bloque["secundarias_del_mes"])
+        if len(del_mes) != 1:
+            usadas = " y ".join(del_mes) if del_mes else "ninguna"
+            reporte.agregar(HOJA, bloque["fila"], "rechazada",
+                            f"Secundaria no indicada (dice \"{valores[0] if valores else ''}\") y ese mes se usaron "
+                            f"{usadas}: no se asume ninguna y no se importan sus muestras.")
+            return None, False
+        nombre = del_mes[0]
+        if nombre in equipos:
+            return equipos[nombre], True
     if nombre not in equipos:
         reporte.agregar(HOJA, bloque["fila"], "rechazada", f'Secundaria "{valores[0]}" no existe en los datos '
                                                            "maestros: no se importan sus muestras.")
-        return None
+        return None, False
     if str(valores[0]).strip() != nombre:
         reporte.agregar(HOJA, bloque["fila"], "corregida", f'Secundaria "{valores[0]}" → {nombre}.')
-    return equipos[nombre]
+    return equipos[nombre], False
 
 
 def _muestra(bloque: dict, fase: str, prefijo: str, equipo, comunes: dict, parametros: dict,
@@ -638,8 +686,10 @@ def texto_resumen(resumen: dict, reporte: ReporteCentrifugas, ruta_reporte: Path
         por_equipo[(anio, equipo)][fase] = n
     for (anio, equipo), fases in sorted(por_equipo.items()):
         lineas.append(f"      {anio} {equipo:<12} " + " · ".join(f"{f} {fases.get(f, 0)}" for f in ORDEN_BLOQUE))
+    for nombre, bloques in resumen.get("secundaria_asumida", {}).items():
+        lineas.append(f"  Secundaria no indicada, asumida {nombre}: {bloques} muestreos.")
     if resumen["cp_cero"]:
-        lineas.append(f"  CP liviana en 0 (marca \"cero a confirmar\", sin revisar): {resumen['cp_cero']} muestras.")
+        lineas.append(f"  CP liviana en 0 (marca \"{MARCAS_CP[0]}\", sin revisar): {resumen['cp_cero']} muestras.")
     lineas.append(f"  Detalle en {ruta_reporte}")
     return "\n".join(lineas)
 

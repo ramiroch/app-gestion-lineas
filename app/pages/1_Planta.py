@@ -9,7 +9,7 @@ from core.db import crear_motor, crear_sesion
 PENDIENTE = "Pendiente de instalación"
 COLUMNAS = {"codigo": "Código", "nombre": "Nombre", "tipo": "Tipo", "numero": "N.º",
             "modelo": "Modelo", "numero_serie": "N.º de serie", "estado": "Estado",
-            "volumen_descarga": "Volumen por descarga"}
+            "volumen_descarga": "Volumen por descarga", "destino_fase_pesada": "Fase pesada"}
 ESTILO_PENDIENTE = "background-color: rgba(255, 170, 0, 0.18)"
 ESTILO_PUNTO = "color: gray; font-style: italic"
 

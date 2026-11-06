@@ -12,11 +12,12 @@ turno, fecha de producción) se calculan, nunca se guardan.
 
 from datetime import date, datetime, time
 
-from sqlalchemy import (Date, DateTime, Float, ForeignKey, String, Text, Time,
+from sqlalchemy import (Boolean, Date, DateTime, Float, ForeignKey, String, Text, Time,
                         UniqueConstraint)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
 
 ESTADOS_EQUIPO = ("Operativo", "Pendiente de instalación", "Fuera de servicio")
+DESTINOS_FASE_PESADA = ("recircula al BOE", "canal (pérdida)")
 
 
 class Base(DeclarativeBase):
@@ -121,6 +122,8 @@ class Equipo(Base):
     opcionales porque muchas veces no se conocen al dar de alta el equipo.
     volumen_descarga_l: solo centrífugas; volumen que larga en cada descarga, en L (igual al espacio
     de sólidos del tambor). Vacío = a definir: sin él no se calcula la pérdida en descarga.
+    destino_fase_pesada: solo centrífugas; adónde va su fase pesada (uno de DESTINOS_FASE_PESADA). El
+    aceite de la fase pesada es pérdida del proceso solo si va al canal.
     """
 
     __tablename__ = "equipo"
@@ -139,6 +142,7 @@ class Equipo(Base):
     # "FIXED ASSET NBR" de MC. No es único: hay números repetidos entre equipos.
     numero_activo_fijo: Mapped[str | None] = mapped_column(String(50))
     volumen_descarga_l: Mapped[float | None] = mapped_column(Float)
+    destino_fase_pesada: Mapped[str | None] = mapped_column(String(30))
 
     linea: Mapped["Linea"] = relationship(back_populates="equipos")
     puntos_muestreo: Mapped[list["PuntoMuestreo"]] = relationship(back_populates="equipo")
@@ -166,6 +170,13 @@ class Equipo(Base):
     def validar_volumen(self, clave, valor):
         return _mayor_que_cero(clave, valor)
 
+    @validates("destino_fase_pesada")
+    def validar_destino(self, clave, valor):
+        if valor is not None and valor not in DESTINOS_FASE_PESADA:
+            raise ValueError(f'Destino de la fase pesada "{valor}" no válido. Usá uno de: '
+                             f'{", ".join(DESTINOS_FASE_PESADA)}.')
+        return valor
+
 
 class PuntoMuestreo(Base):
     """Lugar de un equipo donde se toma una muestra.
@@ -189,6 +200,8 @@ class RangoReferencia(Base):
 
     punto_o_equipo es texto libre ("BOE (todos)", "Emulsión (licor)", "Planta").
     minimo y maximo son opcionales: hay rangos con un solo límite (°Brix ≤ 5).
+    genera_alerta: False si el rango es solo una referencia (se dibuja, pero estar afuera no genera una
+    alerta; por ejemplo, cuando las alertas salen de la carta de control con límites de la planta).
     """
 
     __tablename__ = "rango_referencia"
@@ -202,6 +215,7 @@ class RangoReferencia(Base):
     maximo: Mapped[float | None] = mapped_column(Float)
     unidad: Mapped[str | None] = mapped_column(String(50))
     fuente: Mapped[str | None] = mapped_column(String(200))
+    genera_alerta: Mapped[bool | None] = mapped_column(Boolean, default=True)
 
     planta: Mapped["Planta"] = relationship(back_populates="rangos")
 
@@ -364,7 +378,8 @@ class LecturaPLC(Auditoria, Base):
 
 FASES_CENTRIFUGA = ("emulsion", "fase_liviana", "fase_pesada", "descarga")
 MARCAS_SOLIDOS = ("menor que", "rango")   # "<1" → 1; ">7 y <8" → 7,5 (punto medio)
-MARCAS_CP = ("cero a confirmar",)         # CP liviana de la pulidora en 0: se guarda como viene
+# CP liviana de la pulidora en 0: se guarda como viene, fuera de estadísticas y gráficos.
+MARCAS_CP = ("no medible (valor cercano a 0 o manómetro a revisar)",)
 
 
 class MuestraCentrifuga(Auditoria, Base):
@@ -407,7 +422,7 @@ class MuestraCentrifuga(Auditoria, Base):
     solidos_marca: Mapped[str | None] = mapped_column(String(20))
     cp_liviana_bar: Mapped[float | None] = mapped_column(Float)
     cp_pesada_bar: Mapped[float | None] = mapped_column(Float)
-    cp_liviana_marca: Mapped[str | None] = mapped_column(String(30))
+    cp_liviana_marca: Mapped[str | None] = mapped_column(String(60))
     t_descarga_s: Mapped[float | None] = mapped_column(Float)
     observacion: Mapped[str | None] = mapped_column(Text)
     revisar: Mapped[str | None] = mapped_column(String(200))

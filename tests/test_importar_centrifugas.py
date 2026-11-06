@@ -13,7 +13,7 @@ from core.importar_centrifugas import (REVISAR_COPIADA, REVISAR_DIA, REVISAR_ESB
                                        REVISAR_NORMALIDAD, REVISAR_NORMALIDAD_PESADA, REVISAR_PEGADO,
                                        REVISAR_SIN_LIVIANA, importar_centrifugas, leer_solidos, normalizar_equipo,
                                        normalizar_fase, texto_resumen)
-from core.models import Cliente, Equipo, Linea, MuestraCentrifuga, Planta
+from core.models import MARCAS_CP, Cliente, Equipo, Linea, MuestraCentrifuga, Planta
 from core.turnos import fecha_produccion
 
 ENCABEZADO = {"A": "PROCESO", "B": "Día", "C": "Especie", "D": "Fecha", "E": "Hora", "F": "Químico", "G": "Operador",
@@ -181,7 +181,7 @@ def test_secundaria_una_vez_por_muestreo_y_sin_emulsion(importado):
     assert (pulidora[(hora, "descarga")].t_descarga_s, pulidora[(hora, "fase_liviana")].cp_liviana_bar) == (900, 1)
     assert pulidora[(hora, "fase_liviana")].cp_liviana_marca is None and pulidora[(hora, "descarga")].gramos is None
     cero = pulidora[(datetime(2025, 6, 25, 5, 10), "fase_liviana")]
-    assert (cero.cp_liviana_bar, cero.cp_liviana_marca, cero.revisar) == (0, "cero a confirmar", None)
+    assert (cero.cp_liviana_bar, cero.cp_liviana_marca, cero.revisar) == (0, MARCAS_CP[0], None)
     assert (datetime(2025, 6, 26, 11, 10), "fase_liviana") not in pulidora              # AI vacío: queda vacío
     assert pulidora[(datetime(2025, 6, 26, 11, 10), "descarga")].t_descarga_s == 1500
 
@@ -238,7 +238,7 @@ def test_reporte_de_saltadas_y_resumen(importado):
     assert resumen["cp_cero"] == 1
     assert resumen["revisar"][REVISAR_FISICO] == 4
     texto = texto_resumen(resumen, reporte)
-    assert "Filas leídas:" in texto and "Para revisar:" in texto and "cero a confirmar" in texto
+    assert "Filas leídas:" in texto and "Para revisar:" in texto and "no medible" in texto
 
 
 def test_sin_corregir_fechas_solo_marca(sesion, tmp_path):
@@ -279,6 +279,34 @@ def test_esb_como_secundaria_y_como_primaria_en_el_mismo_muestreo(sesion, tmp_pa
     liviana = sesion.scalars(select(MuestraCentrifuga).where(MuestraCentrifuga.fase == "fase_liviana")
                              .join(Equipo).where(Equipo.codigo == "LED-CSE-01")).all()
     assert liviana == []                                 # 93 contra 97: no se carga ninguna
+
+
+SECUNDARIA = {"liviana": {"AB": 94}, "descarga": {"Z": 4.0, "AA": 0.7, "AC": 500}}
+
+
+def test_secundaria_no_indicada_se_asume_si_ese_mes_hubo_una_sola(sesion, tmp_path):
+    julio = datetime(2026, 7, 10)
+    filas = (bloque(time(9, 10), fecha=julio, extra={"emulsion": {"X": "MSD 50"}} | SECUNDARIA)
+             + bloque(time(11, 10), fecha=julio, extra={"emulsion": {"X": 0}} | SECUNDARIA)      # "0" con datos
+             + bloque(time(13, 10), fecha=julio, extra={"emulsion": {"X": 0}}))                   # "0" sin datos
+    resumen, _ = importar_centrifugas(sesion, escribir(tmp_path / "cen.xlsx", filas))
+    secundaria = {(m.fecha_hora.hour, m.fase): m for m in sesion.scalars(
+        select(MuestraCentrifuga).join(Equipo).where(Equipo.codigo == "LED-CSE-02"))}
+    assert secundaria[(11, "fase_liviana")].revisar == "secundaria no indicada, asumida MSD 50"
+    assert secundaria[(9, "fase_liviana")].revisar is None
+    assert not [k for k in secundaria if k[0] == 13]
+    assert resumen["secundaria_asumida"] == {"MSD 50": 1}
+
+
+def test_secundaria_no_indicada_no_se_asume_si_ese_mes_hubo_dos(sesion, tmp_path):
+    filas = (bloque(time(9, 10), extra={"emulsion": {"X": "MSD 50"}})
+             + bloque(time(11, 10), extra={"emulsion": {"X": "ESB 130"}})
+             + bloque(time(13, 10), extra={"emulsion": {"X": None}} | SECUNDARIA))               # vacío con datos
+    _, reporte = importar_centrifugas(sesion, escribir(tmp_path / "cen.xlsx", filas))
+    assert "ese mes se usaron ESB 130 y MSD 50: no se asume ninguna" in _motivos(reporte, "rechazada")[11]
+    assert not sesion.scalars(select(MuestraCentrifuga).where(MuestraCentrifuga.fecha_hora
+                                                              == datetime(2025, 6, 24, 13, 10))
+                              .join(Equipo).where(Equipo.tipo == "Centrífuga secundaria")).all()
 
 
 def test_encabezado_cambiado_da_error_claro(sesion, tmp_path):

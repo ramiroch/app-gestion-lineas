@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from core.crear_base import agregar_columnas_nuevas, crear_tablas
 from core.db import crear_motor, crear_sesion
 from core.models import (AnalisisScott, Cliente, Equipo, LecturaOperacion, LecturaPLC, Linea, MuestraCentrifuga,
-                         Planta, Proceso, PuntoMuestreo, RegistroProduccion, Turno, texto_origen)
+                         Planta, Proceso, PuntoMuestreo, RangoReferencia, RegistroProduccion, Turno, texto_origen)
 
 TIPOS_PUNTO = ["fruta entrada", "fruta salida", "emulsión"]
 
@@ -108,6 +108,19 @@ def test_volumen_por_descarga_opcional_y_mayor_que_cero():
         is None
     with pytest.raises(ValueError, match="mayor que 0"):
         Equipo(codigo="LED-CEN-01", nombre="ESE 230 (1)", tipo="Centrífuga primaria", numero=1, volumen_descarga_l=0)
+
+
+def test_destino_de_la_fase_pesada_y_rango_que_no_genera_alerta(sesion):
+    assert Equipo(codigo="LED-CSE-02", nombre="MSD 50", tipo="Centrífuga secundaria", numero=2,
+                  destino_fase_pesada="canal (pérdida)").destino_fase_pesada == "canal (pérdida)"
+    with pytest.raises(ValueError, match="no válido"):
+        Equipo(codigo="LED-CEN-01", nombre="ESE 230", tipo="Centrífuga primaria", numero=1, destino_fase_pesada="río")
+    planta = crear_ledesma(sesion)
+    sesion.add_all([RangoReferencia(planta=planta, variable="CP fase pesada", minimo=2, maximo=3, genera_alerta=False),
+                    RangoReferencia(planta=planta, variable="Sólidos centrifugables", maximo=2)])
+    sesion.commit()
+    alertas = {r.variable: r.genera_alerta for r in sesion.scalars(select(RangoReferencia))}
+    assert alertas == {"CP fase pesada": False, "Sólidos centrifugables": True}       # por defecto, sí
 
 
 def test_estado_invalido_da_error():
