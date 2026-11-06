@@ -208,8 +208,10 @@ Los cálculos están en `core/centrifugas.py`. Bloques de 4 filas por muestreo: 
 | Aceite en descarga | Primaria | ≤ 0,5 % | Planilla LEDESMA | sí |
 | Aceite en fase liviana | Secundaria | 90–95 % | Planilla LEDESMA | sí |
 | Aceite en descarga | Secundaria | ≤ 0,75 % | Planilla LEDESMA | sí |
-| Aceite en descarga | Pulidora | ≤ 0,75 % | Planilla LEDESMA | sí (la descarga de la pulidora no se titula) |
+| Aceite en descarga | Pulidora | ≤ 0,75 % | Planilla LEDESMA | **no** (la descarga de la pulidora no se titula) |
 
 Los GEA van sin fruta (son del fabricante); los de la planilla, con fruta Naranja. Si hay los dos para la misma variable y equipo, se usa el de la planta. La hoja Tablas también tiene categorías que no son rangos (fase liviana 61–69 % "Atención", 40–60 % "Emulsión estable (mayonesa)") y "Temperatura 35" sin unidad ni punto: no se cargaron.
 
-Primarias en paralelo (inferido): en 2025 las dos primarias se muestreaban a la misma hora (510 de 695 muestreos), a ~18.000 L/h cada una; en 2026, una por ronda, alternando.
+Primarias en paralelo: en 2025 las dos primarias se muestreaban a la misma hora (510 de 695 muestreos), a ~18.000 L/h cada una → "en paralelo (observado)", con prioridad. En 2026, una por ronda, alternando → regla por turno "inferida": las dos aparecen en el turno y la mediana del caudal de cada una es ≤ umbral_paralelo_lh (parámetro de la planta, 17.000 L/h en LEDESMA). La evaluación es por turno, no por día.
+
+**Validación:** el agua por eBOE calculada desde las centrífugas coincide con el caudal del laboratorio del BOE (2025: 11,80 vs 11,81; 2026: 6,21 vs 6,29). La capacidad de centrifugado fija el agua de los eBOE.

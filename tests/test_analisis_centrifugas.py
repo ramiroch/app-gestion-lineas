@@ -122,12 +122,23 @@ def _turnos():
 
 
 def test_primarias_por_turno():
-    turnos = primarias_por_turno(_turnos(), caudal_maximo=16000).set_index(["fecha_produccion", "turno"])
+    turnos = primarias_por_turno(_turnos(), umbral_lh=16000).set_index(["fecha_produccion", "turno"])
     tarde = turnos.loc[(pd.Timestamp("2026-07-01"), "T")]
-    assert (tarde["modo"], tarde["caudal_total_lh"], tarde["inferido"]) == (PARALELO, 13500 + 15000, True)
-    assert turnos.loc[(pd.Timestamp("2026-07-01"), "N"), "modo"] == UNA_SOLA        # la (2) supera el nominal
+    assert (tarde["modo"], tarde["caudal_total_lh"], tarde["dato"]) == (PARALELO, 13500 + 15000, "inferido")
+    assert tarde["etiqueta"] == "en paralelo (inferido)" and tarde["inferido"]
+    assert turnos.loc[(pd.Timestamp("2026-07-01"), "N"), "modo"] == UNA_SOLA        # la (2) supera el umbral
+    con_17000 = primarias_por_turno(_turnos(), umbral_lh=17000).set_index(["fecha_produccion", "turno"])
+    assert con_17000.loc[(pd.Timestamp("2026-07-01"), "N"), "modo"] == PARALELO      # 17.000 ≤ 17.000
     manana = turnos.loc[(pd.Timestamp("2026-09-02"), "M")]
     assert (manana["modo"], manana["primarias"], manana["caudal_total_lh"]) == (UNA_SOLA, "ESE 230 (2)", 18750)
+
+
+def test_paralelo_observado_tiene_prioridad_sobre_el_umbral():
+    datos = tabla(muestreo("CEN-1", "2025-07-01 13:10", 19000, temporada=2025),
+                  muestreo("CEN-2", "2025-07-01 13:10", 18500, temporada=2025))          # a la misma hora
+    turno = primarias_por_turno(datos, umbral_lh=17000).iloc[0]
+    assert (turno["modo"], turno["dato"], turno["etiqueta"]) == (PARALELO, "observado", "en paralelo (observado)")
+    assert turno["caudal_total_lh"] == 19000 + 18500 and not turno["inferido"]
 
 
 def test_caudal_nominal_de_los_rangos():

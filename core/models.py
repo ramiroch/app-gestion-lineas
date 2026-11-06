@@ -78,6 +78,8 @@ class Planta(Base):
     - hora_inicio_dia: hora en que empieza el día de producción.
     - blanco_centrifugas_ml: blanco de la titulación Scott de las muestras de centrífugas, en mL
       (distinto del blanco del BOE).
+    - umbral_paralelo_lh: caudal de emulsión (L/h) hasta el que dos primarias que aparecen en el mismo turno se
+      consideran en paralelo (regla inferida, core.analisis_centrifugas.primarias_por_turno).
     """
 
     __tablename__ = "planta"
@@ -91,6 +93,7 @@ class Planta(Base):
     factor_aceite_emulsion: Mapped[float | None] = mapped_column(Float)
     hora_inicio_dia: Mapped[time | None] = mapped_column(Time)
     blanco_centrifugas_ml: Mapped[float | None] = mapped_column(Float)
+    umbral_paralelo_lh: Mapped[float | None] = mapped_column(Float)
 
     cliente: Mapped["Cliente"] = relationship(back_populates="plantas")
     lineas: Mapped[list["Linea"]] = relationship(back_populates="planta")

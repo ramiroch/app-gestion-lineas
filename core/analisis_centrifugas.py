@@ -2,7 +2,7 @@
 
 - tabla_muestras(): una fila por muestra, con el aceite % recalculado, día de producción y turno.
 - por_muestreo() y balance_por_muestreo(): balance de cada equipo en cada muestreo (core.centrifugas).
-- primarias_por_turno(): primarias en marcha por turno (INFERIDO) y caudal total de emulsión.
+- primarias_por_turno(): primarias en marcha por turno (observado o inferido) y caudal total de emulsión.
 - agua_por_eboe(): agua disponible por eBOE (m³/h) contra el caudal que carga el laboratorio del BOE.
 - valores_por_variable() y resumen_por_temporada(): N, mediana, cuartiles (Minitab) y % fuera de rango.
 - perdida_descarga_temporada() y perdida_por_tonelada(): pérdida en descarga ESTIMADA (kg y kg/MT).
@@ -42,6 +42,7 @@ SIN_TITULACION = "sin datos (no se titula)"
 INCOMPLETO = "sin datos (muestreo incompleto)"
 RECIRCULADO = "recirculado al BOE"
 PARALELO, UNA_SOLA = "en paralelo", "una sola"
+OBSERVADO, INFERIDO = "observado", "inferido"
 EBOE_POR_DEFECTO = 3
 INTERVALO_MAXIMO_H = 4
 N_MINIMO = 3
@@ -290,25 +291,33 @@ def _balance_pulidora(fila: dict) -> dict:
 
 # ---------------------------------------------------------------- primarias en marcha y agua por eBOE
 
-def primarias_por_turno(tabla: pd.DataFrame, caudal_maximo: float) -> pd.DataFrame:
-    """Primarias en marcha por turno de producción (INFERIDO: en 2026 se muestreaba una sola por ronda).
+def primarias_por_turno(tabla: pd.DataFrame, umbral_lh: float) -> pd.DataFrame:
+    """Primarias en marcha por turno de producción.
 
-    Regla: las dos primarias aparecen en el turno y la mediana del caudal de emulsión de cada una es ≤ caudal_maximo
-    (nominal, de RangoReferencia) → "en paralelo"; si aparece una sola o alguna supera el nominal → "una sola".
+    1. OBSERVADO (tiene prioridad): las dos primarias se muestrearon a la misma hora en el turno → "en paralelo"
+       (así se muestreaba en 2025).
+    2. INFERIDO (en 2026 se muestreaba una sola por ronda, alternando): las dos aparecen en el turno y la mediana
+       del caudal de emulsión de cada una es ≤ umbral_lh (parámetro de la planta umbral_paralelo_lh) → "en
+       paralelo"; si aparece una sola o alguna supera el umbral → "una sola".
     caudal_total_lh: en paralelo, la suma de las medianas de cada primaria; una sola, la mediana del turno.
-    Columnas: fecha_produccion, turno, temporada, primarias, n_muestras, modo, caudal_total_lh, inferido.
+    Columnas: fecha_produccion, turno, temporada, primarias, n_muestras, modo, dato ("observado" o "inferido"),
+    etiqueta ("en paralelo (observado)"), caudal_total_lh, inferido, desde y hasta (primera y última muestra).
     """
     emulsion = tabla[(tabla["tipo"] == PRIMARIA) & (tabla["fase"] == "emulsion") & tabla["caudal_lh"].notna()]
     filas = []
     for (dia, turno), grupo in emulsion.groupby(["fecha_produccion", "turno"]):
         medianas = grupo.groupby("equipo")["caudal_lh"].median()
-        paralelo = len(medianas) >= 2 and medianas.max() <= caudal_maximo
+        observado = (grupo.groupby("fecha_hora")["equipo"].nunique() >= 2).any()
+        paralelo = observado or (len(medianas) >= 2 and medianas.max() <= umbral_lh)
+        modo, dato = PARALELO if paralelo else UNA_SOLA, OBSERVADO if observado else INFERIDO
         filas.append({"fecha_produccion": dia, "turno": turno, "temporada": grupo["temporada"].iloc[0],
-                      "primarias": ", ".join(medianas.index), "n_muestras": len(grupo),
-                      "modo": PARALELO if paralelo else UNA_SOLA,
-                      "caudal_total_lh": medianas.sum() if paralelo else grupo["caudal_lh"].median(), "inferido": True})
+                      "primarias": ", ".join(medianas.index), "n_muestras": len(grupo), "modo": modo, "dato": dato,
+                      "etiqueta": f"{modo} ({dato})",
+                      "caudal_total_lh": medianas.sum() if paralelo else grupo["caudal_lh"].median(),
+                      "inferido": dato == INFERIDO, "desde": grupo["fecha_hora"].min(),
+                      "hasta": grupo["fecha_hora"].max()})
     return pd.DataFrame(filas, columns=["fecha_produccion", "turno", "temporada", "primarias", "n_muestras", "modo",
-                                        "caudal_total_lh", "inferido"])
+                                        "dato", "etiqueta", "caudal_total_lh", "inferido", "desde", "hasta"])
 
 
 def agua_por_eboe(balance: pd.DataFrame, turnos: pd.DataFrame, analisis: pd.DataFrame) -> pd.DataFrame:

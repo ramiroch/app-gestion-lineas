@@ -58,7 +58,7 @@ def test_detalle_planta_con_parametros(sesion):
     assert detalle["blanco_ml"] == 0.3                     # cargado
     assert detalle["factor_aceite_fruta"] is None          # no cargado: queda vacío
     assert detalle["hora_inicio_dia"] is None
-    assert detalle["blanco_centrifugas_ml"] is None
+    assert detalle["blanco_centrifugas_ml"] is None and detalle["umbral_paralelo_lh"] is None
 
 
 def test_detalle_planta_lineas_equipos_y_puntos(sesion):
