@@ -2,7 +2,7 @@
 
 Maestros: Cliente → Planta → Linea → Equipo → PuntoMuestreo, más Turno, Proceso y
 RangoReferencia. Datos de planta: AnalisisScott, LecturaOperacion, LecturaPLC, MuestraCentrifuga y
-RegistroProduccion.
+RegistroProduccion. Control: LimitesControl (con LimitesExclusion), Alerta (con AlertaDato).
 
 Cada clase es una tabla de la base. Las relaciones son "uno a muchos":
 un cliente tiene muchas plantas, una planta muchas líneas, etc.
@@ -19,6 +19,10 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship,
 ESTADOS_EQUIPO = ("Operativo", "Pendiente de instalación", "Fuera de servicio")
 DESTINOS_FASE_PESADA = ("recircula al BOE", "canal (pérdida)", "no aplica")   # no aplica: pulidora
 LADOS_CAPACIDAD = ("ambos", "inferior", "superior")
+TIPOS_CARTA = ("I-MR",)
+REGLAS_POR_DEFECTO = "1,2,3,5,MR"          # reglas de Nelson + "MR" (rango móvil > LCS)
+ORIGENES_ALERTA = ("nelson", "rango")
+ESTADOS_ALERTA = ("abierta", "en análisis", "cerrada", "histórico")
 
 
 class Base(DeclarativeBase):
@@ -505,3 +509,137 @@ class RegistroProduccion(Auditoria, Base):
     @validates("fruta_t", "aceite_envasado_kg", "jugo_conc_kg", "reproceso_kg", "qf3", "brix_fritz")
     def validar_no_negativos(self, clave, valor):
         return _no_negativo(clave, valor)
+
+
+class LimitesControl(Base):
+    """Límites de una carta de control congelados en la fase I (período base), para evaluar los datos nuevos.
+
+    variable: clave de core.limites.VARIABLES_CONTROL ("eficiencia", "cp_pesada"…); el punto de muestreo sale de
+    la variable. Un solo registro vigente por variable + equipo + fruta: al congelar otro, el anterior queda como
+    historial (vigente = False). Carta I: lc, lcs, lci y sigma; carta MR: mr_lc y mr_lcs (su LCI es 0).
+    reglas: reglas de Nelson ("1,2,3,5") y "MR" (rango móvil > LCS) que se evalúan con estos límites.
+    """
+
+    __tablename__ = "limites_control"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    variable: Mapped[str] = mapped_column(String(30))
+    equipo_id: Mapped[int] = mapped_column(ForeignKey("equipo.id"))
+    fruta: Mapped[str | None] = mapped_column(String(20))
+    tipo_carta: Mapped[str] = mapped_column(String(10), default="I-MR")
+    base_desde: Mapped[date] = mapped_column(Date)
+    base_hasta: Mapped[date] = mapped_column(Date)
+    n: Mapped[int]
+    lc: Mapped[float] = mapped_column(Float)
+    lcs: Mapped[float] = mapped_column(Float)
+    lci: Mapped[float] = mapped_column(Float)
+    sigma: Mapped[float] = mapped_column(Float)
+    mr_lc: Mapped[float] = mapped_column(Float)
+    mr_lcs: Mapped[float] = mapped_column(Float)
+    reglas: Mapped[str] = mapped_column(String(40), default=REGLAS_POR_DEFECTO)
+    vigente: Mapped[bool] = mapped_column(Boolean, default=True)
+    congelado_en: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    congelado_por: Mapped[str] = mapped_column(String(100))
+    comentario: Mapped[str | None] = mapped_column(Text)
+
+    equipo: Mapped["Equipo"] = relationship()
+    exclusiones: Mapped[list["LimitesExclusion"]] = relationship(back_populates="limites")
+
+    @validates("tipo_carta")
+    def validar_tipo(self, clave, valor):
+        if valor not in TIPOS_CARTA:
+            raise ValueError(f'Tipo de carta "{valor}" no válido. Usá uno de: {", ".join(TIPOS_CARTA)}.')
+        return valor
+
+
+class LimitesExclusion(Base):
+    """Un dato que se dejó afuera del cálculo de unos límites de control, con su motivo (obligatorio).
+
+    tabla y dato_id: de dónde sale el dato ("analisis_scott" o "muestra_centrifuga" y su id).
+    """
+
+    __tablename__ = "limites_exclusion"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    limites_id: Mapped[int] = mapped_column(ForeignKey("limites_control.id"))
+    tabla: Mapped[str] = mapped_column(String(30))
+    dato_id: Mapped[int]
+    fecha_hora: Mapped[datetime | None] = mapped_column(DateTime)
+    valor: Mapped[float | None] = mapped_column(Float)
+    motivo: Mapped[str] = mapped_column(String(300))
+
+    limites: Mapped["LimitesControl"] = relationship(back_populates="exclusiones")
+
+    @validates("motivo")
+    def validar_motivo(self, clave, valor):
+        if not valor or not str(valor).strip():
+            raise ValueError("Excluir un dato de los límites necesita un motivo.")
+        return valor
+
+
+class Alerta(Base):
+    """Alerta de control: una regla de Nelson (o "MR") contra los límites vigentes, o un dato fuera del rango de
+    RangoReferencia con genera_alerta = sí ("rango").
+
+    Una sola alerta por origen + regla + variable + equipo + fecha de producción + turno: si en el mismo turno
+    vuelve a fallar, se le suman datos (AlertaDato). Excepción a la regla general: acá el turno y la fecha de
+    producción SE GUARDAN, porque la alerta es un evento y los necesita para no duplicarse.
+    fecha_hora, valor y limite: los del primer dato que la disparó. estado: uno de ESTADOS_ALERTA ("histórico" =
+    creada al evaluar datos importados, no se gestiona). comun_eboe: la misma regla y variable saltó en los 3
+    eBOE en el mismo turno (posible causa común).
+    """
+
+    __tablename__ = "alerta"
+    __table_args__ = (UniqueConstraint("origen", "regla", "variable", "equipo_id", "fecha_produccion", "turno_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    origen: Mapped[str] = mapped_column(String(10))
+    regla: Mapped[str] = mapped_column(String(10))          # "1"…"8", "MR" o "rango"
+    variable: Mapped[str] = mapped_column(String(30))
+    equipo_id: Mapped[int] = mapped_column(ForeignKey("equipo.id"))
+    fecha_produccion: Mapped[date] = mapped_column(Date)
+    turno_id: Mapped[int] = mapped_column(ForeignKey("turno.id"))
+    fecha_hora: Mapped[datetime] = mapped_column(DateTime)
+    valor: Mapped[float] = mapped_column(Float)
+    limite: Mapped[float | None] = mapped_column(Float)
+    limites_id: Mapped[int | None] = mapped_column(ForeignKey("limites_control.id"))
+    rango_id: Mapped[int | None] = mapped_column(ForeignKey("rango_referencia.id"))
+    estado: Mapped[str] = mapped_column(String(15), default="abierta")
+    comun_eboe: Mapped[bool] = mapped_column(Boolean, default=False)
+    causa: Mapped[str | None] = mapped_column(Text)
+    accion: Mapped[str | None] = mapped_column(Text)
+    comentario: Mapped[str | None] = mapped_column(Text)
+    creada_por: Mapped[str] = mapped_column(String(100))
+    creada_en: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    cerrada_por: Mapped[str | None] = mapped_column(String(100))
+    cerrada_en: Mapped[datetime | None] = mapped_column(DateTime)
+
+    equipo: Mapped["Equipo"] = relationship()
+    turno: Mapped["Turno"] = relationship()
+    datos: Mapped[list["AlertaDato"]] = relationship(back_populates="alerta", cascade="all, delete-orphan")
+
+    @validates("origen")
+    def validar_origen(self, clave, valor):
+        if valor not in ORIGENES_ALERTA:
+            raise ValueError(f'Origen "{valor}" no válido. Usá uno de: {", ".join(ORIGENES_ALERTA)}.')
+        return valor
+
+    @validates("estado")
+    def validar_estado(self, clave, valor):
+        if valor not in ESTADOS_ALERTA:
+            raise ValueError(f'Estado "{valor}" no válido. Usá uno de: {", ".join(ESTADOS_ALERTA)}.')
+        return valor
+
+
+class AlertaDato(Base):
+    """Un dato que disparó (o se sumó a) una alerta: tabla ("analisis_scott", "muestra_centrifuga") y su id."""
+
+    __tablename__ = "alerta_dato"
+    __table_args__ = (UniqueConstraint("alerta_id", "tabla", "dato_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    alerta_id: Mapped[int] = mapped_column(ForeignKey("alerta.id"))
+    tabla: Mapped[str] = mapped_column(String(30))
+    dato_id: Mapped[int]
+
+    alerta: Mapped["Alerta"] = relationship(back_populates="datos")
