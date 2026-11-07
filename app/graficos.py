@@ -1075,3 +1075,50 @@ def lineas_en_el_tiempo(tabla: pd.DataFrame, x: str, series: dict, titulo_y: str
                           "%{customdata[1]}%{customdata[2]}%{customdata[3]}<extra></extra>")
     figura.update_layout(yaxis_title=titulo_y, xaxis=dict(title="Día de producción", tickformat="%d/%m/%y"))
     return estilo(figura)
+
+
+# ---------------------------------------------------------------- capacidad
+
+COLOR_ESPECIFICACION = "#e34948"     # LIE / LSE: rojo de la paleta, línea discontinua y con su nombre
+
+
+def histograma_capacidad(valores: pd.Series, resultado: dict, limites: dict, titulo_x: str, unidad: str,
+                         decimales: int = 2) -> go.Figure:
+    """Histograma de capacidad como el de Minitab: densidad de los datos, curva normal con sigma total (continua) y
+    con sigma dentro (punteada), LIE / LSE, la media y la banda objetivo de la planta (verde tenue). N en la leyenda.
+
+    resultado: core.capacidad.capacidad(); limites: core.capacidad.limites_capacidad() (lie, lse, banda).
+    """
+    valores = pd.Series(valores, dtype=float).dropna()
+    figura = go.Figure()
+    minimo, maximo = limites["banda"]
+    if minimo is not None and maximo is not None and (limites["lie"], limites["lse"]) != (minimo, maximo):
+        figura.add_vrect(x0=minimo, x1=maximo, fillcolor=COLOR_MEJORA, opacity=0.1, line_width=0, layer="below")
+        figura.add_scatter(x=[None], y=[None], mode="markers", name=(
+            f"Banda objetivo {numero(minimo, decimales)}–{numero(maximo, decimales)} {unidad}"),
+            marker=dict(symbol="square", size=12, color=COLOR_MEJORA, opacity=0.3))
+    ancho = ancho_de_clase(valores)
+    clases = dict(start=math.floor(valores.min() / ancho) * ancho, size=ancho) if ancho else None
+    figura.add_histogram(x=valores, histnorm="probability density", xbins=clases,
+                         name=f"Datos · N = {numero(len(valores), 0)}",
+                         marker=dict(color=COLOR_SERIE, line=dict(color="white", width=0.5)), opacity=0.6,
+                         hovertemplate=f"%{{x}} {unidad}<br>densidad %{{y:.3f}}<extra></extra>")
+    media = resultado["media"]
+    desde = min(valores.min(), *(v for v in (limites["lie"], limites["lse"]) if v is not None))
+    hasta = max(valores.max(), *(v for v in (limites["lie"], limites["lse"]) if v is not None))
+    for sigma, nombre, guiones in ((resultado["sigma_total"], "Normal (sigma total)", "solid"),
+                                   (resultado["sigma_dentro"], "Normal (sigma dentro)", "dot")):
+        if sigma:
+            x, y = curva_normal(media, sigma, desde - sigma, hasta + sigma)
+            figura.add_scatter(x=x, y=y, mode="lines", name=nombre, line=dict(color=COLOR_DATOS, width=2, dash=guiones),
+                               hoverinfo="skip")
+    for valor, texto in ((limites["lie"], "LIE"), (limites["lse"], "LSE")):
+        if valor is not None:
+            figura.add_vline(x=valor, line=dict(color=COLOR_ESPECIFICACION, width=2, dash="dash"),
+                             annotation_text=f"{texto} {numero(valor, decimales)}", annotation_position="top")
+    figura.add_vline(x=media, line=dict(color=GRIS, width=1.5),
+                     annotation_text=f"Media {numero(media, decimales)}", annotation_position="bottom right")
+    figura.update_layout(xaxis_title=titulo_x, yaxis_title="Densidad")
+    estilo(figura)
+    figura.update_layout(margin=dict(t=90), legend=dict(y=1.1))          # la leyenda arriba de los rótulos LIE / LSE
+    return figura

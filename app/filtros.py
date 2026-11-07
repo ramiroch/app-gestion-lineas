@@ -23,6 +23,7 @@ from core.models import Planta
 from core.operacion import lecturas_plc, preparar_plc
 from core.parametros import ParametrosIncompletos, validar_parametros
 from core.analisis_centrifugas import balance_por_muestreo, por_muestreo, rangos_centrifugas, tabla_muestras
+from core.capacidad import limites_capacidad
 
 PLANTA_POR_DEFECTO = "LEDESMA"
 CLAVE = "filtros"
@@ -122,6 +123,13 @@ def umbral_paralelo_planta(planta_id: int) -> float | None:
             return None
 
 
+@st.cache_data(ttl=600)
+def limites_capacidad_planta(planta_id: int, variable: str, fruta: str | None) -> dict | None:
+    """Límites de especificación de RangoReferencia para la capacidad (core.capacidad.limites_capacidad)."""
+    with crear_sesion(motor()) as sesion:
+        return limites_capacidad(sesion, planta_id, variable, fruta)
+
+
 def planta_elegida() -> int | None:
     """Id de la planta elegida en la barra (None si todavía no se dibujó)."""
     etiqueta = _guardado().get("planta")
@@ -158,6 +166,7 @@ def _recargar() -> None:
     rango_planta.clear()
     plantas.clear()
     centrifugas_planta.clear()
+    limites_capacidad_planta.clear()
     rangos_centrifugas_planta.clear()
     umbral_paralelo_planta.clear()
 

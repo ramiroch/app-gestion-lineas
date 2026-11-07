@@ -61,9 +61,10 @@ PLANILLA_BASE = {
         ["CLIENTE A", "Planta Norte", "NOR-BOE-01", "fruta salida", "BOE 1 – Fruta salida"],
     ],
     "RangoReferencia": [
-        ["planta", "variable", "punto o equipo", "fruta", "minimo", "maximo", "unidad", "fuente", "genera_alerta"],
-        ["Planta Norte", "Eficiencia BOE", "BOE (todos)", "Limón", 80, 90, "%", "prueba", None],
-        ["Planta Norte", "°Brix emulsión", "Emulsión", "Limón", None, 5, "°Brix", "prueba", "No"],
+        ["planta", "variable", "punto o equipo", "fruta", "minimo", "maximo", "unidad", "fuente", "genera_alerta",
+         "lado_capacidad"],
+        ["Planta Norte", "Eficiencia BOE", "BOE (todos)", "Limón", 80, 90, "%", "prueba", None, "inferior"],
+        ["Planta Norte", "°Brix emulsión", "Emulsión", "Limón", None, 5, "°Brix", "prueba", "No", None],
     ],
 }
 
@@ -283,6 +284,8 @@ def test_destino_de_la_fase_pesada_y_genera_alerta(sesion, datos, tmp_path):
     assert len(errores) == 1 and 'Destino de la fase pesada "al río" no válido' in errores[0][2]
     alertas = {r.variable: r.genera_alerta for r in sesion.scalars(select(RangoReferencia))}
     assert alertas == {"Eficiencia BOE": True, "°Brix emulsión": False}     # vacío = sí
+    lados = {r.variable: r.lado_capacidad for r in sesion.scalars(select(RangoReferencia))}
+    assert lados == {"Eficiencia BOE": "inferior", "°Brix emulsión": None}
 
 
 def test_hijo_de_una_fila_con_error_tambien_falla(sesion, datos, tmp_path):

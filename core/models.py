@@ -18,6 +18,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship,
 
 ESTADOS_EQUIPO = ("Operativo", "Pendiente de instalación", "Fuera de servicio")
 DESTINOS_FASE_PESADA = ("recircula al BOE", "canal (pérdida)", "no aplica")   # no aplica: pulidora
+LADOS_CAPACIDAD = ("ambos", "inferior", "superior")
 
 
 class Base(DeclarativeBase):
@@ -205,6 +206,8 @@ class RangoReferencia(Base):
     minimo y maximo son opcionales: hay rangos con un solo límite (°Brix ≤ 5).
     genera_alerta: False si el rango es solo una referencia (se dibuja, pero estar afuera no genera una
     alerta; por ejemplo, cuando las alertas salen de la carta de control con límites de la planta).
+    lado_capacidad: qué límites son especificación para la capacidad (uno de LADOS_CAPACIDAD). Con "inferior" solo
+    cuenta el mínimo (eficiencia ≥ 80 %); el rango completo sigue siendo la banda objetivo. Vacío = "ambos".
     """
 
     __tablename__ = "rango_referencia"
@@ -219,8 +222,15 @@ class RangoReferencia(Base):
     unidad: Mapped[str | None] = mapped_column(String(50))
     fuente: Mapped[str | None] = mapped_column(String(200))
     genera_alerta: Mapped[bool | None] = mapped_column(Boolean, default=True)
+    lado_capacidad: Mapped[str | None] = mapped_column(String(10))
 
     planta: Mapped["Planta"] = relationship(back_populates="rangos")
+
+    @validates("lado_capacidad")
+    def validar_lado(self, clave, valor):
+        if valor is not None and valor not in LADOS_CAPACIDAD:
+            raise ValueError(f'Lado "{valor}" no válido. Usá uno de: {", ".join(LADOS_CAPACIDAD)}.')
+        return valor
 
 
 class Turno(Base):

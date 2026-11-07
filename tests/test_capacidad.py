@@ -8,9 +8,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from core.capacidad import (AVISO_NO_CALCULA, AVISO_POCOS, NO_APLICA, box_cox, capacidad, capacidad_desde_base,
-                            datos_capacidad, indices, limites_capacidad, normalidad, ppm_esperado,
-                            sigma_dentro_individuales, sigma_dentro_subgrupos)
+from core.capacidad import (AVISO_INESTABLE, AVISO_NO_CALCULA, AVISO_PERCENTILES, AVISO_POCOS, ESTABLE, INESTABLE,
+                            NO_APLICA, box_cox, capacidad, capacidad_desde_base, capacidad_percentiles,
+                            comparar_equipos, datos_capacidad, estabilidad, evaluar_capacidad, indices,
+                            limites_capacidad, normalidad, ppm_esperado, sigma_dentro_individuales,
+                            sigma_dentro_subgrupos)
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
 from core.laboratorio import anderson_darling
@@ -232,3 +234,75 @@ def test_igual_que_minitab(caso):
         if esperado is None or pd.isna(esperado):
             continue
         assert calculado[columna] == pytest.approx(esperado, rel=1e-3, abs=5e-3), columna
+
+
+# ---------------------------------------------------------------- percentiles, estabilidad y lado
+
+def test_percentiles_con_una_normal_grande_dan_casi_lo_mismo_que_pp():
+    x = np.random.default_rng(11).normal(85, 2, 200_000)
+    normal, percentiles = capacidad(x, 80, 90), capacidad_percentiles(x, 80, 90)
+    assert percentiles["pp"] == pytest.approx(normal["pp"], rel=0.03)
+    assert percentiles["ppk"] == pytest.approx(normal["ppk"], rel=0.03)
+    assert percentiles["avisos"] == []
+
+
+def test_percentiles_a_mano_simetricos_y_un_solo_lado():
+    x = np.arange(1, 10_000) / 100                          # 0,01 a 99,99: simétricos alrededor de 50
+    resultado = capacidad_percentiles(x, 20, 80)
+    bajo, mediana, alto = np.quantile(x, [0.00135, 0.5, 0.99865], method="weibull")
+    assert resultado["mediana"] == pytest.approx(50)
+    assert resultado["pp"] == pytest.approx(60 / (alto - bajo))
+    assert resultado["ppl"] == pytest.approx(30 / (50 - bajo)) and resultado["ppl"] == pytest.approx(resultado["ppu"])
+    inferior = capacidad_percentiles(x, lie=20)
+    assert inferior["pp"] == NO_APLICA and inferior["ppu"] is None and inferior["ppk"] == inferior["ppl"]
+    assert capacidad_percentiles(x[:50], 20, 80)["avisos"] == [AVISO_PERCENTILES]
+
+
+def test_estabilidad_estable_e_inestable():
+    rng = np.random.default_rng(2)
+    estable = estabilidad(rng.normal(85, 2, 300))
+    assert estable["estado"] == ESTABLE and estable["n"] == 300
+    salto = np.concatenate([rng.normal(85, 1, 150), rng.normal(75, 1, 150)])     # el proceso se corrió 10 puntos
+    inestable = estabilidad(salto)
+    assert inestable["estado"] == INESTABLE and inestable["pct_fuera"] > 10
+    assert estabilidad([1, 2])["estado"] is None
+
+
+def test_evaluar_capacidad_avisa_inestable_y_agrega_percentiles():
+    rng = np.random.default_rng(4)
+    salto = np.concatenate([rng.normal(85, 1, 150), rng.normal(75, 1, 150)])
+    resultado = evaluar_capacidad(salto, lie=80)
+    assert AVISO_INESTABLE in resultado["avisos"]
+    assert resultado["percentiles"] is not None                  # bimodal: no normal
+    assert resultado["pct_fuera"] == pytest.approx(100 * np.mean(salto < 80))
+    normal = evaluar_capacidad(rng.normal(85, 2, 300), 80, 90)
+    assert normal["percentiles"] is None and normal["box_cox"] is None and AVISO_INESTABLE not in normal["avisos"]
+
+
+def test_comparar_equipos_del_peor_al_mejor():
+    rng = np.random.default_rng(6)
+    datos = pd.concat([pd.DataFrame({"eboe": e, "valor": rng.normal(media, 2, 200)})
+                       for e, media in ((1, 86), (2, 81), (3, 84))])
+    tabla = comparar_equipos(datos, 80, None)
+    assert tabla["eboe"].tolist() == [2, 3, 1]
+    assert (tabla["ppk"] == tabla["ppl"]).all() and tabla["ppu"].isna().all()
+
+
+def test_lado_de_la_especificacion_desde_la_base():
+    motor = crear_motor("sqlite://")
+    crear_tablas(motor)
+    with crear_sesion(motor) as sesion:
+        planta = Planta(nombre="Norte", pais="Argentina", cliente=Cliente(nombre="X", pais="Argentina"))
+        sesion.add_all([planta,
+                        RangoReferencia(planta=planta, variable="Eficiencia eBOE", punto_o_equipo="BOE (todos)",
+                                        fruta="Naranja", minimo=80, maximo=90, lado_capacidad="inferior"),
+                        RangoReferencia(planta=planta, variable="pH emulsión", punto_o_equipo="Emulsión (licor)",
+                                        minimo=3, maximo=7, lado_capacidad="ambos")])
+        sesion.commit()
+        eficiencia = limites_capacidad(sesion, planta.id, "eficiencia", "naranja")
+        ph = limites_capacidad(sesion, planta.id, "ph")
+    assert (eficiencia["lie"], eficiencia["lse"], eficiencia["lado"], eficiencia["banda"]) == (80, None, "inferior",
+                                                                                               (80, 90))
+    assert (ph["lie"], ph["lse"], ph["lado"]) == (3, 7, "ambos")
+    with pytest.raises(ValueError, match="no válido"):
+        RangoReferencia(lado_capacidad="izquierdo")

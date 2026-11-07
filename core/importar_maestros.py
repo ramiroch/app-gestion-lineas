@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
-from core.models import (DESTINOS_FASE_PESADA, ESTADOS_EQUIPO, Cliente, Equipo, Linea, Planta, PuntoMuestreo,
+from core.models import (DESTINOS_FASE_PESADA, ESTADOS_EQUIPO, LADOS_CAPACIDAD, Cliente, Equipo, Linea, Planta, PuntoMuestreo,
                          RangoReferencia, Turno)
 
 CARPETA_DATOS = Path(__file__).resolve().parent.parent / "data"
@@ -44,7 +44,7 @@ COLUMNAS = {
                "volumen_descarga_l", "destino_fase_pesada"],
     "PuntoMuestreo": ["cliente", "planta", "equipo (codigo)", "tipo", "nombre"],
     "RangoReferencia": ["planta", "variable", "punto o equipo", "fruta", "minimo", "maximo",
-                        "unidad", "fuente", "genera_alerta"],
+                        "unidad", "fuente", "genera_alerta", "lado_capacidad"],
 }
 
 # Columnas que identifican un registro: dos filas con los mismos valores son el mismo registro.
@@ -311,7 +311,10 @@ def _fila_rango(sesion: Session, datos: dict):
         "unidad": _texto(datos["unidad"]),
         "fuente": _texto(datos["fuente"]),
         "genera_alerta": _si_no(datos["genera_alerta"], por_defecto=True),
+        "lado_capacidad": _texto(datos["lado_capacidad"]),
     }
+    if campos["lado_capacidad"] is not None and campos["lado_capacidad"] not in LADOS_CAPACIDAD:
+        raise ErrorFila(f'Lado "{campos["lado_capacidad"]}" no válido. Usá uno de: {", ".join(LADOS_CAPACIDAD)}.')
     if campos["minimo"] is not None and campos["maximo"] is not None \
             and campos["minimo"] > campos["maximo"]:
         raise ErrorFila(f'El mínimo ({campos["minimo"]}) es mayor que el máximo ({campos["maximo"]}).')

@@ -13,6 +13,9 @@ Analysis (Normal)", "Normality Test", "Box-Cox Transformation").
   sigma total para Pp. Con un solo límite, solo el índice de ese lado y Cp/Pp "no aplica".
 - PPM: observado = datos fuera / N × 10⁶; esperado = P(X < LIE) + P(X > LSE) con una normal de media x̄ y sigma
   dentro (o total), × 10⁶.
+- Datos no normales (Anderson-Darling p < 0,05): índices por percentiles (ISO 22514-2), capacidad_percentiles().
+- Estabilidad: carta I-MR y regla 1 de Nelson (core.spc), estabilidad(). Un proceso inestable no tiene una
+  capacidad definida: los índices quedan como orientativos.
 """
 
 import numpy as np
@@ -20,13 +23,20 @@ import pandas as pd
 from scipy import stats
 from statsmodels.stats.diagnostic import normal_ad
 
-from core.spc import c4, d2
+from core.spc import c4, carta_imr, d2, evaluar_carta
 
 NO_APLICA = "no aplica"
 N_MINIMO = 3
 N_CONFIABLE = 30
 AVISO_POCOS = "N < 30: índices poco confiables."
 AVISO_NO_CALCULA = "N < 3: no se calcula la capacidad."
+AVISO_PERCENTILES = "N < 100: percentiles extremos poco confiables."
+AVISO_INESTABLE = "Proceso inestable: los índices son orientativos; mirar el % observado."
+N_PERCENTILES = 100
+P_BAJO, P_ALTO = 0.00135, 0.99865          # equivalen a ±3σ en una normal
+METODO_PERCENTILES = "weibull"             # (n + 1)·p, como los cuartiles de Minitab
+FUERA_POR_AZAR = 0.0027                    # en una normal estable, 0,27 % de los puntos cae fuera de ±3σ
+ESTABLE, INESTABLE = "estable", "inestable"
 LAMBDAS_MINITAB = (-5.0, 5.0)        # rango de búsqueda de λ de Box-Cox
 PASO_REDONDEO = 0.5                  # λ redondeado: 0,5, 0, −0,5, …
 MILLON = 1_000_000
@@ -214,6 +224,96 @@ def box_cox(valores, lie: float | None = None, lse: float | None = None, subgrup
     return resultado
 
 
+# ---------------------------------------------------------------- datos no normales y estabilidad
+
+def capacidad_percentiles(valores, lie: float | None = None, lse: float | None = None) -> dict:
+    """Índices de capacidad por percentiles, para datos no normales (ISO 22514-2, método de percentiles).
+
+    En una normal, media ± 3σ deja afuera el 0,135 % de cada lado. Sin suponer una forma, se usan los percentiles
+    de los datos: P0,135 y P99,865 en lugar de media − 3σ y media + 3σ, y la mediana en lugar de la media:
+    Pp = (LSE − LIE) / (P99,865 − P0,135); Ppl = (mediana − LIE) / (mediana − P0,135);
+    Ppu = (LSE − mediana) / (P99,865 − mediana); Ppk = mín(Ppl, Ppu). Con una normal da lo mismo que Pp/Ppk.
+    Con un solo límite, Pp = "no aplica". Percentiles con el método (n + 1)·p; con N < 100 los extremos casi
+    son el mínimo y el máximo y se avisa.
+    """
+    x = _limpios(valores)
+    resultado = {"n": len(x), "p_bajo": None, "mediana": None, "p_alto": None, "pp": None, "ppk": None,
+                 "ppl": None, "ppu": None, "avisos": []}
+    if len(x) < N_MINIMO:
+        resultado["avisos"].append(AVISO_NO_CALCULA)
+        return resultado
+    if len(x) < N_PERCENTILES:
+        resultado["avisos"].append(AVISO_PERCENTILES)
+    bajo, mediana, alto = (float(v) for v in np.quantile(x, [P_BAJO, 0.5, P_ALTO], method=METODO_PERCENTILES))
+    ppl = None if lie is None or mediana == bajo else (mediana - lie) / (mediana - bajo)
+    ppu = None if lse is None or alto == mediana else (lse - mediana) / (alto - mediana)
+    pp = NO_APLICA if lie is None or lse is None else (None if alto == bajo else (lse - lie) / (alto - bajo))
+    lados = [v for v in (ppl, ppu) if v is not None]
+    resultado.update(p_bajo=bajo, mediana=mediana, p_alto=alto, pp=pp, ppk=min(lados) if lados else None,
+                     ppl=ppl, ppu=ppu)
+    return resultado
+
+
+def estabilidad(valores, alfa: float = 0.05) -> dict:
+    """¿El proceso es estable? Carta I-MR (core.spc) y regla 1 de Nelson: puntos fuera de ±3σ (σ = MR̄/d2).
+
+    Aun estable, una normal deja el 0,27 % de los puntos afuera por azar: se considera inestable si hay más
+    puntos fuera de los que el azar explica (binomial, P(X ≥ k) < alfa con p = 0,27 %). Devuelve estado
+    ("estable" o "inestable"), n, n_fuera, pct_fuera, lc, lcs y lci.
+    """
+    x = _limpios(valores)
+    if len(x) < N_MINIMO or sigma_dentro_individuales(x) in (None, 0):
+        return {"estado": None, "n": len(x), "n_fuera": None, "pct_fuera": None, "lc": None, "lcs": None,
+                "lci": None}
+    carta = evaluar_carta(carta_imr(x), reglas=(1,))
+    fuera = int(carta["reglas"].map(bool).sum())
+    p = stats.binom.sf(fuera - 1, len(x), FUERA_POR_AZAR) if fuera else 1.0
+    return {"estado": INESTABLE if p < alfa else ESTABLE, "n": len(x), "n_fuera": fuera,
+            "pct_fuera": 100 * fuera / len(x), "lc": float(carta["lc"].iloc[0]), "lcs": float(carta["lcs"].iloc[0]),
+            "lci": float(carta["lci"].iloc[0])}
+
+
+def evaluar_capacidad(valores, lie: float | None = None, lse: float | None = None, subgrupos=None) -> dict:
+    """Todo lo de la capacidad de un conjunto de datos (en orden de tiempo):
+
+    capacidad (normal), normalidad (Anderson-Darling), percentiles y box_cox (solo si p < 0,05), estabilidad,
+    pct_fuera (% observado fuera de especificación) y avisos (los de la capacidad, más el de proceso inestable).
+    """
+    resultado = capacidad(valores, lie, lse, subgrupos)
+    prueba = normalidad(valores)
+    no_normal = prueba["p"] is not None and prueba["p"] < 0.05
+    estable = estabilidad(valores)
+    avisos = list(resultado["avisos"])
+    if estable["estado"] == INESTABLE:
+        avisos.append(AVISO_INESTABLE)
+    percentiles = capacidad_percentiles(valores, lie, lse) if no_normal else None
+    if percentiles:
+        avisos += [a for a in percentiles["avisos"] if a not in avisos]
+    observado = resultado["ppm_observado"]
+    return {"capacidad": resultado, "normalidad": prueba, "percentiles": percentiles,
+            "box_cox": box_cox(valores, lie, lse, subgrupos) if no_normal else None, "estabilidad": estable,
+            "pct_fuera": None if observado is None else observado["total"] / 10_000, "avisos": avisos}
+
+
+def comparar_equipos(datos: pd.DataFrame, lie: float | None, lse: float | None) -> pd.DataFrame:
+    """Una fila por eBOE (datos con columnas eboe y valor, en orden de tiempo), del peor al mejor por Ppk.
+
+    Columnas: eboe, n, media, cpk, cpl, cpu, ppk, ppl, ppu, ppk_percentiles (si no es normal), pct_fuera, p_ad,
+    normal, estabilidad, pct_fuera_control. Con un solo límite, Ppk es el índice de ese lado (Ppl o Ppu).
+    """
+    filas = []
+    for eboe, grupo in datos.groupby("eboe"):
+        r = evaluar_capacidad(grupo["valor"], lie, lse)
+        c, percentiles = r["capacidad"], r["percentiles"]
+        filas.append({"eboe": eboe, "n": c["n"], "media": c["media"], "cpk": c["cpk"], "cpl": c["cpl"],
+                      "cpu": c["cpu"], "ppk": c["ppk"], "ppl": c["ppl"], "ppu": c["ppu"],
+                      "ppk_percentiles": percentiles["ppk"] if percentiles else None,
+                      "pct_fuera": r["pct_fuera"], "p_ad": r["normalidad"]["p"], "normal": r["normalidad"]["normal"],
+                      "estabilidad": r["estabilidad"]["estado"], "pct_fuera_control": r["estabilidad"]["pct_fuera"]})
+    tabla = pd.DataFrame(filas)
+    return tabla.sort_values("ppk", na_position="last", ignore_index=True) if not tabla.empty else tabla
+
+
 # ---------------------------------------------------------------- desde la base
 
 # Variable → (nombre en RangoReferencia, punto o equipo, unidad)
@@ -265,9 +365,11 @@ def datos_capacidad(analisis: pd.DataFrame, emulsion: pd.DataFrame, variable: st
 
 
 def limites_capacidad(sesion, planta_id: int, variable: str, fruta: str | None = None) -> dict | None:
-    """Límites de especificación de RangoReferencia para la variable: {"lie", "lse", "unidad", "fuente"}.
+    """Límites de especificación de RangoReferencia para la variable.
 
-    Si hay uno de la fruta y uno general (sin fruta), se usa el de la fruta. None si la planta no lo tiene.
+    Devuelve {"lie", "lse", "lado", "banda", "unidad", "fuente"}: lie y lse según lado_capacidad ("inferior" →
+    solo LIE; "superior" → solo LSE; vacío o "ambos" → los dos); banda = (mínimo, máximo) del rango, la banda
+    objetivo. Si hay uno de la fruta y uno general (sin fruta), se usa el de la fruta. None si la planta no lo tiene.
     """
     from sqlalchemy import select
 
@@ -281,7 +383,9 @@ def limites_capacidad(sesion, planta_id: int, variable: str, fruta: str | None =
     if not candidatos:
         return None
     rango = candidatos[0]
-    return {"lie": rango.minimo, "lse": rango.maximo, "unidad": rango.unidad, "fuente": rango.fuente}
+    lado = rango.lado_capacidad or "ambos"
+    return {"lie": None if lado == "superior" else rango.minimo, "lse": None if lado == "inferior" else rango.maximo,
+            "lado": lado, "banda": (rango.minimo, rango.maximo), "unidad": rango.unidad, "fuente": rango.fuente}
 
 
 def capacidad_desde_base(sesion, planta_id: int, variable: str, equipo: int | None = None, desde=None, hasta=None,
@@ -291,8 +395,8 @@ def capacidad_desde_base(sesion, planta_id: int, variable: str, equipo: int | No
 
     Variables: eficiencia, rendimiento, aceite_emulsion, brix, ph (VARIABLES_CAPACIDAD). analisis y emulsion: las
     tablas de core.analisis ya leídas (y filtradas, si se quiere); si faltan, se leen de la base. Devuelve
-    variable, equipo, limites, datos (fecha_hora, eboe, valor), capacidad, normalidad y box_cox (solo si la
-    normalidad da p < 0,05).
+    variable, equipo, limites, datos (fecha_hora, eboe, valor) y lo de evaluar_capacidad(): capacidad, normalidad,
+    percentiles y box_cox (solo si la normalidad da p < 0,05), estabilidad, pct_fuera y avisos.
     """
     from core.analisis import tabla_analisis, tabla_emulsion
     limites = limites_capacidad(sesion, planta_id, variable, fruta)
@@ -303,10 +407,5 @@ def capacidad_desde_base(sesion, planta_id: int, variable: str, equipo: int | No
     if emulsion is None and variable not in ("eficiencia", "rendimiento"):
         emulsion = tabla_emulsion(sesion, planta_id)
     datos = datos_capacidad(analisis, emulsion, variable, equipo, desde, hasta, fruta)
-    resultado = capacidad(datos["valor"], limites["lie"], limites["lse"], subgrupos)
-    prueba = normalidad(datos["valor"])
-    transformada = None
-    if prueba["p"] is not None and prueba["p"] < 0.05:
-        transformada = box_cox(datos["valor"], limites["lie"], limites["lse"], subgrupos)
-    return {"variable": variable, "equipo": equipo, "limites": limites, "datos": datos, "capacidad": resultado,
-            "normalidad": prueba, "box_cox": transformada}
+    return {"variable": variable, "equipo": equipo, "limites": limites, "datos": datos} | evaluar_capacidad(
+        datos["valor"], limites["lie"], limites["lse"], subgrupos)

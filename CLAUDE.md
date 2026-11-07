@@ -95,7 +95,7 @@ CAF = kg de aceite por tonelada de fruta a la salida del BOE (menor es mejor).
 - Cartas: I-MR, X̄-R, X̄-S con constantes estándar (A2, A3, D3, D4, B3, B4, d2, c4).
 - Fase I: límites calculados con un período base y luego **congelados**. Fase II: cada dato nuevo se evalúa contra esos límites.
 - Reglas de Nelson 1–8, configurables por variable.
-- Capacidad: Cp/Cpk con sigma dentro (MR̄/d2), Pp/Ppk con sigma total; Anderson-Darling; Box-Cox si no es normal.
+- Capacidad (`core/capacidad.py`, pestaña Capacidad de Gráficos de control): Cp/Cpk con sigma dentro (MR̄/d2), Pp/Ppk con sigma total; Anderson-Darling; si no es normal (p < 0,05), índices por percentiles (ISO 22514) y Box-Cox. Los límites salen de RangoReferencia con `lado_capacidad` ("ambos", "inferior", "superior"): eficiencia eBOE → solo LIE 80 (el 80–90 sigue siendo la banda objetivo); °Brix → solo LSE. Estabilidad con la carta I-MR y la regla 1 de Nelson: si es inestable, los índices son orientativos y se mira el % observado. Primero se muestra el % observado fuera de especificación.
 - **Todo resultado estadístico se valida contra Minitab con una prueba automática.**
 
 ## Reglas de análisis
