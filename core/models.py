@@ -20,8 +20,9 @@ ESTADOS_EQUIPO = ("Operativo", "Pendiente de instalación", "Fuera de servicio")
 DESTINOS_FASE_PESADA = ("recircula al BOE", "canal (pérdida)", "no aplica")   # no aplica: pulidora
 LADOS_CAPACIDAD = ("ambos", "inferior", "superior")
 TIPOS_CARTA = ("I-MR", "Xbar-S", "I-MR-S")      # I-MR-S: entre/dentro (I-MR de los promedios + S)
-REGLAS_POR_DEFECTO = "1,2,3,5,MR"          # I-MR: reglas de Nelson + "MR" (rango móvil > LCS)
-REGLAS_XBAR_S = "1,2,3,5,S"                # X̄-S y entre/dentro: Nelson en los promedios + "S" (desvío del turno)
+REGLAS_ALERTA = "1,2,3"                    # reglas de Nelson que crean alertas (del lado malo de la variable)
+REGLAS_MARCA_IMR = "5,MR"                  # I-MR: se marcan en la carta, no alertan ("MR": rango móvil > LCS)
+REGLAS_MARCA_POR_TURNO = "5,S"             # X̄-S y entre/dentro: se marcan, no alertan ("S": desvío del turno)
 ORIGENES_ALERTA = ("nelson", "rango")
 ESTADOS_ALERTA = ("abierta", "en análisis", "cerrada", "histórico")
 
@@ -528,7 +529,8 @@ class LimitesControl(Base):
     tipo_carta "I-MR-S" (entre/dentro, Minitab I-MR-R/S, un punto por turno): lc = media de los promedios y
     sigma = σ entre turnos (MR̄ de los promedios / d2), con lcs y lci iguales para todo n; mr_lc y mr_lcs de la MR
     de los promedios; sigma_dentro = σ dentro del turno (S barra) para la carta S de cada n.
-    reglas: reglas de Nelson ("1,2,3,5") más "MR" (I-MR) o "S" (X̄-S, entre/dentro) que se evalúan.
+    reglas_alerta: reglas que crean alertas (Nelson "1,2,3"; también "MR" o "S" si se quisiera). reglas_marca: se
+    calculan y se marcan en la carta, pero no alertan (por defecto "5,S" por turno y "5,MR" en I-MR).
     """
 
     __tablename__ = "limites_control"
@@ -550,7 +552,8 @@ class LimitesControl(Base):
     sigma_dentro: Mapped[float | None] = mapped_column(Float)
     mr_lc: Mapped[float | None] = mapped_column(Float)        # vacíos en X̄-S si el turno típico tiene 1 muestra
     mr_lcs: Mapped[float | None] = mapped_column(Float)
-    reglas: Mapped[str] = mapped_column(String(40), default=REGLAS_POR_DEFECTO)
+    reglas_alerta: Mapped[str] = mapped_column(String(40), default=REGLAS_ALERTA)
+    reglas_marca: Mapped[str | None] = mapped_column(String(40))
     vigente: Mapped[bool] = mapped_column(Boolean, default=True)
     congelado_en: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     congelado_por: Mapped[str] = mapped_column(String(100))

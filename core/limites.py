@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from core.formato import numero
 from core.importar_centrifugas import REVISAR_COPIADA, REVISAR_FISICO, REVISAR_NORMALIDAD, REVISAR_PEGADO
-from core.models import REGLAS_POR_DEFECTO, REGLAS_XBAR_S, Equipo, Linea, LimitesControl, LimitesExclusion
+from core.models import REGLAS_ALERTA, REGLAS_MARCA_IMR, REGLAS_MARCA_POR_TURNO, Equipo, Linea, LimitesControl, LimitesExclusion
 from core.spc import limites_entre_dentro, limites_imr, limites_xbar_s, limites_xbar_s_para
 
 TABLA_ANALISIS, TABLA_CENTRIFUGA = "analisis_scott", "muestra_centrifuga"
@@ -32,24 +32,25 @@ SIN_LIMITE_INFERIOR = "sin límite inferior"
 COLUMNAS_SERIE = ["tabla", "dato_id", "ambito", "equipo_id", "planta_id", "equipo", "tipo", "fecha_hora",
                   "fecha_produccion", "turno", "temporada", "fruta", "valor", "invalido"]
 
-# Variable → nombre, unidad, nivel ("equipo" o "planta"), si sale de una titulación (g y mL: la copia la invalida)
-# y el rango de RangoReferencia que mira la alerta "fuera de rango" (variable del rango, punto o equipo; None = el
-# tipo de equipo, como en las centrífugas).
+# Variable → nombre, unidad, nivel ("equipo" o "planta"), si sale de una titulación (g y mL: la copia la invalida),
+# el rango de RangoReferencia que mira la alerta "fuera de rango" (variable del rango, punto o equipo; None = el
+# tipo de equipo, como en las centrífugas) y lado_alerta: el lado malo de la variable ("abajo", "arriba" o "ambos").
+# Las reglas de Nelson 1, 2 y 3 solo alertan del lado malo (en la 3, la tendencia hacia el lado malo).
 VARIABLES_CONTROL = {
     "eficiencia": {"nombre": "Eficiencia eBOE", "unidad": "%", "nivel": "equipo", "titulacion": True,
-                   "rango": ("Eficiencia eBOE", "BOE (todos)")},
+                   "rango": ("Eficiencia eBOE", "BOE (todos)"), "lado_alerta": "abajo"},
     "aceite_salida": {"nombre": "Aceite en fruta de salida", "unidad": "kg/MT", "nivel": "equipo", "titulacion": True,
-                      "rango": None},
+                      "rango": None, "lado_alerta": "arriba"},
     "aceite_emulsion": {"nombre": "Aceite en emulsión", "unidad": "%", "nivel": "equipo", "titulacion": True,
-                        "rango": ("Aceite en emulsión", "Emulsión (licor)")},
+                        "rango": ("Aceite en emulsión", "Emulsión (licor)"), "lado_alerta": "ambos"},
     "brix": {"nombre": "°Brix emulsión", "unidad": "°Brix", "nivel": "equipo", "titulacion": False,
-             "rango": ("°Brix emulsión", "Emulsión (licor)")},
+             "rango": ("°Brix emulsión", "Emulsión (licor)"), "lado_alerta": "arriba"},
     "ph": {"nombre": "pH emulsión", "unidad": "pH", "nivel": "planta", "titulacion": False,
-           "rango": ("pH emulsión", "Emulsión (licor)")},
+           "rango": ("pH emulsión", "Emulsión (licor)"), "lado_alerta": "ambos"},
     "cp_pesada": {"nombre": "CP fase pesada", "unidad": "bar", "nivel": "equipo", "titulacion": False,
-                  "rango": ("CP fase pesada", None)},
+                  "rango": ("CP fase pesada", None), "lado_alerta": "ambos"},
     "aceite_descarga": {"nombre": "Aceite en descarga", "unidad": "%", "nivel": "equipo", "titulacion": True,
-                        "rango": ("Aceite en descarga", None)},
+                        "rango": ("Aceite en descarga", None), "lado_alerta": "arriba"},
 }
 VARIABLES_BOE = ("eficiencia", "aceite_salida", "aceite_emulsion", "brix", "ph")
 
@@ -245,13 +246,15 @@ def calcular_limites_fase1(serie: pd.DataFrame, desde=None, hasta=None, excluir:
 
 
 def congelar_limites(sesion: Session, variable: str, calculo: dict, congelado_por: str, fruta: str | None = None,
-                     equipo_id: int | None = None, planta_id: int | None = None, reglas: str | None = None,
-                     comentario: str | None = None, guardar: bool = True) -> LimitesControl:
+                     equipo_id: int | None = None, planta_id: int | None = None, reglas_alerta: str | None = None,
+                     reglas_marca: str | None = None, comentario: str | None = None,
+                     guardar: bool = True) -> LimitesControl:
     """Guarda los límites de calcular_limites_fase1() como el registro vigente de variable + ámbito + fruta.
 
     Ámbito: equipo_id, o planta_id en las variables de planta. El vigente anterior (si hay) pasa a vigente = False
-    y queda como historial. Las exclusiones se guardan con su motivo. reglas: por defecto "1,2,3,5,S" por turno
-    (entre/dentro y X̄-S) y "1,2,3,5,MR" en I-MR.
+    y queda como historial. Las exclusiones se guardan con su motivo. reglas_alerta (crean alertas): por defecto
+    "1,2,3". reglas_marca (solo se marcan en la carta): por defecto "5,S" por turno (entre/dentro y X̄-S) y "5,MR"
+    en I-MR.
     """
     if variable not in VARIABLES_CONTROL:
         raise ValueError(f'Variable "{variable}" no válida. Usá una de: {", ".join(VARIABLES_CONTROL)}.')
@@ -266,7 +269,8 @@ def congelar_limites(sesion: Session, variable: str, calculo: dict, congelado_po
         n_subgrupo=calculo["n_subgrupo"], base_desde=calculo["base_desde"], base_hasta=calculo["base_hasta"],
         n=calculo["n"], lc=calculo["lc"], lcs=calculo["lcs"], lci=calculo["lci"], sigma=calculo["sigma"],
         sigma_dentro=calculo.get("sigma_dentro"), mr_lc=calculo["mr_lc"], mr_lcs=calculo["mr_lcs"],
-        reglas=reglas or (REGLAS_POR_DEFECTO if tipo == IMR else REGLAS_XBAR_S), vigente=True,
+        reglas_alerta=reglas_alerta or REGLAS_ALERTA,
+        reglas_marca=reglas_marca or (REGLAS_MARCA_IMR if tipo == IMR else REGLAS_MARCA_POR_TURNO), vigente=True,
         congelado_por=congelado_por, comentario=comentario,
         exclusiones=[LimitesExclusion(**excluido) for excluido in calculo["excluidos"]])
     sesion.add(registro)

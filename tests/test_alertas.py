@@ -1,5 +1,5 @@
-"""Pruebas de core/alertas.py (por turno): cada regla, S, entre/dentro, rango con el promedio, episodios, sin
-límites, sin duplicados, histórico, comunes y pH de planta."""
+"""Pruebas de core/alertas.py (por turno): cada regla, S, entre/dentro, lado malo, reglas de marca, rango con el
+promedio, episodios, sin límites, sin duplicados, histórico, comunes de planta y pH de planta."""
 
 from datetime import date, datetime, time, timedelta
 
@@ -53,19 +53,22 @@ def _eboe(sesion, numero):
 
 
 def _limites(sesion, equipo_id=None, planta_id=None, reglas="1,2,3,5,S", variable="eficiencia", lc=LC, sigma=SIGMA,
-             tipo="Xbar-S", sigma_dentro=None):
+             tipo="Xbar-S", sigma_dentro=None, marca=None):
     sesion.add(LimitesControl(variable=variable, equipo_id=equipo_id, planta_id=planta_id, fruta="naranja",
                               tipo_carta=tipo, n_subgrupo=4, base_desde=date(2025, 6, 1), base_hasta=date(2025, 10, 31),
                               n=500, lc=lc, lcs=lc + 3 * sigma, lci=lc - 3 * sigma, sigma=sigma,
                               sigma_dentro=sigma_dentro, mr_lc=1.128 * sigma, mr_lcs=3.267 * 1.128 * sigma,
-                              reglas=reglas, congelado_por="prueba"))
+                              reglas_alerta=reglas, reglas_marca=marca, congelado_por="prueba"))
     sesion.commit()
 
 
-def _reglas(valores_por_turno, reglas="1,2,3,5,S", previos=None, tipo="Xbar-S", sigma_dentro=None):
+def _reglas(valores_por_turno, reglas="1,2,3,5,S", previos=None, tipo="Xbar-S", sigma_dentro=None, marca=None,
+            lado="ambos", con_alerta=False):
     sub = subgrupos_por_turno(turnos(valores_por_turno, inicio=NUEVOS))
-    return [(v["regla"], round(v["valor"], 2)) for v in
-            violaciones_por_turno(sub, previos, LC, SIGMA, reglas, tipo, sigma_dentro)]
+    violaciones = violaciones_por_turno(sub, previos, LC, SIGMA, reglas, tipo, sigma_dentro, marca, lado)
+    if con_alerta:
+        return [(v["regla"], round(v["valor"], 2), v["alerta"]) for v in violaciones]
+    return [(v["regla"], round(v["valor"], 2)) for v in violaciones]
 
 
 # ---------------------------------------------------------------- cada regla (funciones puras)
@@ -107,6 +110,31 @@ def test_regla_s_mucha_dispersion_dentro_del_turno():
     assert _reglas([[80, 90, 80, 90]], "S") == [("S", 5.77)]
     assert _reglas([[84, 86, 84, 86]], "S") == []
     assert _reglas([[95]], "S") == []                                            # 1 muestra: no hay S
+
+
+def test_solo_alerta_el_lado_malo():
+    # regla 1 con σ entre = 2: 91,5 está arriba y 78,5 abajo
+    assert _reglas([[91.5]], "1", tipo="I-MR-S", lado="abajo", con_alerta=True) == [("1", 91.5, False)]
+    assert _reglas([[91.5]], "1", tipo="I-MR-S", lado="arriba", con_alerta=True) == [("1", 91.5, True)]
+    assert _reglas([[78.5]], "1", tipo="I-MR-S", lado="abajo", con_alerta=True) == [("1", 78.5, True)]
+    # regla 2: 9 turnos debajo de la LC alertan si el lado malo es abajo; arriba, no
+    assert _reglas([[84, 84]] * 9, "2", lado="abajo", con_alerta=True) == [("2", 84.0, True)]
+    assert _reglas([[86, 86]] * 9, "2", lado="abajo", con_alerta=True) == [("2", 86.0, False)]
+    # regla 3: cuenta el sentido de la tendencia, no el lado de la LC (todos estos puntos están debajo de 85)
+    subiendo = [[83.0], [83.3], [83.6], [83.9], [84.2], [84.5]]
+    assert _reglas(subiendo, "3", lado="abajo", con_alerta=True) == [("3", 84.5, False)]
+    assert _reglas(subiendo, "3", lado="arriba", con_alerta=True) == [("3", 84.5, True)]
+    assert _reglas(subiendo[::-1], "3", lado="abajo", con_alerta=True) == [("3", 83.0, True)]
+    with pytest.raises(ValueError, match="Lado de alerta"):
+        _reglas([[85]], "1", lado="izquierda")
+
+
+def test_reglas_de_marca_no_alertan():
+    # la regla 5 y la S se calculan y se devuelven, pero con alerta = no
+    turnos_5 = [[88, 88, 88, 88], [85], [88, 88, 88, 88]]
+    assert _reglas(turnos_5, "1,2,3", marca="5,S", con_alerta=True) == [("5", 88.0, False)]   # 88 = LCS: no es 1
+    assert _reglas([[80, 90, 80, 90]], "1,2,3", marca="5,S", con_alerta=True) == [("S", 5.77, False)]
+    assert _reglas([[80, 90, 80, 90]], "1,2,3") == []                           # sin marcar: ni se calcula
 
 
 def test_mira_los_turnos_anteriores():
@@ -232,9 +260,9 @@ def test_reglas_configurables(sesion):
 def test_los_turnos_de_la_fase_1_no_cuentan(sesion):
     equipo = _eboe(sesion, 1)
     _limites(sesion, equipo.id, reglas="2")
-    base = turnos([[86, 86]] * 6, equipo_id=equipo.id, inicio=datetime(2025, 10, 29, 6), primer_id=100)
-    fase2 = turnos([[86, 86]] * 6, equipo_id=equipo.id, inicio=datetime(2026, 6, 29, 6), primer_id=200)
-    nuevos = turnos([[86, 86]] * 3, equipo_id=equipo.id, inicio=NUEVOS)
+    base = turnos([[84, 84]] * 6, equipo_id=equipo.id, inicio=datetime(2025, 10, 29, 6), primer_id=100)
+    fase2 = turnos([[84, 84]] * 6, equipo_id=equipo.id, inicio=datetime(2026, 6, 29, 6), primer_id=200)
+    nuevos = turnos([[84, 84]] * 3, equipo_id=equipo.id, inicio=NUEVOS)
     planta = _planta(sesion)
     assert evaluar_nuevos(sesion, planta, "eficiencia", nuevos, previos=base)["creadas"] == 0
     assert evaluar_nuevos(sesion, planta, "eficiencia", nuevos, previos=pd.concat([base, fase2]))["creadas"] == 1
@@ -255,16 +283,38 @@ def test_falta_el_parametro_de_episodios(sesion):
         _evaluar(sesion, [[78]])
 
 
-def test_comunes_a_los_tres_eboe(sesion):
-    for numero in (1, 2, 3):
-        _evaluar(sesion, [[78, 77]], numero=numero, primer_id=10 * numero)
-    for numero in (1, 2):                                                       # mucho después: solo en 2 eBOE
-        _evaluar(sesion, [[77]], numero=numero, inicio=datetime(2026, 7, 10, 15), primer_id=50 + numero)
+def _varios_eboe(sesion, valores_por_eboe, inicio=NUEVOS):
+    return pd.concat([turnos(valores, equipo_id=_eboe(sesion, numero).id, inicio=inicio, primer_id=100 * numero)
+                      for numero, valores in valores_por_eboe.items()], ignore_index=True)
+
+
+def test_comun_a_los_tres_eboe_es_una_alerta_de_planta(sesion):
+    planta = _planta(sesion)
+    # turno 1: los 3 eBOE debajo de 80 (común); turno 2: solo el BOE 1
+    datos = _varios_eboe(sesion, {1: [[78, 77], [76]], 2: [[79], [85]], 3: [[77], [86]]})
+    resumen = evaluar_nuevos(sesion, planta, "eficiencia", datos)
     alertas = sesion.scalars(select(Alerta)).all()
-    comunes = [a for a in alertas if a.comun_eboe]
-    assert len(comunes) == 3 and {a.fecha_produccion for a in comunes} == {date(2026, 7, 1)}
-    assert all(a.comentario == COMENTARIO_COMUN for a in comunes)
-    assert not any(a.comun_eboe for a in alertas if a.fecha_produccion == date(2026, 7, 10))
+    (comun,) = [a for a in alertas if a.comun_eboe]
+    assert (comun.ambito, comun.equipo_id, comun.planta_id) == (f"planta:{planta.id}", None, planta.id)
+    assert comun.comentario == COMENTARIO_COMUN and comun.regla == "rango" and comun.turno.nombre == "M"
+    assert comun.valor == pytest.approx((77.5 + 79 + 77) / 3) and comun.limite == 80
+    assert sorted(d.dato_id for d in comun.datos) == [100, 101, 200, 300]     # las muestras de los 3 eBOE
+    (propia,) = [a for a in alertas if not a.comun_eboe]                        # el turno T solo del BOE 1
+    assert (propia.equipo_id, propia.turno.nombre, propia.valor) == (_eboe(sesion, 1).id, "T", 76)
+    assert resumen["creadas"] == 2
+
+
+def test_en_dos_eboe_no_es_comun(sesion):
+    evaluar_nuevos(sesion, _planta(sesion), "eficiencia", _varios_eboe(sesion, {1: [[77]], 2: [[78]], 3: [[85]]}))
+    alertas = sesion.scalars(select(Alerta)).all()
+    assert len(alertas) == 2 and not any(a.comun_eboe for a in alertas)
+    assert {a.ambito for a in alertas} == {f"equipo:{_eboe(sesion, n).id}" for n in (1, 2)}
+
+
+def test_lado_bueno_no_crea_alerta(sesion):
+    _limites(sesion, _eboe(sesion, 1).id, reglas="1,2,3", tipo="I-MR-S")
+    assert _evaluar(sesion, [[95, 96]])["creadas"] == 0                         # eficiencia muy alta: lado bueno
+    assert _evaluar(sesion, [[76]], inicio=NUEVOS + timedelta(hours=8), primer_id=10)["por_regla"]["1"] == 1
 
 
 def test_ph_de_planta(sesion):

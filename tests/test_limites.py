@@ -138,11 +138,12 @@ def test_congelar_con_historial_exclusiones_y_ambito(sesion):
     datos = turnos([[85, 87], [84, 120], [86, 85]], equipo_id=equipo.id)
     primero = congelar_limites(sesion, "eficiencia", calcular_limites_fase1(datos, excluir={4: "error de carga"}),
                                "prueba", "naranja", equipo_id=equipo.id)
-    assert primero.vigente and primero.reglas == "1,2,3,5,S" and primero.tipo_carta == ENTRE_DENTRO
+    assert primero.vigente and (primero.reglas_alerta, primero.reglas_marca) == ("1,2,3", "5,S")
+    assert primero.tipo_carta == ENTRE_DENTRO
     assert primero.sigma_dentro is not None
     assert [e.motivo for e in primero.exclusiones] == ["error de carga"]
     segundo = congelar_limites(sesion, "eficiencia", calcular_limites_fase1(datos), "prueba", "naranja",
-                               equipo_id=equipo.id, reglas="1", comentario="nuevo período base")
+                               equipo_id=equipo.id, reglas_alerta="1", comentario="nuevo período base")
     sesion.refresh(primero)
     assert not primero.vigente and segundo.vigente                          # el anterior queda como historial
     assert limites_vigentes(sesion, "eficiencia", "naranja", equipo_id=equipo.id).id == segundo.id
@@ -154,7 +155,7 @@ def test_congelar_con_historial_exclusiones_y_ambito(sesion):
     assert limites_vigentes(sesion, "ph", "naranja", planta_id=planta.id).id == ph.id
     imr = congelar_limites(sesion, "brix", calcular_limites_fase1(datos, tipo_carta=IMR), "prueba",
                            equipo_id=equipo.id)
-    assert imr.reglas == "1,2,3,5,MR"
+    assert (imr.reglas_alerta, imr.reglas_marca) == ("1,2,3", "5,MR")
     assert len(sesion.scalars(select(LimitesControl)).all()) == 4
     assert len(sesion.scalars(select(LimitesExclusion)).all()) == 1
     with pytest.raises(ValueError, match="uno de los dos"):
