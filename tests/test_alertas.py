@@ -54,12 +54,13 @@ def _eboe(sesion, numero):
 
 
 def _limites(sesion, equipo_id=None, planta_id=None, reglas="1,2,3,5,S,rango", variable="eficiencia", lc=LC, sigma=SIGMA,
-             tipo="Xbar-S", sigma_dentro=None, marca=None):
+             tipo="Xbar-S", sigma_dentro=None, marca=None, sigma_inmediata=4):
     sesion.add(LimitesControl(variable=variable, equipo_id=equipo_id, planta_id=planta_id, fruta="naranja",
                               tipo_carta=tipo, n_subgrupo=4, base_desde=date(2025, 6, 1), base_hasta=date(2025, 10, 31),
                               n=500, lc=lc, lcs=lc + 3 * sigma, lci=lc - 3 * sigma, sigma=sigma,
                               sigma_dentro=sigma_dentro, mr_lc=1.128 * sigma, mr_lcs=3.267 * 1.128 * sigma,
-                              reglas_alerta=reglas, reglas_marca=marca, congelado_por="prueba"))
+                              reglas_alerta=reglas, reglas_marca=marca, sigma_alerta_inmediata=sigma_inmediata,
+                              congelado_por="prueba"))
     sesion.commit()
 
 
@@ -398,3 +399,14 @@ def test_persistencia_cuenta_el_turno_comun(sesion):
     alertas = sesion.scalars(select(Alerta)).all()
     (propia,) = alertas                                                         # la común sola no persiste
     assert (propia.equipo_id, propia.turno.nombre, propia.turnos_afectados) == (_eboe(sesion, 1).id, "T", 1)
+
+
+def test_sin_sigma_inmediata_en_el_limite_espera_la_persistencia(sesion):
+    _persistencia(sesion)
+    _limites(sesion, _eboe(sesion, 1).id, tipo="I-MR-S", sigma_inmediata=None)
+    equipo, planta = _eboe(sesion, 1), _planta(sesion)
+    primero = turnos([[70]], equipo_id=equipo.id, inicio=NUEVOS)
+    assert evaluar_nuevos(sesion, planta, "eficiencia", primero)["creadas"] == 0        # 7,5σ abajo, sin inmediata
+    segundo = turnos([[71]], equipo_id=equipo.id, inicio=NUEVOS + timedelta(hours=8), primer_id=10)
+    resumen = evaluar_nuevos(sesion, planta, "eficiencia", segundo, previos=primero)
+    assert resumen["creadas"] == 2 and resumen["inmediatas"] == 0                          # regla 1 y rango

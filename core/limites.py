@@ -20,7 +20,9 @@ from sqlalchemy.orm import Session
 
 from core.formato import numero
 from core.importar_centrifugas import REVISAR_COPIADA, REVISAR_FISICO, REVISAR_NORMALIDAD, REVISAR_PEGADO
-from core.models import REGLAS_ALERTA, REGLAS_MARCA_IMR, REGLAS_MARCA_POR_TURNO, Equipo, Linea, LimitesControl, LimitesExclusion
+from core.models import (REGLAS_ALERTA, REGLAS_MARCA_IMR, REGLAS_MARCA_POR_TURNO, Equipo, Linea, LimitesControl,
+                         LimitesExclusion, Planta)
+from core.parametros import validar_parametros
 from core.spc import limites_entre_dentro, limites_imr, limites_xbar_s, limites_xbar_s_para
 
 TABLA_ANALISIS, TABLA_CENTRIFUGA = "analisis_scott", "muestra_centrifuga"
@@ -29,6 +31,7 @@ IMR, XBAR_S, ENTRE_DENTRO = "I-MR", "Xbar-S", "I-MR-S"
 INVALIDOS = (REVISAR_COPIADA, REVISAR_FISICO, REVISAR_PEGADO, REVISAR_NORMALIDAD)
 PREFIJO_INVALIDO = "dato inválido: "
 SIN_LIMITE_INFERIOR = "sin límite inferior"
+DE_LA_PLANTA = "de la planta"      # sigma_alerta_inmediata al congelar: el parámetro de la planta
 COLUMNAS_SERIE = ["tabla", "dato_id", "ambito", "equipo_id", "planta_id", "equipo", "tipo", "fecha_hora",
                   "fecha_produccion", "turno", "temporada", "fruta", "valor", "invalido"]
 
@@ -247,19 +250,25 @@ def calcular_limites_fase1(serie: pd.DataFrame, desde=None, hasta=None, excluir:
 
 def congelar_limites(sesion: Session, variable: str, calculo: dict, congelado_por: str, fruta: str | None = None,
                      equipo_id: int | None = None, planta_id: int | None = None, reglas_alerta: str | None = None,
-                     reglas_marca: str | None = None, comentario: str | None = None,
-                     guardar: bool = True) -> LimitesControl:
+                     reglas_marca: str | None = None, sigma_alerta_inmediata: float | None | str = DE_LA_PLANTA,
+                     comentario: str | None = None, guardar: bool = True) -> LimitesControl:
     """Guarda los límites de calcular_limites_fase1() como el registro vigente de variable + ámbito + fruta.
 
     Ámbito: equipo_id, o planta_id en las variables de planta. El vigente anterior (si hay) pasa a vigente = False
     y queda como historial. Las exclusiones se guardan con su motivo. reglas_alerta (crean alertas): por defecto
-    "1,2,3". reglas_marca (solo se marcan en la carta): por defecto "5,S" por turno (entre/dentro y X̄-S) y "5,MR"
-    en I-MR.
+    "1,2,3,rango". reglas_marca (solo se marcan en la carta): por defecto "5,S" por turno (entre/dentro y X̄-S) y
+    "5,MR" en I-MR. sigma_alerta_inmediata: σ de alerta inmediata de la regla 1; por defecto (DE_LA_PLANTA) el
+    parámetro de la planta (error claro si no está); None = sin alerta inmediata.
     """
     if variable not in VARIABLES_CONTROL:
         raise ValueError(f'Variable "{variable}" no válida. Usá una de: {", ".join(VARIABLES_CONTROL)}.')
     if (equipo_id is None) == (planta_id is None):
         raise ValueError("Los límites van con un equipo o con la planta (uno de los dos).")
+    if sigma_alerta_inmediata == DE_LA_PLANTA:
+        planta = sesion.get(Planta, planta_id) if planta_id is not None else sesion.get(Equipo, equipo_id).linea.planta
+        sigma_alerta_inmediata = validar_parametros(planta, ["sigma_alerta_inmediata"])["sigma_alerta_inmediata"]
+    elif sigma_alerta_inmediata is not None and sigma_alerta_inmediata <= 0:
+        raise ValueError(f"Los σ de alerta inmediata tienen que ser mayores que 0 (llegó {sigma_alerta_inmediata}).")
     anterior = limites_vigentes(sesion, variable, fruta, equipo_id, planta_id)
     if anterior is not None:
         anterior.vigente = False
@@ -270,7 +279,8 @@ def congelar_limites(sesion: Session, variable: str, calculo: dict, congelado_po
         n=calculo["n"], lc=calculo["lc"], lcs=calculo["lcs"], lci=calculo["lci"], sigma=calculo["sigma"],
         sigma_dentro=calculo.get("sigma_dentro"), mr_lc=calculo["mr_lc"], mr_lcs=calculo["mr_lcs"],
         reglas_alerta=reglas_alerta or REGLAS_ALERTA,
-        reglas_marca=reglas_marca or (REGLAS_MARCA_IMR if tipo == IMR else REGLAS_MARCA_POR_TURNO), vigente=True,
+        reglas_marca=reglas_marca or (REGLAS_MARCA_IMR if tipo == IMR else REGLAS_MARCA_POR_TURNO),
+        sigma_alerta_inmediata=sigma_alerta_inmediata, vigente=True,
         congelado_por=congelado_por, comentario=comentario,
         exclusiones=[LimitesExclusion(**excluido) for excluido in calculo["excluidos"]])
     sesion.add(registro)

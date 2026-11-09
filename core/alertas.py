@@ -9,13 +9,13 @@ n variable, core.limites.subgrupos_por_turno).
   del período base, como en las cartas). Cada violación sale marcada con alerta = sí o no: solo alertan las
   reglas_alerta de los límites y, en las reglas 1, 2, 3, 5 y 6, del lado malo de la variable (lado_alerta de
   VARIABLES_CONTROL); las reglas_marca y las del lado bueno solo se marcan en la carta. En la regla 1 marca
-  además "inmediata" si el promedio pasa los ±Planta.sigma_alerta_inmediata σ.
+  además "inmediata" si el promedio pasa los ±LimitesControl.sigma_alerta_inmediata σ (vacío: nunca).
 - violaciones_rango(): el promedio del turno fuera del rango de RangoReferencia con genera_alerta = sí, respetando
   lado_capacidad (eficiencia: solo por debajo del mínimo).
 - evaluar_nuevos(): crea las alertas ("abierta", o "histórico" si se evalúan datos importados), agrupadas en
   episodios. Persistencia: un episodio se crea recién cuando la misma regla (origen + regla + variable + ámbito) se
   viola en Planta.turnos_para_alertar turnos seguidos del ámbito; empieza en el primero de esos turnos. Excepción:
-  la regla 1 más allá de ±sigma_alerta_inmediata σ (del lado malo) alerta en el acto (inmediata). Los turnos que
+  la regla 1 más allá de ±sigma_alerta_inmediata σ de sus límites (del lado malo) alerta en el acto (inmediata). Los turnos que
   vuelven a violar la regla se suman al episodio en curso (turnos_afectados, fin). El episodio se cierra solo tras
   Planta.turnos_fin_episodio turnos seguidos sin violarla; si después vuelve a violarse, es otro. Una alerta cerrada
   a mano no se reabre. Sin límites vigentes por turno, no evalúa Nelson pero sí el rango; con límites, el rango
@@ -177,7 +177,7 @@ def evaluar_nuevos(sesion: Session, planta: Planta, variable: str, nuevos: pd.Da
     previos: datos anteriores (misma variable) para las reglas que miran hacia atrás, para la persistencia (los
     últimos turnos_para_alertar − 1 turnos de cada ámbito se vuelven a mirar) y para contar los turnos sin alerta de
     los episodios. historico=True: las alertas nuevas son "histórico" (datos importados). Usa los parámetros de la
-    planta turnos_fin_episodio, turnos_para_alertar y sigma_alerta_inmediata. Solo crean alertas las violaciones con
+    planta turnos_fin_episodio y turnos_para_alertar, y el sigma_alerta_inmediata de cada límite. Solo crean alertas las violaciones con
     alerta = sí (reglas_alerta del lado malo) y los rangos con genera_alerta. comunes=True: las violaciones de la
     misma regla en todos los eBOE en el mismo turno van a una alerta de planta (separar_comunes).
     Devuelve {"creadas" (episodios nuevos), "inmediatas" (de esos, cuántos sin esperar la persistencia), "turnos"
@@ -186,7 +186,7 @@ def evaluar_nuevos(sesion: Session, planta: Planta, variable: str, nuevos: pd.Da
     """
     if variable not in VARIABLES_CONTROL:
         raise ValueError(f'Variable "{variable}" no válida. Usá una de: {", ".join(VARIABLES_CONTROL)}.')
-    parametros = validar_parametros(planta, ["turnos_fin_episodio", "turnos_para_alertar", "sigma_alerta_inmediata"])
+    parametros = validar_parametros(planta, ["turnos_fin_episodio", "turnos_para_alertar"])
     turnos = {t.nombre: t.id for t in planta.turnos}
     resumen = {"creadas": 0, "inmediatas": 0, "turnos": 0, "por_regla": Counter(), "sin_limites": []}
     previos_validos = previos[previos["invalido"].isna()] if previos is not None and not previos.empty else None
@@ -213,7 +213,7 @@ def evaluar_nuevos(sesion: Session, planta: Planta, variable: str, nuevos: pd.Da
             violaciones += [v | {"origen": ORIGEN_NELSON, "limites_id": limites.id} for v in violaciones_por_turno(
                 a_evaluar, fase2.iloc[:len(fase2) - contexto_fase2], limites.lc, limites.sigma, limites.reglas_alerta,
                 limites.tipo_carta, limites.sigma_dentro, limites.reglas_marca, lado,
-                parametros["sigma_alerta_inmediata"]) if v["alerta"]]
+                limites.sigma_alerta_inmediata) if v["alerta"]]
             rango_alerta = REGLA_RANGO in leer_reglas(limites.reglas_alerta)[1]
         else:
             resumen["sin_limites"].append(ambito)

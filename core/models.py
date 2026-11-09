@@ -90,8 +90,8 @@ class Planta(Base):
     - turnos_fin_episodio: turnos seguidos sin violar una regla que cierran un episodio de alerta (core.alertas).
     - turnos_para_alertar: turnos seguidos del mismo ámbito que tienen que violar la misma regla para que se cree
       la alerta (persistencia, core.alertas).
-    - sigma_alerta_inmediata: en la regla 1, un promedio de turno a más de estos σ de la LC (del lado malo) alerta
-      sin esperar la persistencia.
+    - sigma_alerta_inmediata: valor por defecto de LimitesControl.sigma_alerta_inmediata al congelar límites (en
+      la regla 1, un promedio de turno a más de estos σ de la LC, del lado malo, alerta sin esperar la persistencia).
     """
 
     __tablename__ = "planta"
@@ -537,6 +537,8 @@ class LimitesControl(Base):
     de los promedios; sigma_dentro = σ dentro del turno (S barra) para la carta S de cada n.
     reglas_alerta: reglas que crean alertas (Nelson "1,2,3" y "rango"; el pH, solo "rango"). reglas_marca: se
     calculan y se marcan en la carta, pero no alertan (por defecto "5,S" por turno y "5,MR" en I-MR).
+    sigma_alerta_inmediata: regla 1 más allá de estos σ (del lado malo) → alerta sin esperar la persistencia; vacío =
+    sin alerta inmediata para esta variable. Al congelar, por defecto el de la planta.
     """
 
     __tablename__ = "limites_control"
@@ -560,6 +562,7 @@ class LimitesControl(Base):
     mr_lcs: Mapped[float | None] = mapped_column(Float)
     reglas_alerta: Mapped[str] = mapped_column(String(40), default=REGLAS_ALERTA)
     reglas_marca: Mapped[str | None] = mapped_column(String(40))
+    sigma_alerta_inmediata: Mapped[float | None] = mapped_column(Float)
     vigente: Mapped[bool] = mapped_column(Boolean, default=True)
     congelado_en: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     congelado_por: Mapped[str] = mapped_column(String(100))

@@ -46,7 +46,8 @@ def sesion():
     motor = crear_motor("sqlite://")
     crear_tablas(motor)
     with crear_sesion(motor) as sesion:
-        planta = Planta(nombre="Norte", pais="Argentina", cliente=Cliente(nombre="X", pais="Argentina"))
+        planta = Planta(nombre="Norte", pais="Argentina", cliente=Cliente(nombre="X", pais="Argentina"),
+                        sigma_alerta_inmediata=4)
         linea = Linea(nombre="Línea 1", planta=planta)
         for numero in (1, 2):
             Equipo(codigo=f"N-BOE-0{numero}", nombre=f"BOE {numero}", tipo="BOE", numero=numero, linea=linea)
@@ -205,3 +206,18 @@ def test_series_boe_y_centrifugas():
     descarga = centrifugas["aceite_descarga"]
     assert descarga["dato_id"].tolist() == [8] and descarga["invalido"].iloc[0].startswith(PREFIJO_INVALIDO)
     assert set(descarga.columns) == set(COLUMNAS_SERIE) and descarga["tabla"].iloc[0] == "muestra_centrifuga"
+
+
+def test_sigma_de_alerta_inmediata_por_variable(sesion):
+    equipo = sesion.scalars(select(Equipo)).first()
+    calculo = calcular_limites_fase1(turnos([[85, 87], [84, 86], [86, 85]], equipo_id=equipo.id))
+    por_defecto = congelar_limites(sesion, "eficiencia", calculo, "prueba", "naranja", equipo_id=equipo.id)
+    sin_inmediata = congelar_limites(sesion, "aceite_emulsion", calculo, "prueba", "naranja", equipo_id=equipo.id,
+                                     sigma_alerta_inmediata=None)
+    assert (por_defecto.sigma_alerta_inmediata, sin_inmediata.sigma_alerta_inmediata) == (4, None)
+    with pytest.raises(ValueError, match="mayores que 0"):
+        congelar_limites(sesion, "brix", calculo, "prueba", equipo_id=equipo.id, sigma_alerta_inmediata=0)
+    planta = sesion.scalars(select(Planta)).one()
+    planta.sigma_alerta_inmediata = None
+    with pytest.raises(ValueError, match="σ de alerta inmediata"):
+        congelar_limites(sesion, "brix", calculo, "prueba", equipo_id=equipo.id)
