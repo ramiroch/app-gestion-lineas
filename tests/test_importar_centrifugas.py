@@ -10,7 +10,7 @@ from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
 from core.importar_centrifugas import (REVISAR_COPIADA, REVISAR_DIA, REVISAR_ESB_PRIMARIA, REVISAR_FECHA,
                                        REVISAR_FECHA_CORREGIDA, REVISAR_FISICO,
-                                       REVISAR_NORMALIDAD, REVISAR_NORMALIDAD_PESADA, REVISAR_PEGADO,
+                                       REVISAR_EXTREMO, REVISAR_NORMALIDAD, REVISAR_NORMALIDAD_PESADA, REVISAR_PEGADO,
                                        REVISAR_SIN_LIVIANA, importar_centrifugas, leer_solidos, normalizar_equipo,
                                        normalizar_fase, texto_resumen)
 from core.models import MARCAS_CP, Cliente, Equipo, Linea, MuestraCentrifuga, Planta
@@ -317,3 +317,17 @@ def test_encabezado_cambiado_da_error_claro(sesion, tmp_path):
     libro.save(ruta)
     with pytest.raises(ValueError, match='La columna N de la hoja "Datos" tendría que ser "Muestra"'):
         importar_centrifugas(sesion, ruta)
+
+
+def test_descarga_extrema_se_marca_pero_no_invalida(sesion, tmp_path):
+    from core.limites import motivo_invalido
+    filas = (bloque(time(9, 10), cambios={"descarga": {"N": 0.8, "O": 2.0}})          # muestra de 0,8 g
+             + bloque(time(11, 10), cambios={"descarga": {"N": 2.0, "O": 150.0}})     # aceite (149,9)·0,1·3,45/2 = 25,9 %
+             + bloque(time(13, 10)))                                                   # normal: 0,073 %
+    importar_centrifugas(sesion, escribir(tmp_path / "cen.xlsx", filas))
+    descarga = {m.fecha_hora.hour: m for m in sesion.scalars(select(MuestraCentrifuga)
+                                                             .where(MuestraCentrifuga.fase == "descarga"))}
+    assert REVISAR_EXTREMO in descarga[9].revisar and REVISAR_EXTREMO in descarga[11].revisar
+    assert REVISAR_EXTREMO not in (descarga[13].revisar or "")
+    assert descarga[11].gramos == 2.0 and descarga[11].ml == 150.0                     # no se borra nada
+    assert motivo_invalido(descarga[11].revisar) is None                               # ni se excluye

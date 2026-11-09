@@ -91,6 +91,9 @@ REVISAR_FECHA = "fecha fuera de secuencia"
 REVISAR_ASUMIDA = "secundaria no indicada, asumida {}"
 REVISAR_FECHA_CORREGIDA = "fecha corregida por el Día"
 REVISAR_DIA = "Día fuera de secuencia (la Fecha avanza y el Día no)"
+REVISAR_EXTREMO = "valor extremo: muestra muy chica o titulación fuera de rango del método"
+ACEITE_DESCARGA_EXTREMO = 20.0                    # % de aceite en descarga por encima del cual se marca
+GRAMOS_MINIMOS_DESCARGA = 1.0                     # g de muestra de descarga por debajo de los cuales se marca
 MOTIVOS_DE_FECHA = (REVISAR_FECHA, REVISAR_FECHA_CORREGIDA, REVISAR_DIA)
 LARGO_REVISAR = 200
 
@@ -518,11 +521,28 @@ def _muestra(bloque: dict, fase: str, prefijo: str, equipo, comunes: dict, param
     elif aceite is not None:
         muestra["aceite_pct_medido"] = aceite
         muestra["revisar"].append(REVISAR_PEGADO)
+    if fase == "descarga":
+        muestra["revisar"] += _revisar_extremo(muestra, parametros)
 
     if all(muestra[c] is None for c in ("caudal_lh", "gramos", "aceite_pct_medido", "t_descarga_s", "cp_liviana_bar",
                                         "cp_pesada_bar", "observacion", "solidos_pct", "solidos_texto")):
         return None
     return muestra
+
+
+def _revisar_extremo(muestra: dict, parametros: dict) -> list[str]:
+    """Descarga con aceite > ACEITE_DESCARGA_EXTREMO % o muestra < GRAMOS_MINIMOS_DESCARGA g: se marca (no se
+    excluye de ningún cálculo). El aceite es el de g y mL o, si no hay titulación, el pegado."""
+    g, aceite = muestra.get("gramos"), muestra.get("aceite_pct_medido")
+    if g is not None and muestra.get("ml") is not None:
+        try:
+            aceite = aceite_pct(muestra["ml"], muestra["blanco_ml"], muestra["normalidad"], g,
+                                parametros["factor_aceite_emulsion"])
+        except ValueError:
+            aceite = None
+    if (g is not None and g < GRAMOS_MINIMOS_DESCARGA) or (aceite is not None and aceite > ACEITE_DESCARGA_EXTREMO):
+        return [REVISAR_EXTREMO]
+    return []
 
 
 def _revisar_aceite(fase, g, ml, aceite_planilla, datos, parametros) -> list[str]:

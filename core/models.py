@@ -20,7 +20,7 @@ ESTADOS_EQUIPO = ("Operativo", "Pendiente de instalación", "Fuera de servicio")
 DESTINOS_FASE_PESADA = ("recircula al BOE", "canal (pérdida)", "no aplica")   # no aplica: pulidora
 LADOS_CAPACIDAD = ("ambos", "inferior", "superior")
 TIPOS_CARTA = ("I-MR", "Xbar-S", "I-MR-S")      # I-MR-S: entre/dentro (I-MR de los promedios + S)
-REGLAS_ALERTA = "1,2,3"                    # reglas de Nelson que crean alertas (del lado malo de la variable)
+REGLAS_ALERTA = "1,2,3,rango"              # crean alertas: Nelson (del lado malo) y fuera de rango
 REGLAS_MARCA_IMR = "5,MR"                  # I-MR: se marcan en la carta, no alertan ("MR": rango móvil > LCS)
 REGLAS_MARCA_POR_TURNO = "5,S"             # X̄-S y entre/dentro: se marcan, no alertan ("S": desvío del turno)
 ORIGENES_ALERTA = ("nelson", "rango")
@@ -88,6 +88,10 @@ class Planta(Base):
     - umbral_paralelo_lh: caudal de emulsión (L/h) hasta el que dos primarias que aparecen en el mismo turno se
       consideran en paralelo (regla inferida, core.analisis_centrifugas.primarias_por_turno).
     - turnos_fin_episodio: turnos seguidos sin violar una regla que cierran un episodio de alerta (core.alertas).
+    - turnos_para_alertar: turnos seguidos del mismo ámbito que tienen que violar la misma regla para que se cree
+      la alerta (persistencia, core.alertas).
+    - sigma_alerta_inmediata: en la regla 1, un promedio de turno a más de estos σ de la LC (del lado malo) alerta
+      sin esperar la persistencia.
     """
 
     __tablename__ = "planta"
@@ -103,6 +107,8 @@ class Planta(Base):
     blanco_centrifugas_ml: Mapped[float | None] = mapped_column(Float)
     umbral_paralelo_lh: Mapped[float | None] = mapped_column(Float)
     turnos_fin_episodio: Mapped[int | None]
+    turnos_para_alertar: Mapped[int | None]
+    sigma_alerta_inmediata: Mapped[float | None] = mapped_column(Float)
 
     cliente: Mapped["Cliente"] = relationship(back_populates="plantas")
     lineas: Mapped[list["Linea"]] = relationship(back_populates="planta")
@@ -529,7 +535,7 @@ class LimitesControl(Base):
     tipo_carta "I-MR-S" (entre/dentro, Minitab I-MR-R/S, un punto por turno): lc = media de los promedios y
     sigma = σ entre turnos (MR̄ de los promedios / d2), con lcs y lci iguales para todo n; mr_lc y mr_lcs de la MR
     de los promedios; sigma_dentro = σ dentro del turno (S barra) para la carta S de cada n.
-    reglas_alerta: reglas que crean alertas (Nelson "1,2,3"; también "MR" o "S" si se quisiera). reglas_marca: se
+    reglas_alerta: reglas que crean alertas (Nelson "1,2,3" y "rango"; el pH, solo "rango"). reglas_marca: se
     calculan y se marcan en la carta, pero no alertan (por defecto "5,S" por turno y "5,MR" en I-MR).
     """
 
@@ -607,6 +613,7 @@ class Alerta(Base):
     fecha_hora: la de la primera muestra del turno; valor: el promedio del turno (o su desvío, regla "S"); limite: el
     que cruzó. estado: uno de ESTADOS_ALERTA ("histórico" = creada al evaluar datos importados, no se gestiona).
     comun_eboe: la misma regla y variable saltó en los 3 eBOE en el mismo turno (posible causa común).
+    inmediata: regla 1 más allá de Planta.sigma_alerta_inmediata σ: se creó sin esperar la persistencia.
     Episodio: una alerta junta los turnos seguidos que violan la misma regla (fecha_produccion y turno_id son los del
     primero; fecha_hora = inicio; fin = primera muestra del último turno que la violó; turnos_afectados). El episodio
     se cierra solo (episodio_abierto = False) tras Planta.turnos_fin_episodio turnos sin violarla; una alerta cerrada
@@ -632,6 +639,7 @@ class Alerta(Base):
     rango_id: Mapped[int | None] = mapped_column(ForeignKey("rango_referencia.id"))
     estado: Mapped[str] = mapped_column(String(15), default="abierta")
     comun_eboe: Mapped[bool] = mapped_column(Boolean, default=False)
+    inmediata: Mapped[bool | None] = mapped_column(Boolean, default=False)
     fin: Mapped[datetime | None] = mapped_column(DateTime)
     turnos_afectados: Mapped[int | None] = mapped_column(default=1)
     episodio_abierto: Mapped[bool | None] = mapped_column(Boolean, default=True)

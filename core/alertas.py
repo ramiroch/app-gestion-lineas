@@ -8,14 +8,18 @@ n variable, core.limites.subgrupos_por_turno).
   promedio pero no en S. Mira los turnos anteriores que necesita cada regla (hasta 14, solo de la fase II: después
   del período base, como en las cartas). Cada violación sale marcada con alerta = sí o no: solo alertan las
   reglas_alerta de los límites y, en las reglas 1, 2, 3, 5 y 6, del lado malo de la variable (lado_alerta de
-  VARIABLES_CONTROL); las reglas_marca y las del lado bueno solo se marcan en la carta.
+  VARIABLES_CONTROL); las reglas_marca y las del lado bueno solo se marcan en la carta. En la regla 1 marca
+  además "inmediata" si el promedio pasa los ±Planta.sigma_alerta_inmediata σ.
 - violaciones_rango(): el promedio del turno fuera del rango de RangoReferencia con genera_alerta = sí, respetando
   lado_capacidad (eficiencia: solo por debajo del mínimo).
 - evaluar_nuevos(): crea las alertas ("abierta", o "histórico" si se evalúan datos importados), agrupadas en
-  episodios: los turnos que vuelven a violar la misma regla (origen + regla + variable + ámbito) se suman a la alerta
-  del episodio en curso (turnos_afectados, fin). El episodio se cierra solo tras Planta.turnos_fin_episodio turnos
-  seguidos sin violarla; si después vuelve a violarse, es una alerta nueva. Una alerta cerrada a mano no se reabre.
-  Sin límites vigentes por turno, no evalúa Nelson pero sí el rango. Los datos inválidos no entran.
+  episodios. Persistencia: un episodio se crea recién cuando la misma regla (origen + regla + variable + ámbito) se
+  viola en Planta.turnos_para_alertar turnos seguidos del ámbito; empieza en el primero de esos turnos. Excepción:
+  la regla 1 más allá de ±sigma_alerta_inmediata σ (del lado malo) alerta en el acto (inmediata). Los turnos que
+  vuelven a violar la regla se suman al episodio en curso (turnos_afectados, fin). El episodio se cierra solo tras
+  Planta.turnos_fin_episodio turnos seguidos sin violarla; si después vuelve a violarse, es otro. Una alerta cerrada
+  a mano no se reabre. Sin límites vigentes por turno, no evalúa Nelson pero sí el rango; con límites, el rango
+  alerta solo si "rango" está en sus reglas_alerta (el pH: solo "rango"). Los datos inválidos no entran.
 - separar_comunes(): si la misma regla y variable salta en TODOS los eBOE de la planta en el mismo turno, se crea
   una sola alerta de ámbito planta (comun_eboe y un comentario automático: los eBOE comparten la muestra de entrada)
   en lugar de una por equipo. Las de equipo quedan solo para los turnos que no son comunes. Se detecta entre los
@@ -47,15 +51,18 @@ REGLAS_CON_LADO = (1, 2, 3, 5, 6)   # 1, 2, 5, 6: lado del punto respecto de la 
 
 
 def leer_reglas(texto: str | None) -> tuple[list[int], set[str]]:
-    """"1,2,3,5,S" → ([1, 2, 3, 5], {"S"}). Además de los números de Nelson: "S" (carta S) y "MR" (carta MR)."""
+    """"1,2,3,5,S" → ([1, 2, 3, 5], {"S"}). Además de los números de Nelson: "S" (carta S), "MR" (carta MR) y
+    "rango" (fuera del rango de referencia)."""
     numeros, otras = [], set()
     for parte in (p.strip() for p in (texto or "").split(",") if p.strip()):
         if parte.upper() in (REGLA_MR, REGLA_S):
             otras.add(parte.upper())
+        elif parte.lower() == REGLA_RANGO:
+            otras.add(REGLA_RANGO)
         elif parte.isdigit() and int(parte) in REGLAS:
             numeros.append(int(parte))
         else:
-            raise ValueError(f'Regla "{parte}" no válida: usá números de Nelson del 1 al 8, "S" y "MR".')
+            raise ValueError(f'Regla "{parte}" no válida: usá números de Nelson del 1 al 8, "S", "MR" y "rango".')
     return sorted(set(numeros)), otras
 
 
@@ -63,7 +70,8 @@ def leer_reglas(texto: str | None) -> tuple[list[int], set[str]]:
 
 def violaciones_por_turno(nuevos: pd.DataFrame, previos: pd.DataFrame | None, lc: float, sigma: float,
                           reglas_alerta: str, tipo_carta: str = ENTRE_DENTRO, sigma_dentro: float | None = None,
-                          reglas_marca: str | None = None, lado: str = "ambos") -> list[dict]:
+                          reglas_marca: str | None = None, lado: str = "ambos",
+                          sigma_inmediata: float | None = None) -> list[dict]:
     """Reglas violadas por los turnos nuevos (subgrupos de un ámbito, con n, media y desvio).
 
     Carta de los promedios: Nelson con LC = lc y σ de cada punto = sigma ("I-MR-S": σ entre turnos, igual para todo
@@ -71,10 +79,11 @@ def violaciones_por_turno(nuevos: pd.DataFrame, previos: pd.DataFrame | None, lc
     para su n, con σ dentro (sigma_dentro en "I-MR-S"; sigma en "Xbar-S").
     reglas_alerta: las que alertan; reglas_marca: se evalúan y se devuelven, pero no alertan. lado: el lado malo de
     la variable ("abajo", "arriba", "ambos"); en las reglas 1, 2, 5 y 6 cuenta el lado del punto respecto de la LC y
-    en la 3 el sentido de la tendencia: del lado bueno, la violación se marca pero no alerta.
+    en la 3 el sentido de la tendencia: del lado bueno, la violación se marca pero no alerta. sigma_inmediata: en la
+    regla 1, inmediata = |promedio − lc| > sigma_inmediata × σ del punto (None: nunca).
     previos: turnos anteriores del mismo ámbito en la fase II (se usan los últimos TURNOS_ANTERIORES).
     Devuelve [{indice (de nuevos), regla, valor, limite, lado ("arriba"/"abajo", o None si la regla no tiene lado),
-    alerta (bool)}]: regla 1 → LCS o LCI; 5 → lc ± 2σ; 2, 4, 6, 7, 8 → lc; 3 → sin límite; "S" → el límite de S que
+    alerta (bool), inmediata (bool)}]: regla 1 → LCS o LCI; 5 → lc ± 2σ; 2, 4, 6, 7, 8 → lc; 3 → sin límite; "S" → el límite de S que
     cruzó (valor = desvío del turno).
     """
     if tipo_carta not in POR_TURNO:
@@ -103,8 +112,9 @@ def violaciones_por_turno(nuevos: pd.DataFrame, previos: pd.DataFrame | None, lc
             else:
                 lado_violacion = ("arriba" if media > lc else "abajo") if regla in REGLAS_CON_LADO else None
             alerta = regla in numeros_alerta and (lado == "ambos" or lado_violacion in (None, lado))
+            inmediata = regla == 1 and sigma_inmediata is not None and abs(media - lc) > sigma_inmediata * s_punto
             resultado.append({"indice": indice, "regla": str(regla), "valor": media, "limite": limite,
-                              "lado": lado_violacion, "alerta": alerta})
+                              "lado": lado_violacion, "alerta": alerta, "inmediata": bool(inmediata)})
         desvio = serie["desvio"].iloc[posicion]
         if REGLA_S in otras and sigma_s and n[posicion] >= 2 and desvio is not None and not pd.isna(desvio):
             limites = limites_xbar_s_para(lc, sigma_s, int(n[posicion]))
@@ -112,7 +122,7 @@ def violaciones_por_turno(nuevos: pd.DataFrame, previos: pd.DataFrame | None, lc
                 limites["s_lci"] if limites["s_lci"] > 0 and desvio < limites["s_lci"] else None)
             if limite is not None:
                 resultado.append({"indice": indice, "regla": REGLA_S, "valor": float(desvio), "limite": limite,
-                                  "lado": None, "alerta": REGLA_S in otras_alerta})
+                                  "lado": None, "alerta": REGLA_S in otras_alerta, "inmediata": False})
     return resultado
 
 
@@ -164,19 +174,21 @@ def evaluar_nuevos(sesion: Session, planta: Planta, variable: str, nuevos: pd.Da
     """Evalúa datos nuevos de una variable (COLUMNAS_SERIE de core.limites, uno o varios ámbitos) por turno y crea o
     extiende alertas (episodios).
 
-    previos: datos anteriores (misma variable) para las reglas que miran hacia atrás y para contar los turnos sin
-    alerta de los episodios. historico=True: las alertas nuevas son "histórico" (datos importados). Usa el parámetro
-    de la planta turnos_fin_episodio. Solo crean alertas las violaciones con alerta = sí (reglas_alerta del lado malo,
-    y los rangos con genera_alerta). comunes=True: las violaciones de la misma regla en todos los eBOE en el mismo
-    turno van a una alerta de planta (separar_comunes). Devuelve {"creadas" (episodios nuevos), "turnos" (turnos
-    con violación nuevos), "por_regla": Counter de episodios nuevos, "sin_limites": [ámbitos sin límites por turno
-    vigentes]}.
+    previos: datos anteriores (misma variable) para las reglas que miran hacia atrás, para la persistencia (los
+    últimos turnos_para_alertar − 1 turnos de cada ámbito se vuelven a mirar) y para contar los turnos sin alerta de
+    los episodios. historico=True: las alertas nuevas son "histórico" (datos importados). Usa los parámetros de la
+    planta turnos_fin_episodio, turnos_para_alertar y sigma_alerta_inmediata. Solo crean alertas las violaciones con
+    alerta = sí (reglas_alerta del lado malo) y los rangos con genera_alerta. comunes=True: las violaciones de la
+    misma regla en todos los eBOE en el mismo turno van a una alerta de planta (separar_comunes).
+    Devuelve {"creadas" (episodios nuevos), "inmediatas" (de esos, cuántos sin esperar la persistencia), "turnos"
+    (turnos sumados a alertas), "por_regla": Counter de episodios nuevos, "sin_limites": [ámbitos sin límites por
+    turno vigentes]}.
     """
     if variable not in VARIABLES_CONTROL:
         raise ValueError(f'Variable "{variable}" no válida. Usá una de: {", ".join(VARIABLES_CONTROL)}.')
-    fin_episodio = validar_parametros(planta, ["turnos_fin_episodio"])["turnos_fin_episodio"]
+    parametros = validar_parametros(planta, ["turnos_fin_episodio", "turnos_para_alertar", "sigma_alerta_inmediata"])
     turnos = {t.nombre: t.id for t in planta.turnos}
-    resumen = {"creadas": 0, "turnos": 0, "por_regla": Counter(), "sin_limites": []}
+    resumen = {"creadas": 0, "inmediatas": 0, "turnos": 0, "por_regla": Counter(), "sin_limites": []}
     previos_validos = previos[previos["invalido"].isna()] if previos is not None and not previos.empty else None
     lado = VARIABLES_CONTROL[variable]["lado_alerta"]
     evaluados = []
@@ -189,45 +201,63 @@ def evaluar_nuevos(sesion: Session, planta: Planta, variable: str, nuevos: pd.Da
         anteriores = subgrupos_por_turno(previos_validos[previos_validos["ambito"] == ambito]) \
             if previos_validos is not None else grupo.iloc[0:0]
         anteriores = anteriores[anteriores["fecha_hora"] < grupo["fecha_hora"].min()]
-        violaciones = []
+        contexto = anteriores.tail(parametros["turnos_para_alertar"] - 1)    # para ver la persistencia
+        evaluar = pd.concat([contexto, grupo], ignore_index=True)
+        violaciones, rango_alerta = [], True
         limites = limites_vigentes(sesion, variable, fruta, equipo_id, planta_id)
         if limites is not None and limites.tipo_carta in POR_TURNO:
-            fase2 = anteriores[anteriores["fecha_produccion"] > pd.Timestamp(limites.base_hasta)]
+            base_hasta = pd.Timestamp(limites.base_hasta)
+            fase2 = anteriores[anteriores["fecha_produccion"] > base_hasta]
+            contexto_fase2 = int((contexto["fecha_produccion"] > base_hasta).sum())
+            a_evaluar = evaluar[(evaluar.index >= len(contexto)) | (evaluar["fecha_produccion"] > base_hasta)]
             violaciones += [v | {"origen": ORIGEN_NELSON, "limites_id": limites.id} for v in violaciones_por_turno(
-                grupo, fase2, limites.lc, limites.sigma, limites.reglas_alerta, limites.tipo_carta,
-                limites.sigma_dentro, limites.reglas_marca, lado) if v["alerta"]]
+                a_evaluar, fase2.iloc[:len(fase2) - contexto_fase2], limites.lc, limites.sigma, limites.reglas_alerta,
+                limites.tipo_carta, limites.sigma_dentro, limites.reglas_marca, lado,
+                parametros["sigma_alerta_inmediata"]) if v["alerta"]]
+            rango_alerta = REGLA_RANGO in leer_reglas(limites.reglas_alerta)[1]
         else:
             resumen["sin_limites"].append(ambito)
-        rango = rango_de_alerta(sesion, planta.id, variable, grupo["tipo"].iloc[0], fruta)
+        rango = rango_de_alerta(sesion, planta.id, variable, grupo["tipo"].iloc[0], fruta) if rango_alerta else None
         if rango is not None:
             violaciones += [v | {"origen": ORIGEN_RANGO, "rango_id": rango.id} for v in violaciones_rango(
-                grupo, rango.minimo, rango.maximo, rango.lado_capacidad)]
-        tiempos = sorted(set(pd.concat([anteriores["fecha_hora"], grupo["fecha_hora"]])))
-        evaluados.append({"ambito": ambito, "equipo_id": equipo_id, "planta_id": planta_id, "subgrupos": grupo,
-                          "violaciones": violaciones, "tiempos": tiempos})
+                evaluar, rango.minimo, rango.maximo, rango.lado_capacidad)]
+        evaluados.append({"ambito": ambito, "equipo_id": equipo_id, "planta_id": planta_id, "subgrupos": evaluar,
+                          "violaciones": violaciones,
+                          "linea": pd.concat([anteriores, grupo])[["fecha_produccion", "turno", "fecha_hora"]]})
+    for e in evaluados:                     # antes de separar las comunes: cuentan para la persistencia del equipo
+        e["violados"] = _violados(e)
     if comunes and VARIABLES_CONTROL[variable]["nivel"] == "equipo" and not nuevos.empty \
             and (nuevos["tipo"] == TIPO_EBOE).all():
         eboes = sesion.scalars(select(Equipo.id).join(Linea).where(Linea.planta_id == planta.id,
                                                                     Equipo.tipo == TIPO_EBOE)).all()
         comun = separar_comunes(evaluados, [ambito_de(equipo_id=e) for e in eboes], planta.id)
         if comun is not None:
+            comun["violados"] = _violados(comun)
             evaluados.append(comun)
     estado = HISTORICO if historico else ABIERTA
     for e in evaluados:
-        _guardar(sesion, e["ambito"], e["equipo_id"], e["planta_id"], variable, e["subgrupos"], e["violaciones"],
-                 e["tiempos"], fin_episodio, turnos, estado, creado_por, resumen, comun=e.get("comun", False))
+        _guardar(sesion, e, variable, parametros, turnos, estado, creado_por, resumen)
     sesion.commit()
     return resumen
+
+
+def _violados(evaluado: dict) -> dict:
+    """(origen, regla) → turnos (fecha_hora) que violan esa regla en el ámbito."""
+    violados = defaultdict(set)
+    for v in evaluado["violaciones"]:
+        violados[(v["origen"], v["regla"])].add(pd.Timestamp(evaluado["subgrupos"].loc[v["indice"], "fecha_hora"]))
+    return violados
 
 
 def separar_comunes(evaluados: list[dict], ambitos_eboe: list[str], planta_id: int) -> dict | None:
     """Saca de los eBOE las violaciones comunes (misma regla y origen en TODOS los eBOE de la planta en el mismo
     turno de producción) y las junta en un ámbito de planta.
 
-    evaluados: [{ambito, equipo_id, planta_id, subgrupos, violaciones, tiempos}] (se modifican: quedan solo las
-    violaciones no comunes). Devuelve el evaluado de planta (comun = True; un subgrupo por turno común con la
-    primera fecha_hora y los datos de todos los eBOE; valor = promedio de los eBOE; límite si es el mismo en todos)
-    o None si no hay comunes o la planta tiene menos de 2 eBOE.
+    evaluados: [{ambito, equipo_id, planta_id, subgrupos, violaciones, linea (fecha_produccion, turno y fecha_hora
+    de los turnos del ámbito)}] (se modifican: quedan solo las violaciones no comunes). Devuelve el evaluado de
+    planta (comun = True; un subgrupo por turno común con la primera fecha_hora y los datos de todos los eBOE; valor
+    = promedio de los eBOE; límite si es el mismo en todos; inmediata si lo es en alguno; su línea de tiempo es un
+    punto por turno de producción) o None si no hay comunes o la planta tiene menos de 2 eBOE.
     """
     if len(ambitos_eboe) < 2:
         return None
@@ -256,27 +286,37 @@ def separar_comunes(evaluados: list[dict], ambitos_eboe: list[str], planta_id: i
         violaciones.append({"indice": list(filas).index((dia, turno_nombre)), "origen": origen, "regla": regla,
                             "valor": float(np.mean([v["valor"] for _, v, _ in lista])),
                             "limite": limites.pop() if len(limites) == 1 else None,
-                            "rango_id": rangos.pop() if len(rangos) == 1 else None})
-    tiempos = sorted({t for e in evaluados if e["ambito"] in ambitos_eboe for t in e["tiempos"]})
+                            "rango_id": rangos.pop() if len(rangos) == 1 else None,
+                            "inmediata": any(v.get("inmediata") for _, v, _ in lista)})
+    linea = pd.concat([e["linea"] for e in evaluados if e["ambito"] in ambitos_eboe])
+    linea = linea.groupby(["fecha_produccion", "turno"], as_index=False)["fecha_hora"].min()
     return {"ambito": ambito_de(planta_id=planta_id), "equipo_id": None, "planta_id": planta_id,
-            "subgrupos": pd.DataFrame(list(filas.values())), "violaciones": violaciones, "tiempos": tiempos,
+            "subgrupos": pd.DataFrame(list(filas.values())), "violaciones": violaciones, "linea": linea,
             "comun": True}
 
 
-def _guardar(sesion: Session, ambito: str, equipo_id: int | None, planta_id: int | None, variable: str,
-             subgrupos: pd.DataFrame, violaciones: list[dict], tiempos: list, fin_episodio: int, turnos: dict,
-             estado: str, creado_por: str, resumen: dict, comun: bool = False) -> None:
-    """Suma cada turno con violación al episodio en curso de su regla, o abre un episodio nuevo. comun: alerta de
-    planta por causa común en los eBOE (comun_eboe y COMENTARIO_COMUN)."""
-    episodios = defaultdict(list)
+def _guardar(sesion: Session, evaluado: dict, variable: str, parametros: dict, turnos: dict, estado: str,
+             creado_por: str, resumen: dict) -> None:
+    """Suma cada turno con violación al episodio en curso de su regla, o abre un episodio nuevo si la violación es
+    persistente (los turnos_para_alertar − 1 turnos anteriores del ámbito también la violan) o inmediata. Las
+    violaciones que todavía no son persistentes quedan pendientes: si el turno siguiente la confirma, el episodio
+    empieza en ellas. Una alerta de planta por causa común lleva comun_eboe y COMENTARIO_COMUN."""
+    ambito, subgrupos, violados = evaluado["ambito"], evaluado["subgrupos"], evaluado["violados"]
+    comun = evaluado.get("comun", False)
+    fin_episodio, para_alertar = parametros["turnos_fin_episodio"], parametros["turnos_para_alertar"]
+    tiempos = sorted(set(pd.to_datetime(evaluado["linea"]["fecha_hora"])))
+    episodios, pendientes = defaultdict(list), defaultdict(list)
     for alerta in sesion.scalars(select(Alerta).where(Alerta.variable == variable, Alerta.ambito == ambito)):
         episodios[(alerta.origen, alerta.regla)].append(alerta)
-    violaciones = sorted(violaciones, key=lambda v: subgrupos.loc[v["indice"], "fecha_hora"])
+    violaciones = sorted(evaluado["violaciones"], key=lambda v: subgrupos.loc[v["indice"], "fecha_hora"])
     for violacion in violaciones:
+        clave = (violacion["origen"], violacion["regla"])
         turno = subgrupos.loc[violacion["indice"]]
-        momento = pd.Timestamp(turno["fecha_hora"]).to_pydatetime()
-        propios = episodios[(violacion["origen"], violacion["regla"])]
+        instante = pd.Timestamp(turno["fecha_hora"])
+        momento = instante.to_pydatetime()
+        propios = episodios[clave]
         alerta = next((a for a in propios if a.fecha_hora <= momento <= (a.fin or a.fecha_hora)), None)
+        nuevos_turnos = [turno]
         if alerta is None:                                   # no es un turno ya contado: ¿sigue el episodio en curso?
             en_curso = [a for a in propios if a.estado != CERRADA and a.episodio_abierto is not False
                         and (a.fin or a.fecha_hora) < momento]
@@ -288,23 +328,38 @@ def _guardar(sesion: Session, ambito: str, equipo_id: int | None, planta_id: int
             else:
                 if actual is not None:
                     actual.episodio_abierto = False
+                previos = [t for t in tiempos if t < instante][-(para_alertar - 1):] if para_alertar > 1 else []
+                persistente = len(previos) == para_alertar - 1 and all(t in violados[clave] for t in previos)
+                inmediata = not persistente and violacion.get("inmediata", False)
+                if not (persistente or inmediata):
+                    pendientes[clave].append((violacion, turno))
+                    continue
+                corrida = [(v, t) for v, t in pendientes[clave] if pd.Timestamp(t["fecha_hora"]) in previos]
+                pendientes[clave] = []
+                primera, primer_turno = corrida[0] if corrida else (violacion, turno)
                 alerta = Alerta(origen=violacion["origen"], regla=violacion["regla"], variable=variable,
-                                ambito=ambito, equipo_id=equipo_id, planta_id=planta_id,
-                                fecha_produccion=pd.Timestamp(turno["fecha_produccion"]).date(),
-                                turno_id=turnos[turno["turno"]], fecha_hora=momento, fin=momento, turnos_afectados=1,
-                                episodio_abierto=True, valor=float(violacion["valor"]), limite=violacion["limite"],
-                                limites_id=violacion.get("limites_id"), rango_id=violacion.get("rango_id"),
-                                estado=estado, creada_por=creado_por, comun_eboe=comun,
+                                ambito=ambito, equipo_id=evaluado["equipo_id"], planta_id=evaluado["planta_id"],
+                                fecha_produccion=pd.Timestamp(primer_turno["fecha_produccion"]).date(),
+                                turno_id=turnos[primer_turno["turno"]],
+                                fecha_hora=pd.Timestamp(primer_turno["fecha_hora"]).to_pydatetime(), fin=momento,
+                                turnos_afectados=len(corrida) + 1, episodio_abierto=True,
+                                valor=float(primera["valor"]), limite=primera["limite"],
+                                limites_id=primera.get("limites_id"), rango_id=primera.get("rango_id"),
+                                estado=estado, creada_por=creado_por, comun_eboe=comun, inmediata=bool(inmediata),
                                 comentario=COMENTARIO_COMUN if comun else None)
                 sesion.add(alerta)
                 propios.append(alerta)
+                nuevos_turnos = [t for _, t in corrida] + [turno]
                 resumen["creadas"] += 1
+                resumen["inmediatas"] += bool(inmediata)
                 resumen["por_regla"][violacion["regla"]] += 1
-            resumen["turnos"] += 1
+            resumen["turnos"] += len(nuevos_turnos)
         ya = {(d.tabla, d.dato_id) for d in alerta.datos}
-        for tabla, dato_id in turno["datos"]:
-            if (tabla, dato_id) not in ya:
-                alerta.datos.append(AlertaDato(tabla=tabla, dato_id=dato_id))
+        for un_turno in nuevos_turnos:
+            for tabla, dato_id in un_turno["datos"]:
+                if (tabla, dato_id) not in ya:
+                    alerta.datos.append(AlertaDato(tabla=tabla, dato_id=dato_id))
+                    ya.add((tabla, dato_id))
     for propios in episodios.values():                       # fin de episodio: N turnos sin violar la regla
         for alerta in propios:
             if alerta.episodio_abierto is not False and \

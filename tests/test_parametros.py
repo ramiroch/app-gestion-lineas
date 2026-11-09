@@ -28,7 +28,8 @@ def crear_planta(sesion, **parametros) -> int:
 
 COMPLETOS = {"blanco_ml": 0.2, "factor_aceite_fruta": 68.8416, "factor_aceite_emulsion": 3.45,
              "hora_inicio_dia": time(5, 0), "blanco_centrifugas_ml": 0.1,
-             "umbral_paralelo_lh": 17000.0, "turnos_fin_episodio": 3}
+             "umbral_paralelo_lh": 17000.0, "turnos_fin_episodio": 3, "turnos_para_alertar": 2,
+             "sigma_alerta_inmediata": 4.0}
 
 
 def test_devuelve_los_parametros(sesion):
@@ -56,7 +57,8 @@ def test_faltan_todos(sesion):
 
     assert ("no tiene definidos el blanco (mL), el factor de aceite en fruta, el factor de "
             "aceite en emulsión, la hora de inicio del día de producción, el blanco de centrífugas (mL), el umbral "
-            "de primarias en paralelo (L/h) y los turnos sin alerta que cierran un episodio. Completalos"
+            "de primarias en paralelo (L/h), los turnos sin alerta que cierran un episodio, los turnos seguidos que "
+            "crean una alerta y los σ de alerta inmediata. Completalos"
             ) in str(error.value)
 
 

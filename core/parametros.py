@@ -16,6 +16,8 @@ DESCRIPCION_PARAMETROS = {
     "blanco_centrifugas_ml": "el blanco de centrífugas (mL)",
     "umbral_paralelo_lh": "el umbral de primarias en paralelo (L/h)",
     "turnos_fin_episodio": "los turnos sin alerta que cierran un episodio",
+    "turnos_para_alertar": "los turnos seguidos que crean una alerta",
+    "sigma_alerta_inmediata": "los σ de alerta inmediata",
 }
 
 
@@ -61,7 +63,8 @@ def validar_parametros(planta: Planta, requeridos: list[str] | None = None) -> d
         if valores.get(blanco, 0) < 0:
             raise ParametrosIncompletos(f'La planta "{planta.nombre}" tiene {DESCRIPCION_PARAMETROS[blanco]} '
                                         f"negativo ({valores[blanco]} mL).")
-    for factor in ("factor_aceite_fruta", "factor_aceite_emulsion", "umbral_paralelo_lh", "turnos_fin_episodio"):
+    for factor in ("factor_aceite_fruta", "factor_aceite_emulsion", "umbral_paralelo_lh", "turnos_fin_episodio",
+                   "turnos_para_alertar", "sigma_alerta_inmediata"):
         if factor in valores and valores[factor] <= 0:
             raise ParametrosIncompletos(f'La planta "{planta.nombre}" tiene '
                                         f"{DESCRIPCION_PARAMETROS[factor]} en {valores[factor]}: "

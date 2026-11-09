@@ -25,7 +25,8 @@ def sesion():
     crear_tablas(motor)
     with crear_sesion(motor) as sesion:
         planta = Planta(nombre="Norte", pais="Argentina", cliente=Cliente(nombre="X", pais="Argentina"),
-                        hora_inicio_dia=time(5, 0), turnos_fin_episodio=3)
+                        hora_inicio_dia=time(5, 0), turnos_fin_episodio=3,
+                        turnos_para_alertar=1, sigma_alerta_inmediata=4)
         planta.turnos = [Turno(nombre="M", hora_inicio=time(5), hora_fin=time(12, 59)),
                          Turno(nombre="T", hora_inicio=time(13), hora_fin=time(20, 59)),
                          Turno(nombre="N", hora_inicio=time(21), hora_fin=time(4, 59))]
@@ -52,7 +53,7 @@ def _eboe(sesion, numero):
     return sesion.scalars(select(Equipo).where(Equipo.numero == numero, Equipo.tipo == "BOE")).one()
 
 
-def _limites(sesion, equipo_id=None, planta_id=None, reglas="1,2,3,5,S", variable="eficiencia", lc=LC, sigma=SIGMA,
+def _limites(sesion, equipo_id=None, planta_id=None, reglas="1,2,3,5,S,rango", variable="eficiencia", lc=LC, sigma=SIGMA,
              tipo="Xbar-S", sigma_dentro=None, marca=None):
     sesion.add(LimitesControl(variable=variable, equipo_id=equipo_id, planta_id=planta_id, fruta="naranja",
                               tipo_carta=tipo, n_subgrupo=4, base_desde=date(2025, 6, 1), base_hasta=date(2025, 10, 31),
@@ -319,14 +320,15 @@ def test_lado_bueno_no_crea_alerta(sesion):
 
 def test_ph_de_planta(sesion):
     planta = _planta(sesion)
-    _limites(sesion, planta_id=planta.id, variable="ph", lc=5.6, sigma=0.3, reglas="1")
+    # pH: solo alerta el rango; las reglas de Nelson y la S quedan como marca
+    _limites(sesion, planta_id=planta.id, variable="ph", lc=5.6, sigma=0.3, reglas="rango", marca="1,2,3,5,S")
     datos = turnos([[5.5, 5.7, 5.6], [7.2, 7.4, 7.3]], equipo_id=None, planta_id=planta.id, inicio=NUEVOS)
     resumen = evaluar_nuevos(sesion, planta, "ph", datos)
     alertas = {a.regla: a for a in sesion.scalars(select(Alerta))}
-    assert set(alertas) == {"1", "rango"} and resumen["sin_limites"] == []
-    assert (alertas["1"].planta_id, alertas["1"].equipo_id, alertas["1"].ambito) == (planta.id, None,
-                                                                                     f"planta:{planta.id}")
-    assert not alertas["1"].comun_eboe
+    assert set(alertas) == {"rango"} and resumen["sin_limites"] == []                # 7,3 > 7; regla 1 solo marca
+    assert (alertas["rango"].planta_id, alertas["rango"].equipo_id, alertas["rango"].ambito) == (
+        planta.id, None, f"planta:{planta.id}")
+    assert not alertas["rango"].comun_eboe
 
 
 def test_rango_sin_alerta_no_se_usa(sesion):
@@ -342,3 +344,57 @@ def test_estado_y_origen_validos():
         Alerta(estado="resuelta")
     with pytest.raises(ValueError, match="no válido"):
         Alerta(origen="manual")
+
+
+# ---------------------------------------------------------------- persistencia y alerta inmediata
+
+def _persistencia(sesion, turnos_para_alertar=2):
+    planta = _planta(sesion)
+    planta.turnos_para_alertar = turnos_para_alertar
+    sesion.commit()
+
+
+def test_un_turno_solo_no_crea_alerta(sesion):
+    _persistencia(sesion)
+    assert _evaluar(sesion, [[78], [85], [77]])["creadas"] == 0                  # violaciones sueltas: pendientes
+
+
+def test_dos_turnos_seguidos_crean_el_episodio_desde_el_primero(sesion):
+    _persistencia(sesion)
+    resumen = _evaluar(sesion, [[85], [78], [77], [79]])
+    (episodio,) = _rango(sesion)
+    assert (resumen["creadas"], resumen["inmediatas"], episodio.inmediata) == (1, 0, False)
+    assert episodio.fecha_hora == NUEVOS + timedelta(hours=8) and episodio.turno.nombre == "T"   # el 1° de la corrida
+    assert episodio.turnos_afectados == 3 and episodio.valor == 78
+    assert sorted(d.dato_id for d in episodio.datos) == [2, 3, 4]
+
+
+def test_persistencia_entre_evaluaciones(sesion):
+    _persistencia(sesion)
+    equipo = _eboe(sesion, 1)
+    primero = turnos([[78]], equipo_id=equipo.id, inicio=NUEVOS)
+    assert evaluar_nuevos(sesion, _planta(sesion), "eficiencia", primero)["creadas"] == 0
+    segundo = turnos([[77]], equipo_id=equipo.id, inicio=NUEVOS + timedelta(hours=8), primer_id=10)
+    assert evaluar_nuevos(sesion, _planta(sesion), "eficiencia", segundo, previos=primero)["creadas"] == 1
+    (episodio,) = _rango(sesion)
+    assert episodio.fecha_hora == NUEVOS and sorted(d.dato_id for d in episodio.datos) == [1, 10]
+
+
+def test_regla_1_mas_alla_de_4_sigma_es_inmediata(sesion):
+    _persistencia(sesion)
+    _limites(sesion, _eboe(sesion, 1).id, tipo="I-MR-S")                       # LC 85, σ entre 2: 4σ → 77
+    assert _evaluar(sesion, [[78]])["creadas"] == 0                             # regla 1 (< 79) pero no 4σ
+    resumen = _evaluar(sesion, [[76]], inicio=NUEVOS + timedelta(days=2), primer_id=10)
+    (alerta,) = sesion.scalars(select(Alerta)).all()                            # el rango (< 80) espera
+    assert (alerta.regla, alerta.inmediata, alerta.turnos_afectados) == ("1", True, 1)
+    assert resumen["inmediatas"] == 1
+
+
+def test_persistencia_cuenta_el_turno_comun(sesion):
+    _persistencia(sesion)
+    # turno 1: común a los 3 eBOE; turno 2: solo el BOE 1 → el BOE 1 ya lleva 2 turnos seguidos
+    datos = _varios_eboe(sesion, {1: [[77], [76]], 2: [[78], [85]], 3: [[77], [86]]})
+    evaluar_nuevos(sesion, _planta(sesion), "eficiencia", datos)
+    alertas = sesion.scalars(select(Alerta)).all()
+    (propia,) = alertas                                                         # la común sola no persiste
+    assert (propia.equipo_id, propia.turno.nombre, propia.turnos_afectados) == (_eboe(sesion, 1).id, "T", 1)
