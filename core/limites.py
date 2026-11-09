@@ -4,10 +4,11 @@
   muestra sale cada punto), en orden de tiempo, con su ámbito: un equipo, o la planta en las variables de planta
   (el pH de la emulsión: una sola serie con los 3 eBOE).
 - subgrupos_por_turno(): un subgrupo por ámbito y turno de producción (n, media, desvío), para la carta X̄-S.
-- calcular_limites_fase1(): límites X̄-S (por turno, como se evalúan las alertas) o I-MR (por muestra, para
-  analizar) con los datos del período base. Solo se excluyen los datos que elige el usuario (cada uno con su motivo)
-  y los inválidos de las centrífugas, con el motivo "dato inválido: …". "Copiada de la otra primaria" invalida
-  solo las variables que salen de g y mL (aceite %, pérdidas), no la CP, el caudal ni el tiempo de descarga.
+- calcular_limites_fase1(): límites "entre/dentro" (I-MR-S, por turno, como se evalúan las alertas), X̄-S o I-MR
+  (por muestra, para analizar) con los datos del período base. Solo se excluyen los datos que elige el usuario
+  (cada uno con su motivo) y los inválidos de las centrífugas, con el motivo "dato inválido: …". Los motivos de
+  dato inválido (copiada, fuera de rango físico, valor pegado, normalidad dudosa) afectan solo las variables que
+  salen de g y mL (aceite %, pérdidas); nunca la CP, el caudal ni el tiempo de descarga.
 - congelar_limites(): guarda el registro vigente (el anterior queda como historial) y sus exclusiones.
 - congelar_temporada(): congela una temporada completa para varias variables y todos sus ámbitos.
 Fase II: core/alertas.py evalúa los datos nuevos contra los límites vigentes.
@@ -20,11 +21,11 @@ from sqlalchemy.orm import Session
 from core.formato import numero
 from core.importar_centrifugas import REVISAR_COPIADA, REVISAR_FISICO, REVISAR_NORMALIDAD, REVISAR_PEGADO
 from core.models import REGLAS_POR_DEFECTO, REGLAS_XBAR_S, Equipo, Linea, LimitesControl, LimitesExclusion
-from core.spc import limites_imr, limites_xbar_s, limites_xbar_s_para
+from core.spc import limites_entre_dentro, limites_imr, limites_xbar_s, limites_xbar_s_para
 
 TABLA_ANALISIS, TABLA_CENTRIFUGA = "analisis_scott", "muestra_centrifuga"
 TIPO_EBOE, TIPO_PLANTA = "BOE", "planta"
-IMR, XBAR_S = "I-MR", "Xbar-S"
+IMR, XBAR_S, ENTRE_DENTRO = "I-MR", "Xbar-S", "I-MR-S"
 INVALIDOS = (REVISAR_COPIADA, REVISAR_FISICO, REVISAR_PEGADO, REVISAR_NORMALIDAD)
 PREFIJO_INVALIDO = "dato inválido: "
 SIN_LIMITE_INFERIOR = "sin límite inferior"
@@ -76,12 +77,13 @@ def texto_lci(lci: float | None, decimales: int = 2, unidad: str = "") -> str:
 def motivo_invalido(revisar, titulacion: bool = True) -> str | None:
     """"dato inválido: <motivo>" si el campo revisar de una muestra tiene un motivo que la invalida; si no, None.
 
-    titulacion=False (CP, caudal, tiempo de descarga): la copia de g y mL de la otra primaria no los invalida.
+    titulacion=False (CP, caudal, tiempo de descarga): ninguno de estos motivos los afecta (todos salen de la
+    titulación o del balance con g y mL).
     """
-    if not isinstance(revisar, str) or not revisar:          # vacío (None o NaN de pandas)
+    if not titulacion or not isinstance(revisar, str) or not revisar:          # vacío (None o NaN de pandas)
         return None
     motivos = revisar.split("; ")
-    invalidos = [m for m in INVALIDOS if m in motivos and (titulacion or m != REVISAR_COPIADA)]
+    invalidos = [m for m in INVALIDOS if m in motivos]
     return PREFIJO_INVALIDO + "; ".join(invalidos) if invalidos else None
 
 
@@ -124,7 +126,7 @@ def series_centrifugas(muestras: pd.DataFrame, equipos: dict[str, int], planta_i
     """Series de las centrífugas: cp_pesada (bar) y aceite_descarga (%), una fila por muestra.
 
     muestras: core.analisis_centrifugas.tabla_muestras; equipos: {código: equipo_id}. invalido: "dato inválido:
-    …" (motivo_invalido; la copia solo invalida el aceite de la descarga, no la CP).
+    …" (motivo_invalido: solo en el aceite de la descarga; la CP no se invalida).
     """
     from core.operacion import especie
     fuentes = {"cp_pesada": muestras.assign(valor=muestras["cp_pesada_bar"]),
@@ -189,16 +191,17 @@ def subgrupos_por_turno(serie: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------- fase I
 
 def calcular_limites_fase1(serie: pd.DataFrame, desde=None, hasta=None, excluir: dict | None = None,
-                           tipo_carta: str = XBAR_S) -> dict:
+                           tipo_carta: str = ENTRE_DENTRO) -> dict:
     """Límites de un ámbito con los datos del período base (días de producción desde/hasta, incluidos).
 
-    tipo_carta "Xbar-S": un subgrupo por turno (subgrupos_por_turno); x̿ = Σ nᵢ·x̄ᵢ / Σ nᵢ y σ por el método S
-    barra (core.spc.limites_xbar_s, sirve con n distintos). lcs, lci y los de S se dan para el n típico (mediana).
+    tipo_carta "I-MR-S" (entre/dentro, el de las alertas): un subgrupo por turno; la carta de los promedios usa la
+    variación ENTRE turnos (MR̄ de los promedios / d2) y la S la de DENTRO (S barra), core.spc.limites_entre_dentro.
+    tipo_carta "Xbar-S": x̿ = Σ nᵢ·x̄ᵢ / Σ nᵢ y σ dentro (S barra) para todo; lcs, lci y los de S para el n típico.
     tipo_carta "I-MR": un punto por muestra (core.spc.limites_imr).
     excluir: {dato_id: motivo} elegidos por el usuario; cada uno necesita un motivo. Además quedan afuera los datos
     inválidos (columna invalido), con ese motivo. Nunca se excluye un dato por ser extremo.
-    Devuelve base_desde, base_hasta, n (datos usados), n_subgrupos, n_subgrupo, lc, lcs, lci, sigma, mr_lc, mr_lcs
-    (carta de dispersión: MR o S) y excluidos ({tabla, dato_id, fecha_hora, valor, motivo}).
+    Devuelve base_desde, base_hasta, n (datos usados), n_subgrupos, n_subgrupo (mediana), lc, lcs, lci, sigma,
+    sigma_dentro, mr_lc, mr_lcs y excluidos ({tabla, dato_id, fecha_hora, valor, motivo}).
     """
     if serie["ambito"].nunique() > 1:
         raise ValueError("Los límites son de un solo equipo (o de la planta): filtrá la serie antes.")
@@ -220,7 +223,11 @@ def calcular_limites_fase1(serie: pd.DataFrame, desde=None, hasta=None, excluir:
     if tipo_carta == IMR:
         limites = limites_imr(usados["valor"])
         resultado = {k: limites[k] for k in ("lc", "lcs", "lci", "sigma", "mr_lc", "mr_lcs")} | {
-            "n_subgrupos": len(usados), "n_subgrupo": 1}
+            "n_subgrupos": len(usados), "n_subgrupo": 1, "sigma_dentro": None}
+    elif tipo_carta == ENTRE_DENTRO:
+        subgrupos = subgrupos_por_turno(usados.assign(invalido=None))
+        limites = limites_entre_dentro(subgrupos["media"], subgrupos["desvio"].astype(float), subgrupos["n"])
+        resultado = limites | {"n_subgrupos": len(subgrupos), "n_subgrupo": int(subgrupos["n"].median())}
     elif tipo_carta == XBAR_S:
         subgrupos = subgrupos_por_turno(usados.assign(invalido=None))
         parametros = limites_xbar_s(subgrupos["media"], subgrupos["desvio"].astype(float), subgrupos["n"])
@@ -228,9 +235,9 @@ def calcular_limites_fase1(serie: pd.DataFrame, desde=None, hasta=None, excluir:
         para_n = limites_xbar_s_para(parametros["lc"], parametros["sigma"], tipico)
         resultado = {"lc": parametros["lc"], "sigma": parametros["sigma"], "lcs": para_n["lcs"], "lci": para_n["lci"],
                      "mr_lc": para_n["s_lc"], "mr_lcs": para_n["s_lcs"], "n_subgrupos": len(subgrupos),
-                     "n_subgrupo": tipico}
+                     "n_subgrupo": tipico, "sigma_dentro": parametros["sigma"]}
     else:
-        raise ValueError(f'Tipo de carta "{tipo_carta}" no válido: "{XBAR_S}" o "{IMR}".')
+        raise ValueError(f'Tipo de carta "{tipo_carta}" no válido: "{ENTRE_DENTRO}", "{XBAR_S}" o "{IMR}".')
     return {"base_desde": base["fecha_produccion"].min().date(), "base_hasta": base["fecha_produccion"].max().date(),
             "n": len(usados), "tipo_carta": tipo_carta, **resultado,
             "excluidos": [{"tabla": f["tabla"], "dato_id": int(f["dato_id"]), "fecha_hora": f["fecha_hora"],
@@ -243,8 +250,8 @@ def congelar_limites(sesion: Session, variable: str, calculo: dict, congelado_po
     """Guarda los límites de calcular_limites_fase1() como el registro vigente de variable + ámbito + fruta.
 
     Ámbito: equipo_id, o planta_id en las variables de planta. El vigente anterior (si hay) pasa a vigente = False
-    y queda como historial. Las exclusiones se guardan con su motivo. reglas: por defecto "1,2,3,5,S" en X̄-S y
-    "1,2,3,5,MR" en I-MR.
+    y queda como historial. Las exclusiones se guardan con su motivo. reglas: por defecto "1,2,3,5,S" por turno
+    (entre/dentro y X̄-S) y "1,2,3,5,MR" en I-MR.
     """
     if variable not in VARIABLES_CONTROL:
         raise ValueError(f'Variable "{variable}" no válida. Usá una de: {", ".join(VARIABLES_CONTROL)}.')
@@ -258,8 +265,8 @@ def congelar_limites(sesion: Session, variable: str, calculo: dict, congelado_po
         variable=variable, equipo_id=equipo_id, planta_id=planta_id, fruta=fruta, tipo_carta=tipo,
         n_subgrupo=calculo["n_subgrupo"], base_desde=calculo["base_desde"], base_hasta=calculo["base_hasta"],
         n=calculo["n"], lc=calculo["lc"], lcs=calculo["lcs"], lci=calculo["lci"], sigma=calculo["sigma"],
-        mr_lc=calculo["mr_lc"], mr_lcs=calculo["mr_lcs"],
-        reglas=reglas or (REGLAS_XBAR_S if tipo == XBAR_S else REGLAS_POR_DEFECTO), vigente=True,
+        sigma_dentro=calculo.get("sigma_dentro"), mr_lc=calculo["mr_lc"], mr_lcs=calculo["mr_lcs"],
+        reglas=reglas or (REGLAS_POR_DEFECTO if tipo == IMR else REGLAS_XBAR_S), vigente=True,
         congelado_por=congelado_por, comentario=comentario,
         exclusiones=[LimitesExclusion(**excluido) for excluido in calculo["excluidos"]])
     sesion.add(registro)
@@ -279,7 +286,7 @@ def limites_vigentes(sesion: Session, variable: str, fruta: str | None, equipo_i
 
 
 def congelar_temporada(sesion: Session, series: dict, temporada: int, variables, congelado_por: str,
-                       tipo_carta: str = XBAR_S, comentario: str | None = None) -> list[LimitesControl]:
+                       tipo_carta: str = ENTRE_DENTRO, comentario: str | None = None) -> list[LimitesControl]:
     """Congela los límites con una temporada completa (sin exclusiones del usuario) para cada variable, ámbito y
     fruta con datos en esa temporada. series: series_de_planta()."""
     registros = []

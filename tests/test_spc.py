@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from core.spc import (DESCRIPCION_REGLAS, c4, carta_imr, carta_xbar_r, carta_xbar_s, constantes, d2, evaluar_carta,
-                      limites_imr, limites_xbar_s, limites_xbar_s_para, nelson, resumen_reglas, sigma_s_barra, tabla_constantes)
+                      limites_entre_dentro, limites_imr, limites_xbar_s, limites_xbar_s_para, nelson, resumen_reglas, sigma_s_barra, tabla_constantes)
 
 # Montgomery, "Introduction to Statistical Quality Control", tabla 6.3: diámetro interno de anillos de
 # pistón (mm), 25 subgrupos de 5. Resultados del libro: x̿ = 74,001, R̄ = 0,023, s̄ = 0,0094.
@@ -226,3 +226,18 @@ def test_limites_xbar_s_para_un_tamano():
     assert limites_xbar_s_para(85, 2, 9)["s_lci"] > 0                        # con n ≥ 6 la S tiene LCI
     with pytest.raises(ValueError, match="al menos 1"):
         limites_xbar_s_para(85, 2, 0)
+
+
+def test_limites_entre_dentro_a_mano():
+    """A mano. Promedios de 4 turnos: 10, 12, 11, 13 → MR = 2, 1, 2; MR̄ = 5/3 = 1,6667; σ_entre = 1,6667 / d2(2),
+    con d2(2) = 2/√π = 1,12838 (no el 1,128 redondeado de las tablas): 1,4770; x̄̄ = 11,5; LCS = 11,5 + 3·1,4770 =
+    15,931; LCI = 7,069; LCS del MR = 3,2665·1,6667 = 5,444.
+    σ_dentro (S barra) con s = 1 y 2 (n = 3), s = 1,5 (n = 2) y un turno de 1 dato que no entra:
+    c4(3) = 0,8862, h = 0,7854/0,2146 = 3,660; c4(2) = 0,7979, h = 0,6366/0,3634 = 1,752;
+    σ = (3,660·(1 + 2)/0,8862 + 1,752·1,5/0,7979) / (2·3,660 + 1,752) = (12,389 + 3,293) / 9,072 = 1,7287."""
+    lim = limites_entre_dentro([10, 12, 11, 13], [1.0, 2.0, None, 1.5], [3, 3, 1, 2])
+    assert lim["lc"] == pytest.approx(11.5) and lim["sigma"] == pytest.approx(1.4770, abs=1e-4)
+    assert (lim["lcs"], lim["lci"]) == (pytest.approx(15.931, abs=1e-3), pytest.approx(7.069, abs=1e-3))
+    assert lim["mr_lcs"] == pytest.approx(5.444, abs=1e-3)
+    assert lim["sigma_dentro"] == pytest.approx(1.7287, abs=1e-3)
+    assert limites_entre_dentro([10, 12, 11], [None] * 3, [1, 1, 1])["sigma_dentro"] is None

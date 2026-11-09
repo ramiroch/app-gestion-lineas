@@ -166,6 +166,22 @@ def limites_xbar_s(medias, desvios, tamanos) -> dict:
     return {"lc": float(np.sum(n[usar] * medias[usar]) / np.sum(n[usar])), "sigma": sigma_s_barra(desvios, tamanos)}
 
 
+def limites_entre_dentro(medias, desvios, tamanos) -> dict:
+    """Carta I-MR-R/S "entre/dentro" de Minitab: para subgrupos (turnos) cuando la variación entre subgrupos es
+    mayor que la de adentro (fruta, programa, día).
+
+    Carta I de los promedios: LC = x̄̄ (media de los promedios); σ_entre = MR̄ / d2(2), con MR = |x̄ᵢ − x̄ᵢ₋₁|
+    entre promedios seguidos; LCS/LCI = x̄̄ ± 3σ_entre (iguales para todo n). Carta MR de los promedios: LC = MR̄,
+    LCS = D4·MR̄. Carta S (variación dentro del subgrupo): σ_dentro = sigma_s_barra() (subgrupos de 2+ datos) y,
+    para un subgrupo de tamaño n, LCS = (c4 + 3√(1 − c4²))·σ_dentro (ver limites_xbar_s_para).
+    Devuelve lc, sigma (σ_entre), lcs, lci, mr_lc, mr_lcs y sigma_dentro (None si ningún subgrupo tiene 2 datos).
+    """
+    limites = limites_imr(medias)
+    n = np.asarray(tamanos, dtype=int)
+    sigma_dentro = sigma_s_barra(desvios, tamanos) if (n >= 2).any() else None
+    return {k: limites[k] for k in ("lc", "sigma", "lcs", "lci", "mr_lc", "mr_lcs")} | {"sigma_dentro": sigma_dentro}
+
+
 def limites_xbar_s_para(lc: float, sigma: float, n: int) -> dict:
     """Límites X̄-S de un subgrupo de tamaño n, con x̿ = lc y σ del proceso congelados en la fase I.
 

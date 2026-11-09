@@ -8,11 +8,11 @@ from sqlalchemy import select
 
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
-from core.limites import (COLUMNAS_SERIE, IMR, PREFIJO_INVALIDO, SIN_LIMITE_INFERIOR, XBAR_S, ambito_de,
+from core.limites import (COLUMNAS_SERIE, ENTRE_DENTRO, IMR, PREFIJO_INVALIDO, SIN_LIMITE_INFERIOR, XBAR_S, ambito_de,
                           calcular_limites_fase1, congelar_limites, congelar_temporada, limites_vigentes,
                           motivo_invalido, series_boe, series_centrifugas, subgrupos_por_turno, texto_lci)
 from core.models import Cliente, Equipo, Linea, LimitesControl, LimitesExclusion, Planta
-from core.spc import limites_imr, limites_xbar_s, limites_xbar_s_para
+from core.spc import limites_entre_dentro, limites_imr, limites_xbar_s, limites_xbar_s_para
 
 
 def serie(valores, equipo_id=1, inicio=datetime(2025, 7, 1, 6), invalidos=None, tipo="BOE", fruta="naranja",
@@ -55,14 +55,14 @@ def sesion():
         yield sesion
 
 
-def test_motivo_invalido_y_copiada_solo_en_titulaciones():
+def test_motivo_invalido_solo_en_titulaciones():
     assert motivo_invalido(None) is None and motivo_invalido(float("nan")) is None
     assert motivo_invalido("fecha corregida por el Día") is None
     assert motivo_invalido("fecha corregida por el Día; copiada de la otra primaria") == (
         PREFIJO_INVALIDO + "copiada de la otra primaria")
     assert motivo_invalido("copiada de la otra primaria", titulacion=False) is None          # la CP no se copia
-    assert motivo_invalido("copiada de la otra primaria; fuera de rango físico", titulacion=False) == (
-        PREFIJO_INVALIDO + "fuera de rango físico")
+    assert motivo_invalido("copiada de la otra primaria; fuera de rango físico; valor pegado, sin datos crudos",
+                           titulacion=False) is None                 # ningún motivo de g y mL afecta la CP
 
 
 def test_ambito_y_lci_para_mostrar():
@@ -82,9 +82,20 @@ def test_subgrupos_por_turno():
     assert sub["turno"].tolist() == ["M", "T"] and sub["fecha_hora"].iloc[1] == pd.Timestamp("2025-07-01 14:00")
 
 
+def test_fase1_entre_dentro_igual_que_spc():
+    datos = turnos([[85, 87, 84, 86], [88, 83], [85, 86, 84], [86], [90, 89]])
+    calculo = calcular_limites_fase1(datos)                                  # por defecto: entre/dentro
+    sub = subgrupos_por_turno(datos)
+    esperado = limites_entre_dentro(sub["media"], sub["desvio"].astype(float), sub["n"])
+    assert calculo["tipo_carta"] == ENTRE_DENTRO and calculo["n_subgrupos"] == 5
+    for clave in ("lc", "sigma", "lcs", "lci", "mr_lc", "mr_lcs", "sigma_dentro"):
+        assert calculo[clave] == pytest.approx(esperado[clave]), clave
+    assert calculo["lc"] == pytest.approx(sub["media"].mean())               # media de los promedios
+
+
 def test_fase1_xbar_s_igual_que_spc():
     datos = turnos([[85, 87, 84, 86], [88, 83], [85, 86, 84], [86]])
-    calculo = calcular_limites_fase1(datos)
+    calculo = calcular_limites_fase1(datos, tipo_carta=XBAR_S)
     sub = subgrupos_por_turno(datos)
     esperado = limites_xbar_s(sub["media"], sub["desvio"].astype(float), sub["n"])
     assert calculo["tipo_carta"] == XBAR_S and calculo["n"] == 10 and calculo["n_subgrupos"] == 4
@@ -127,7 +138,8 @@ def test_congelar_con_historial_exclusiones_y_ambito(sesion):
     datos = turnos([[85, 87], [84, 120], [86, 85]], equipo_id=equipo.id)
     primero = congelar_limites(sesion, "eficiencia", calcular_limites_fase1(datos, excluir={4: "error de carga"}),
                                "prueba", "naranja", equipo_id=equipo.id)
-    assert primero.vigente and primero.reglas == "1,2,3,5,S" and primero.tipo_carta == XBAR_S
+    assert primero.vigente and primero.reglas == "1,2,3,5,S" and primero.tipo_carta == ENTRE_DENTRO
+    assert primero.sigma_dentro is not None
     assert [e.motivo for e in primero.exclusiones] == ["error de carga"]
     segundo = congelar_limites(sesion, "eficiencia", calcular_limites_fase1(datos), "prueba", "naranja",
                                equipo_id=equipo.id, reglas="1", comentario="nuevo período base")
