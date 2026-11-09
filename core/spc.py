@@ -166,6 +166,23 @@ def limites_xbar_s(medias, desvios, tamanos) -> dict:
     return {"lc": float(np.sum(n[usar] * medias[usar]) / np.sum(n[usar])), "sigma": sigma_s_barra(desvios, tamanos)}
 
 
+def limites_xbar_s_para(lc: float, sigma: float, n: int) -> dict:
+    """Límites X̄-S de un subgrupo de tamaño n, con x̿ = lc y σ del proceso congelados en la fase I.
+
+    X̄: LCS/LCI = x̿ ± 3σ/√n (sigma_media = σ/√n). S (solo con n ≥ 2): LC = c4·σ, LCS = (c4 + 3√(1 − c4²))·σ,
+    LCI = máx(0, c4 − 3√(1 − c4²))·σ; con n = 1 los de S quedan None (un dato no tiene desvío).
+    """
+    if n < 1:
+        raise ValueError(f"El subgrupo tiene que tener al menos 1 dato (tiene {n}).")
+    sigma_media = sigma / np.sqrt(n)
+    resultado = {"lc": lc, "lcs": lc + 3 * sigma_media, "lci": lc - 3 * sigma_media, "sigma_media": sigma_media,
+                 "s_lc": None, "s_lcs": None, "s_lci": None}
+    if n >= 2:
+        c, ancho = c4(n), 3 * np.sqrt(1 - c4(n) ** 2)
+        resultado.update(s_lc=c * sigma, s_lcs=(c + ancho) * sigma, s_lci=max(0.0, c - ancho) * sigma)
+    return resultado
+
+
 # ---------------------------------------------------------------- cartas con fase I y fase II
 
 def carta_imr(valores, base=None) -> pd.DataFrame:

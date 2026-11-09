@@ -19,8 +19,9 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship,
 ESTADOS_EQUIPO = ("Operativo", "Pendiente de instalación", "Fuera de servicio")
 DESTINOS_FASE_PESADA = ("recircula al BOE", "canal (pérdida)", "no aplica")   # no aplica: pulidora
 LADOS_CAPACIDAD = ("ambos", "inferior", "superior")
-TIPOS_CARTA = ("I-MR",)
-REGLAS_POR_DEFECTO = "1,2,3,5,MR"          # reglas de Nelson + "MR" (rango móvil > LCS)
+TIPOS_CARTA = ("I-MR", "Xbar-S")
+REGLAS_POR_DEFECTO = "1,2,3,5,MR"          # I-MR: reglas de Nelson + "MR" (rango móvil > LCS)
+REGLAS_XBAR_S = "1,2,3,5,S"                # X̄-S: reglas de Nelson en X̄ + "S" (desvío del turno > LCS de S)
 ORIGENES_ALERTA = ("nelson", "rango")
 ESTADOS_ALERTA = ("abierta", "en análisis", "cerrada", "histórico")
 
@@ -515,18 +516,25 @@ class LimitesControl(Base):
     """Límites de una carta de control congelados en la fase I (período base), para evaluar los datos nuevos.
 
     variable: clave de core.limites.VARIABLES_CONTROL ("eficiencia", "cp_pesada"…); el punto de muestreo sale de
-    la variable. Un solo registro vigente por variable + equipo + fruta: al congelar otro, el anterior queda como
-    historial (vigente = False). Carta I: lc, lcs, lci y sigma; carta MR: mr_lc y mr_lcs (su LCI es 0).
-    reglas: reglas de Nelson ("1,2,3,5") y "MR" (rango móvil > LCS) que se evalúan con estos límites.
+    la variable. Ámbito: un equipo (equipo_id) o, en las variables de planta como el pH de la emulsión (promedio de
+    los 3 eBOE), la planta (planta_id); uno de los dos. Un solo registro vigente por variable + ámbito + fruta: al
+    congelar otro, el anterior queda como historial (vigente = False).
+    tipo_carta "I-MR" (un punto por muestra): lc, lcs, lci y sigma de la carta I; mr_lc y mr_lcs de la MR.
+    tipo_carta "Xbar-S" (un punto por turno, n variable): lc = x̿ y sigma = σ del proceso (método S barra); los
+    límites de cada turno dependen de su n (core.spc.limites_xbar_s_para). lcs, lci, mr_lc y mr_lcs se guardan para
+    el tamaño típico n_subgrupo (mediana): X̄ y carta S (mr_lc = LC de S, mr_lcs = LCS de S).
+    reglas: reglas de Nelson ("1,2,3,5") más "MR" (I-MR) o "S" (X̄-S) que se evalúan con estos límites.
     """
 
     __tablename__ = "limites_control"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     variable: Mapped[str] = mapped_column(String(30))
-    equipo_id: Mapped[int] = mapped_column(ForeignKey("equipo.id"))
+    equipo_id: Mapped[int | None] = mapped_column(ForeignKey("equipo.id"))
+    planta_id: Mapped[int | None] = mapped_column(ForeignKey("planta.id"))
     fruta: Mapped[str | None] = mapped_column(String(20))
     tipo_carta: Mapped[str] = mapped_column(String(10), default="I-MR")
+    n_subgrupo: Mapped[int | None]
     base_desde: Mapped[date] = mapped_column(Date)
     base_hasta: Mapped[date] = mapped_column(Date)
     n: Mapped[int]
@@ -534,15 +542,16 @@ class LimitesControl(Base):
     lcs: Mapped[float] = mapped_column(Float)
     lci: Mapped[float] = mapped_column(Float)
     sigma: Mapped[float] = mapped_column(Float)
-    mr_lc: Mapped[float] = mapped_column(Float)
-    mr_lcs: Mapped[float] = mapped_column(Float)
+    mr_lc: Mapped[float | None] = mapped_column(Float)        # vacíos en X̄-S si el turno típico tiene 1 muestra
+    mr_lcs: Mapped[float | None] = mapped_column(Float)
     reglas: Mapped[str] = mapped_column(String(40), default=REGLAS_POR_DEFECTO)
     vigente: Mapped[bool] = mapped_column(Boolean, default=True)
     congelado_en: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     congelado_por: Mapped[str] = mapped_column(String(100))
     comentario: Mapped[str | None] = mapped_column(Text)
 
-    equipo: Mapped["Equipo"] = relationship()
+    equipo: Mapped["Equipo | None"] = relationship()
+    planta: Mapped["Planta | None"] = relationship()
     exclusiones: Mapped[list["LimitesExclusion"]] = relationship(back_populates="limites")
 
     @validates("tipo_carta")
@@ -581,22 +590,26 @@ class Alerta(Base):
     """Alerta de control: una regla de Nelson (o "MR") contra los límites vigentes, o un dato fuera del rango de
     RangoReferencia con genera_alerta = sí ("rango").
 
-    Una sola alerta por origen + regla + variable + equipo + fecha de producción + turno: si en el mismo turno
-    vuelve a fallar, se le suman datos (AlertaDato). Excepción a la regla general: acá el turno y la fecha de
-    producción SE GUARDAN, porque la alerta es un evento y los necesita para no duplicarse.
-    fecha_hora, valor y limite: los del primer dato que la disparó. estado: uno de ESTADOS_ALERTA ("histórico" =
-    creada al evaluar datos importados, no se gestiona). comun_eboe: la misma regla y variable saltó en los 3
-    eBOE en el mismo turno (posible causa común).
+    Ámbito: un equipo (equipo_id) o la planta (planta_id, variables de planta como el pH); ambito = "equipo:5" o
+    "planta:8" (no vacío, para que la base impida duplicados). Una sola alerta por origen + regla + variable +
+    ámbito + fecha de producción + turno: si en el mismo turno vuelve a fallar, se le suman datos (AlertaDato).
+    Excepción a la regla general: acá el turno y la fecha de producción SE GUARDAN, porque la alerta es un evento y
+    los necesita para no duplicarse.
+    fecha_hora: la de la primera muestra del turno; valor: el promedio del turno (o su desvío, regla "S"); limite: el
+    que cruzó. estado: uno de ESTADOS_ALERTA ("histórico" = creada al evaluar datos importados, no se gestiona).
+    comun_eboe: la misma regla y variable saltó en los 3 eBOE en el mismo turno (posible causa común).
     """
 
     __tablename__ = "alerta"
-    __table_args__ = (UniqueConstraint("origen", "regla", "variable", "equipo_id", "fecha_produccion", "turno_id"),)
+    __table_args__ = (UniqueConstraint("origen", "regla", "variable", "ambito", "fecha_produccion", "turno_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     origen: Mapped[str] = mapped_column(String(10))
-    regla: Mapped[str] = mapped_column(String(10))          # "1"…"8", "MR" o "rango"
+    regla: Mapped[str] = mapped_column(String(10))          # "1"…"8", "MR", "S" o "rango"
     variable: Mapped[str] = mapped_column(String(30))
-    equipo_id: Mapped[int] = mapped_column(ForeignKey("equipo.id"))
+    ambito: Mapped[str] = mapped_column(String(20))         # "equipo:5" o "planta:8"
+    equipo_id: Mapped[int | None] = mapped_column(ForeignKey("equipo.id"))
+    planta_id: Mapped[int | None] = mapped_column(ForeignKey("planta.id"))
     fecha_produccion: Mapped[date] = mapped_column(Date)
     turno_id: Mapped[int] = mapped_column(ForeignKey("turno.id"))
     fecha_hora: Mapped[datetime] = mapped_column(DateTime)
@@ -614,7 +627,8 @@ class Alerta(Base):
     cerrada_por: Mapped[str | None] = mapped_column(String(100))
     cerrada_en: Mapped[datetime | None] = mapped_column(DateTime)
 
-    equipo: Mapped["Equipo"] = relationship()
+    equipo: Mapped["Equipo | None"] = relationship()
+    planta: Mapped["Planta | None"] = relationship()
     turno: Mapped["Turno"] = relationship()
     datos: Mapped[list["AlertaDato"]] = relationship(back_populates="alerta", cascade="all, delete-orphan")
 

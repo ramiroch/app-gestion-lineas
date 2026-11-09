@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from core.spc import (DESCRIPCION_REGLAS, c4, carta_imr, carta_xbar_r, carta_xbar_s, constantes, d2, evaluar_carta,
-                      limites_imr, limites_xbar_s, nelson, resumen_reglas, sigma_s_barra, tabla_constantes)
+                      limites_imr, limites_xbar_s, limites_xbar_s_para, nelson, resumen_reglas, sigma_s_barra, tabla_constantes)
 
 # Montgomery, "Introduction to Statistical Quality Control", tabla 6.3: diámetro interno de anillos de
 # pistón (mm), 25 subgrupos de 5. Resultados del libro: x̿ = 74,001, R̄ = 0,023, s̄ = 0,0094.
@@ -212,3 +212,17 @@ def test_evaluar_y_resumir():
 
     sin_fase_ii = resumen_reglas(evaluar_carta(carta_imr([0.0, 1.0, 0.0])), reglas=[1]).set_index("regla")
     assert pd.isna(sin_fase_ii.loc[1, "n_II"]) and pd.isna(sin_fase_ii.loc[1, "pct_II"])
+
+
+def test_limites_xbar_s_para_un_tamano():
+    """A mano: x̿ = 85, σ = 2, n = 4 → σ/√n = 1, X̄: 82–88; c4(4) = 0,9213, √(1 − c4²) = 0,3889:
+    S: LC = 1,8426, LCS = (0,9213 + 1,1666)·2 = 4,1758, LCI = 0 (c4 − 3√(1 − c4²) < 0)."""
+    lim = limites_xbar_s_para(85, 2, 4)
+    assert (lim["lci"], lim["lcs"], lim["sigma_media"]) == (pytest.approx(82), pytest.approx(88), pytest.approx(1))
+    assert lim["s_lc"] == pytest.approx(1.8426, abs=1e-3) and lim["s_lcs"] == pytest.approx(4.1758, abs=1e-3)
+    assert lim["s_lci"] == 0
+    uno = limites_xbar_s_para(85, 2, 1)
+    assert (uno["lcs"], uno["s_lcs"]) == (pytest.approx(91), None)          # un dato: X̄ sí, S no
+    assert limites_xbar_s_para(85, 2, 9)["s_lci"] > 0                        # con n ≥ 6 la S tiene LCI
+    with pytest.raises(ValueError, match="al menos 1"):
+        limites_xbar_s_para(85, 2, 0)

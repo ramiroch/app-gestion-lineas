@@ -16,6 +16,7 @@ from plotly.subplots import make_subplots
 from core.estadistica import ancho_de_clase, cuartiles, curva_normal, es_outlier_iqr, limites_iqr, resumen_descriptivo
 from core.formato import numero, texto_p
 from core.laboratorio import DIAS_MISMA_NORMALIDAD, texto_p_ad
+from core.limites import SIN_LIMITE_INFERIOR
 from core.programa import numero_programa
 from core.regresion import recta
 
@@ -472,14 +473,17 @@ def _etiquetas_limites(figura, tabla, prefijo: str, eje_y: str, central: str, de
     """Valor de LCS, LC y LCI a la derecha de la carta, como Minitab.
 
     Si los límites cambian con el tamaño del subgrupo (X̄-S), se muestran los del tamaño más frecuente
-    y se aclara el n.
+    y se aclara el n. Un LCI negativo se muestra como "sin límite inferior" (core.limites.texto_lci).
     """
     con_limites = tabla.dropna(subset=[f"{prefijo}lc"])
     n_frecuente = int(con_limites["n"].mode().iloc[0])
     fila = con_limites[con_limites["n"] == n_frecuente].iloc[-1]
     variables = con_limites[f"{prefijo}lcs"].round(9).nunique() > 1
     for columna, nombre in ((f"{prefijo}lcs", "LCS"), (f"{prefijo}lc", central), (f"{prefijo}lci", "LCI")):
-        texto = f"{nombre} = {numero(fila[columna], decimales)}" + (f" (n = {n_frecuente})" if variables else "")
+        if nombre == "LCI" and fila[columna] < 0:
+            texto = f"LCI: {SIN_LIMITE_INFERIOR}"
+        else:
+            texto = f"{nombre} = {numero(fila[columna], decimales)}" + (f" (n = {n_frecuente})" if variables else "")
         figura.add_annotation(x=1.005, xref="paper", xanchor="left", y=fila[columna], yref=eje_y, text=texto,
                               showarrow=False, font=dict(size=10, color=GRIS))
 
