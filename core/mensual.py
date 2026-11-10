@@ -5,11 +5,14 @@ es del día de producción 31/07 y cuenta en julio. Las medias de aceite y efici
 las toneladas del turno (core.estadistica.media_ponderada_por_turno); el MTPH es promedio simple; la
 eficiencia del proceso del mes se calcula como en la vista de proceso (core.proceso.resumen_proceso):
 Σ aceite envasado / Σ fruta procesada del mes, dividido por el aceite en fruta de entrada ponderado.
+- eficiencia_eboe_planta_por_mes(): la eficiencia eBOE de la planta (los eBOE filtrados juntos), ponderada.
+- cajas_por_mes(): cajas de un boxplot por mes y lugar (entrada, salida) con los cuartiles de Minitab y los límites
+  IQR (core.estadistica), por muestra (sin ponderar), y sus outliers.
 """
 
 import pandas as pd
 
-from core.estadistica import media_ponderada_por_turno
+from core.estadistica import cuartiles, es_outlier_iqr, limites_iqr, media_ponderada_por_turno
 from core.proceso import resumen_proceso
 
 MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
@@ -79,3 +82,41 @@ def eficiencia_proceso_por_mes(pares: pd.DataFrame, toneladas: pd.DataFrame, pro
                       "n": totales["n_turnos_rendimiento"], "n_pares": totales["n_pares"]})
     return pd.DataFrame(filas, columns=["mes", "etiqueta", "rendimiento", "aceite_entrada", "eficiencia_proceso",
                                         "n", "n_pares"])
+
+
+def eficiencia_eboe_planta_por_mes(pares: pd.DataFrame, toneladas: pd.DataFrame | None) -> pd.DataFrame:
+    """Eficiencia eBOE (%) de la planta por mes de producción: todos los pares de los eBOE filtrados juntos,
+    ponderada por las toneladas del turno (promedio simple si el mes no tiene producción, como por_mes_y_eboe()).
+    pares: con eficiencia_pct (core.analisis.pares_con_emulsion). Devuelve mes, etiqueta, valor, n y ponderada."""
+    datos = pares.assign(mes=mes_de(pares["fecha_produccion"]))
+    filas = []
+    for mes, sub in datos.groupby("mes", sort=True):
+        resultado = media_ponderada_por_turno(sub, "eficiencia_pct", toneladas)
+        filas.append({"mes": mes, "etiqueta": etiqueta_mes(mes), "valor": resultado["valor"], "n": resultado["n"],
+                      "ponderada": resultado["ponderada"]})
+    return pd.DataFrame(filas, columns=["mes", "etiqueta", "valor", "n", "ponderada"])
+
+
+def cajas_por_mes(datos: pd.DataFrame, variable: str = "aceite_fruta") -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Boxplot por mes de producción y lugar, por muestra (no ponderado).
+
+    datos: una fila por análisis con fecha_produccion, lugar y la variable (core.analisis.tabla_analisis ya
+    filtrada). Devuelve (cajas, outliers). cajas: mes, etiqueta, lugar, n, q1, mediana, q3 (cuartiles de Minitab),
+    media, bigote_inferior y bigote_superior (último valor dentro de los límites IQR). outliers: las filas de datos
+    fuera de los límites IQR de su mes y lugar, con mes y etiqueta. Se marcan, nunca se borran.
+    """
+    datos = datos.dropna(subset=[variable]).assign(mes=lambda d: mes_de(d["fecha_produccion"]))
+    filas = []
+    for (mes, lugar), valores in datos.groupby(["mes", "lugar"], sort=True)[variable]:
+        limites = limites_iqr(valores)
+        q1, mediana, q3 = cuartiles(valores)
+        filas.append({"mes": mes, "etiqueta": etiqueta_mes(mes), "lugar": lugar, "n": limites["n"], "q1": q1,
+                      "mediana": mediana, "q3": q3, "media": float(valores.mean()),
+                      "bigote_inferior": limites["bigote_inferior"], "bigote_superior": limites["bigote_superior"]})
+    cajas = pd.DataFrame(filas, columns=["mes", "etiqueta", "lugar", "n", "q1", "mediana", "q3", "media",
+                                         "bigote_inferior", "bigote_superior"])
+    if datos.empty:
+        return cajas, datos.assign(etiqueta=pd.Series(dtype=str))
+    fuera = datos.groupby(["mes", "lugar"])[variable].transform(es_outlier_iqr).astype(bool)
+    outliers = datos[fuera]
+    return cajas, outliers.assign(etiqueta=outliers["mes"].map(etiqueta_mes))

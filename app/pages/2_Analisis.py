@@ -28,7 +28,8 @@ from core.analisis import (ATAJO_PERSONALIZADO, FUENTES, atajos, con_fuente, fil
 from core.comparaciones import comparar_grupos, frase_resultado
 from core.estadistica import limites_iqr, media_ponderada_por_turno, resumen_descriptivo
 from core.formato import numero, texto_p
-from core.mensual import eficiencia_proceso_por_mes, eje_de_meses, por_mes_y_eboe
+from core.mensual import (cajas_por_mes, eficiencia_eboe_planta_por_mes, eficiencia_proceso_por_mes, eje_de_meses,
+                          por_mes_y_eboe)
 from core.parametros import ParametrosIncompletos
 from core.programa import (N_MINIMO, N_MINIMO_RANKING, combinaciones, de_combinaciones, frase_programa, frase_uso, numero_programa,
                            grilla, mejores_y_peores, rallado_por_programa, uso_de_programas)
@@ -41,7 +42,8 @@ from descargas import Descargas
 from pestana_factores import pestana_factores
 from filtros import (barra_filtros, casilla_repetidas, produccion_con_borradores, filtros_elegidos, planta_elegida, produccion_planta, rango_planta,
                      tabla_emulsion_planta, tabla_planta, toneladas_planta)
-from graficos import (barras_uso, boxplot, boxplot_temporadas, burbujas, columnas_mensuales, combinaciones_de_puntos,
+from graficos import (PALETA, barras_uso, boxplot, boxplot_mensual, boxplot_temporadas, burbujas, columnas_mensuales,
+                      columnas_mensuales_series, combinaciones_de_puntos,
                       contorno, dispersion_por_eboe, histograma,
                       histograma_grupos, intervalos, superficie)
 
@@ -143,6 +145,9 @@ def pestana_periodo(datos: pd.DataFrame, registro: Descargas) -> None:
     bloque_evolucion_mensual(datos, registro)
 
 
+COLOR_EFICIENCIA_EBOE, COLOR_EFICIENCIA_PROCESO = PALETA[0], PALETA[2]   # azul y verde de la paleta
+
+
 def tabla_mensual(mensual: pd.DataFrame, columna: str, decimales: int = 1) -> pd.DataFrame:
     return pd.DataFrame({"Mes": mensual["etiqueta"], "eBOE": mensual["eboe"].map(lambda e: f"eBOE {e}"),
                          columna: mensual["valor"].map(lambda v: numero(v, decimales)),
@@ -151,13 +156,14 @@ def tabla_mensual(mensual: pd.DataFrame, columna: str, decimales: int = 1) -> pd
 
 
 def bloque_evolucion_mensual(datos: pd.DataFrame, registro: Descargas) -> None:
-    """Eficiencia eBOE, MTPH, eficiencia del proceso y aceite de entrada por mes de producción."""
+    """Eficiencia eBOE, MTPH, eficiencia eBOE y del proceso de la planta, y aceite en fruta (entrada y salida) por
+    mes de producción."""
     st.subheader("Evolución mensual")
     st.caption("Por mes de producción (una muestra del 1/08 a las 02:00 es del día de producción 31/07 y cuenta en "
                "julio). Eficiencia y aceite ponderados por toneladas; MTPH promedio simple. La eficiencia del proceso "
                "es de la planta: Σ aceite envasado / Σ fruta procesada del mes, dividido por el aceite en fruta de "
                "entrada ponderado del mes; la producción respeta fechas, turno y proceso, no eBOE ni programa. "
-               "Los meses con N < 3 se ven tenues.")
+               "El aceite en fruta por mes es por muestra (no ponderado). Los meses con N < 3 se ven tenues.")
     pares = pares_con_emulsion(datos, SIN_EMULSION)
     if pares.empty:
         st.info("No hay pares entrada/salida con estos filtros.")
@@ -167,11 +173,12 @@ def bloque_evolucion_mensual(datos: pd.DataFrame, registro: Descargas) -> None:
     produccion = filtrar_produccion(produccion_planta(planta_id), filtros_elegidos())
     eficiencia = por_mes_y_eboe(pares, "eficiencia_pct", toneladas)
     mtph = por_mes_y_eboe(pares, "tph", None)
-    aceite = por_mes_y_eboe(pares, "aceite_fruta", toneladas)
+    planta_eboe = eficiencia_eboe_planta_por_mes(pares, toneladas)
     proceso = eficiencia_proceso_por_mes(pares, toneladas, produccion).rename(columns={"eficiencia_proceso": "valor"})
-    eje = eje_de_meses(pd.concat([eficiencia["mes"], proceso["mes"]]))
-    # Las dos eficiencias (eBOE y proceso) comparten la escala del eje Y.
-    tope = max([100.0, *eficiencia["valor"].dropna(), *proceso["valor"].dropna()]) * 1.08
+    cajas, outliers = cajas_por_mes(datos)
+    eje = eje_de_meses(pd.concat([eficiencia["mes"], proceso["mes"], cajas["mes"]]))
+    # Las eficiencias (por eBOE, de la planta y del proceso) comparten la escala del eje Y.
+    tope = max([100.0, *eficiencia["valor"].dropna(), *proceso["valor"].dropna(), *planta_eboe["valor"].dropna()]) * 1.08
     objetivo = rango_planta(planta_id, "Eficiencia eBOE")
 
     st.markdown("##### Eficiencia eBOE por mes")
@@ -187,23 +194,40 @@ def bloque_evolucion_mensual(datos: pd.DataFrame, registro: Descargas) -> None:
     with st.expander("Tabla"):
         registro.tabla(tabla_mensual(mtph, "MTPH"), "MTPH por mes")
 
-    st.markdown("##### Eficiencia del proceso por mes (planta)")
-    registro.grafico(columnas_mensuales(proceso, eje, "Eficiencia del proceso (%)", "%", por_eboe=False,
-                                        rango_y=[0, tope]), "Eficiencia del proceso por mes")
+    st.markdown("##### Eficiencia eBOE y del proceso por mes (planta)")
+    registro.grafico(columnas_mensuales_series([("Eficiencia eBOE", planta_eboe, COLOR_EFICIENCIA_EBOE),
+                                                ("Eficiencia del proceso", proceso, COLOR_EFICIENCIA_PROCESO)],
+                                               eje, "Eficiencia (%)", rango_y=[0, tope]),
+                     "Eficiencia eBOE y del proceso por mes")
+    with st.expander("Tabla"):
+        tabla_planta_mes = proceso.merge(planta_eboe[["mes", "valor", "n"]].rename(
+            columns={"valor": "eboe", "n": "n_eboe"}), on="mes", how="left")
+        registro.tabla(pd.DataFrame({
+            "Mes": tabla_planta_mes["etiqueta"], "Rendimiento (kg/MT)": tabla_planta_mes["rendimiento"].map(numero),
+            "Aceite en fruta entrada (kg/MT)": tabla_planta_mes["aceite_entrada"].map(numero),
+            "Eficiencia del proceso (%)": tabla_planta_mes["valor"].map(lambda v: numero(v, 1)),
+            "Eficiencia eBOE (%)": tabla_planta_mes["eboe"].map(lambda v: numero(v, 1)),
+            "N turnos": tabla_planta_mes["n"].map(lambda n: numero(n, 0)),
+            "N pares": tabla_planta_mes["n_pares"].map(lambda n: numero(n, 0)),
+        }), "Eficiencia eBOE y del proceso por mes")
+    st.caption("Eficiencia eBOE: los eBOE filtrados juntos, ponderada por toneladas (N = pares). Eficiencia del "
+               "proceso: N turnos = turnos con fruta procesada y aceite envasado aprobados (los que entran en el "
+               "rendimiento); un mes sin producción cargada muestra solo la eficiencia eBOE.")
+
+    st.markdown("##### Aceite en fruta por mes (entrada y salida)")
+    if cajas.empty:
+        st.info("No hay muestras de aceite en fruta con estos filtros.")
+        return
+    registro.grafico(boxplot_mensual(cajas, outliers, eje), "Aceite en fruta por mes")
+    st.caption("Por muestra (no ponderado). Caja: Q1 a Q3 con la mediana (cuartiles de Minitab). Bigotes: hasta el "
+               "último valor dentro de los límites IQR. Círculos abiertos: outliers (se marcan, no se borran). N "
+               "debajo de cada caja.")
     with st.expander("Tabla"):
         registro.tabla(pd.DataFrame({
-            "Mes": proceso["etiqueta"], "Rendimiento (kg/MT)": proceso["rendimiento"].map(numero),
-            "Aceite en fruta entrada (kg/MT)": proceso["aceite_entrada"].map(numero),
-            "Eficiencia del proceso (%)": proceso["valor"].map(lambda v: numero(v, 1)),
-            "N turnos": proceso["n"].map(lambda n: numero(n, 0)), "N pares": proceso["n_pares"].map(lambda n: numero(n, 0)),
-        }), "Eficiencia del proceso por mes")
-    st.caption("N = turnos con fruta procesada y aceite envasado cargados (los que entran en el rendimiento).")
-
-    st.markdown("##### Aceite en fruta de entrada por mes")
-    registro.grafico(columnas_mensuales(aceite, eje, "Aceite en fruta entrada (kg/MT)", "kg/MT"),
-                     "Aceite en fruta de entrada por mes")
-    with st.expander("Tabla"):
-        registro.tabla(tabla_mensual(aceite, "Aceite entrada (kg/MT)", 2), "Aceite de entrada por mes")
+            "Mes": cajas["etiqueta"], "Lugar": cajas["lugar"], "N": cajas["n"].map(lambda n: numero(n, 0)),
+            "Q1 (kg/MT)": cajas["q1"].map(numero), "Mediana (kg/MT)": cajas["mediana"].map(numero),
+            "Q3 (kg/MT)": cajas["q3"].map(numero), "Media (kg/MT)": cajas["media"].map(numero)}),
+            "Aceite en fruta por mes")
 
 
 # ---------------------------------------------------------------- pestaña Temporadas

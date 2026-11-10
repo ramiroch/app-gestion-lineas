@@ -8,7 +8,8 @@ import pytest
 from core.analisis import pares_con_emulsion, tabla_analisis
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
-from core.mensual import eficiencia_proceso_por_mes, eje_de_meses, etiqueta_mes, mes_de, por_mes_y_eboe
+from core.mensual import (cajas_por_mes, eficiencia_eboe_planta_por_mes, eficiencia_proceso_por_mes, eje_de_meses,
+                          etiqueta_mes, mes_de, por_mes_y_eboe)
 from core.models import AnalisisScott, Cliente, Equipo, Linea, Planta, Proceso, PuntoMuestreo, Turno
 
 SIN_EMULSION = pd.DataFrame(columns=["eboe", "fecha_hora", "aceite_emulsion"])
@@ -110,3 +111,33 @@ def test_eficiencia_proceso_por_mes():
     assert (julio["n"], julio["n_pares"]) == (2, 3)
     agosto = mensual.loc["Ago 2025"]
     assert pd.isna(agosto["rendimiento"]) and pd.isna(agosto["eficiencia_proceso"]) and agosto["n"] == 0
+
+
+def test_eficiencia_eboe_de_la_planta_por_mes():
+    mensual = eficiencia_eboe_planta_por_mes(_pares(), _toneladas()).set_index("etiqueta")
+    # julio, los eBOE juntos: turno M (80 y 70 → 75) × 100 t y turno T (90) × 300 t
+    assert mensual.loc["Jul 2025", "valor"] == pytest.approx((75 * 100 + 90 * 300) / 400)       # 86,25
+    assert (mensual.loc["Jul 2025", "n"], mensual.loc["Jul 2025", "ponderada"]) == (3, True)
+    assert mensual.loc["Ago 2025", "valor"] == pytest.approx(85.0) and not mensual.loc["Ago 2025", "ponderada"]
+
+
+def test_cajas_por_mes_con_cuartiles_de_minitab():
+    entrada_julio = [7.0, 7.5, 8.0, 8.5, 9.0, 20.0]
+    datos = pd.DataFrame({
+        "fecha_produccion": pd.to_datetime(["2025-07-10"] * 9 + ["2025-08-05"]),
+        "lugar": ["Entrada"] * 6 + ["Salida"] * 3 + ["Entrada"],
+        "aceite_fruta": entrada_julio + [1.0, 1.2, 1.4, 8.0]})
+
+    cajas, outliers = cajas_por_mes(datos)
+
+    julio = cajas.set_index(["etiqueta", "lugar"]).loc[("Jul 2025", "Entrada")]
+    # Minitab, posición (n + 1)·p con n = 6: Q1 en 1,75 → 7,375; mediana en 3,5 → 8,25; Q3 en 5,25 → 11,75
+    assert (julio["n"], julio["q1"], julio["mediana"], julio["q3"]) == (6, pytest.approx(7.375), pytest.approx(8.25),
+                                                                       pytest.approx(11.75))
+    assert julio["media"] == pytest.approx(10.0)
+    # LS = 11,75 + 1,5 × 4,375 = 18,31: el 20 es outlier y el bigote llega a 9,0
+    assert (julio["bigote_inferior"], julio["bigote_superior"]) == (7.0, 9.0)
+    assert outliers["aceite_fruta"].tolist() == [20.0] and outliers["etiqueta"].tolist() == ["Jul 2025"]
+    assert cajas[["etiqueta", "lugar", "n"]].values.tolist() == [["Jul 2025", "Entrada", 6], ["Jul 2025", "Salida", 3],
+                                                                  ["Ago 2025", "Entrada", 1]]
+    assert cajas_por_mes(datos.iloc[0:0])[0].empty

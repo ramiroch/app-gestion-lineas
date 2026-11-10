@@ -1168,3 +1168,98 @@ def carta_alerta(carta: dict) -> go.Figure:
     estilo(figura, ALTURA_CARTA)
     figura.update_layout(title=carta["titulo"], margin=dict(t=70, b=10, l=10, r=10), hovermode="closest")
     return figura
+
+
+def columnas_mensuales_series(series: list[tuple], eje: list[str], titulo_y: str, rango_y: list | None = None
+                              ) -> go.Figure:
+    """Columnas por mes de producción, una al lado de la otra por serie, en el mismo eje Y y con leyenda.
+
+    series: [(nombre, tabla con etiqueta, valor y n, color)]; un mes sin valor en una serie muestra solo las otras.
+    Valor sobre cada columna con 1 decimal; N en el tooltip; los meses con N < 3 van tenues y con aviso.
+    """
+    figura = go.Figure()
+    for nombre, tabla, color in series:
+        sub = tabla.dropna(subset=["valor"])
+        if sub.empty:
+            continue
+        chicos = (sub["n"] < 3).tolist()
+        figura.add_bar(
+            x=sub["etiqueta"], y=sub["valor"], name=nombre,
+            marker=dict(color=color, opacity=[0.3 if c else 1 for c in chicos], line=dict(color="white", width=1)),
+            text=sub["valor"].map(lambda v: numero(v, 1)), textposition="outside", cliponaxis=False,
+            textfont=dict(size=10),
+            customdata=list(zip(sub["n"].map(lambda n: numero(n, 0)),
+                                ["<br><b>⚠ N < 3: poco representativo</b>" if c else "" for c in chicos],
+                                sub["valor"].map(lambda v: numero(v, 1)))),
+            hovertemplate=f"<b>{nombre} · %{{x}}</b><br>%{{customdata[2]}} %<br>N %{{customdata[0]}}"
+                          "%{customdata[1]}<extra></extra>")
+    huecos = [e for e in eje if not e.strip()]
+    if huecos:
+        figura.add_scatter(x=huecos, y=[None] * len(huecos), mode="markers", showlegend=False, hoverinfo="skip")
+    figura.update_layout(barmode="group", bargap=0.25, bargroupgap=0.05, yaxis_title=titulo_y,
+                         xaxis=dict(type="category", categoryorder="array", categoryarray=eje))
+    if rango_y:
+        figura.update_yaxes(range=rango_y)
+    return estilo(figura)
+
+
+ALTURA_BOXPLOT_MENSUAL = 680
+
+
+def boxplot_mensual(cajas: pd.DataFrame, outliers: pd.DataFrame, eje: list[str], variable: str = "aceite_fruta",
+                    unidad: str = "kg/MT", decimales: int = 2) -> go.Figure:
+    """Boxplot por mes en dos paneles con el mismo eje de meses: Entrada arriba y Salida abajo (escalas distintas;
+    nunca dos ejes Y en un mismo panel). cajas y outliers: core.mensual.cajas_por_mes() (cuartiles de Minitab,
+    bigotes hasta el último valor dentro de los límites IQR). N debajo de cada caja; los meses con N < 3 van
+    tenues; los outliers se marcan con círculos abiertos y tooltip (fecha, turno, eBOE, analista)."""
+    figura = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08)
+    huecos = [e for e in eje if not e.strip()]
+    for fila, lugar in enumerate(LUGARES, start=1):
+        sub = cajas[cajas["lugar"] == lugar]
+        fuera = outliers[outliers["lugar"] == lugar] if not outliers.empty else outliers
+        if sub.empty:
+            continue
+        for tenue in (False, True):
+            parte = sub[(sub["n"] < 3) == tenue]
+            if parte.empty:
+                continue
+            textos = [f"<b>{e} · {lugar}</b><br>N {numero(n, 0)}" + ("<br><b>⚠ N < 3: poco representativo</b>"
+                                                                   if tenue else "")
+                      + f"<br>Bigote sup. {numero(bs, decimales)}<br>Q3 {numero(q3, decimales)}<br>Mediana "
+                      f"{numero(me, decimales)}<br>Q1 {numero(q1, decimales)}<br>Bigote inf. {numero(bi, decimales)}"
+                      f"<br>Media {numero(mu, decimales)}<extra></extra>"
+                      for e, n, bs, q3, me, q1, bi, mu in zip(parte["etiqueta"], parte["n"], parte["bigote_superior"],
+                                                              parte["q3"], parte["mediana"], parte["q1"],
+                                                              parte["bigote_inferior"], parte["media"])]
+            figura.add_box(x=parte["etiqueta"], q1=parte["q1"], median=parte["mediana"], q3=parte["q3"],
+                           lowerfence=parte["bigote_inferior"], upperfence=parte["bigote_superior"],
+                           name=lugar, legendgroup=lugar, showlegend=not tenue and fila <= 2,
+                           marker_color=COLORES[lugar], line_width=1.5, opacity=0.35 if tenue else 1,
+                           hovertemplate=textos, row=fila, col=1)
+        if not fuera.empty:
+            figura.add_scatter(
+                x=fuera["etiqueta"], y=fuera[variable], mode="markers", name=f"Outliers {lugar.lower()}",
+                legendgroup=lugar, showlegend=False, marker=dict(symbol="circle-open", size=8, color=COLORES[lugar],
+                                                                 line_width=2),
+                customdata=list(zip(fuera["fecha_hora"].dt.strftime("%d/%m/%Y %H:%M"), fuera["turno"],
+                                    fuera["analista"].fillna("—"), fuera[variable].map(lambda v: numero(v, decimales)),
+                                    fuera["eboe"])),
+                hovertemplate=f"<b>%{{customdata[3]}} {unidad}</b> (outlier)<br>eBOE %{{customdata[4]}} · "
+                              "%{customdata[0]} · turno %{customdata[1]}<br>Analista: %{customdata[2]}<extra></extra>",
+                row=fila, col=1)
+        # N debajo de cada caja: un poco por debajo del valor más bajo del panel, y el eje se estira para que entre
+        minimo = min([*sub["bigote_inferior"].dropna(), *(fuera[variable] if not fuera.empty else [])])
+        maximo = max([*sub["bigote_superior"].dropna(), *(fuera[variable] if not fuera.empty else [])])
+        margen = (maximo - minimo) * 0.12 or 0.5
+        figura.add_scatter(x=sub["etiqueta"], y=[minimo - margen * 0.55] * len(sub), mode="text",
+                           text=[f"N {numero(n, 0)}" for n in sub["n"]], textfont=dict(size=10, color=GRIS),
+                           showlegend=False, hoverinfo="skip", row=fila, col=1)
+        figura.update_yaxes(title_text=f"{lugar} ({unidad})", range=[minimo - margen, maximo + margen * 0.4],
+                            row=fila, col=1)
+        if huecos:
+            figura.add_scatter(x=huecos, y=[None] * len(huecos), mode="markers", showlegend=False, hoverinfo="skip",
+                               row=fila, col=1)
+    figura.update_xaxes(type="category", categoryorder="array", categoryarray=eje)
+    estilo(figura, ALTURA_BOXPLOT_MENSUAL)
+    figura.update_layout(boxmode="overlay", hovermode="closest")     # una caja por mes en cada panel: centrada
+    return figura
