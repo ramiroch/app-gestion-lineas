@@ -91,9 +91,10 @@ Fuente: `Plan diario - Primera planta LEDESMA.xlsx` (App_Gestion). Bloques de 2 
 - **Listo cuando:** Cargás un análisis desde el navegador y aparece en Análisis.
 - **Notas:** 10/11: core/carga_scott.py + página Carga Scott. Ronda con entrada, salida, emulsión y operación por cada eBOE en marcha (cada eBOE con su entrada); hora propuesta según la última ronda; normalidad por tipo de punto; cálculo en vivo con semáforo; errores y avisos (¿copiaste la entrada?, normalidad equivocada, muestra muy chica, valor poco habitual); chequeo inmediato del turno en curso y evaluación completa de los turnos cerrados (TurnoEvaluado). Entradas repetidas marcadas (core/repetidas.py). 443 tests.
 
-## Tarea 19 · Validación de rangos y listado con edición (19/11) — Pendiente
+## Tarea 19 · Validación de rangos y listado con edición (19/11) — Hecha
 - **Qué hacer:** Al guardar, semáforo contra RangoReferencia. Lista de análisis con filtros y edición.
 - **Listo cuando:** Un valor fuera de rango queda marcado.
+- **Notas:** 10/11: página Datos (lista por ronda con filtros, corrección, borrado de un dato o de la ronda, cambio de hora, historial y restaurar; motivo obligatorio; tabla Cambio con la fila completa de lo borrado; permiso en un único punto, core.cambios.puede_editar) y página Alertas (filtros, carta del período, datos, causa / acción / comentario, estados). Al corregir: recálculo, marca de entrada repetida y reevaluación del turno; una alerta sin datos se cierra sola con "dato corregido". El importador no pisa ni recrea lo corregido en la app. Modo prueba con APP_DB. 463 tests.
 
 ## Tarea 20 · Carga de producción por turno con aprobación (20/11) — Pendiente
 - **Qué hacer:** Formulario de RegistroProduccion (borrador → aprobado). Revisión de la semana.

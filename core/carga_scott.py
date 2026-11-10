@@ -478,12 +478,13 @@ def _violaciones_inmediatas(sesion: Session, variable: str, grupo: pd.DataFrame)
 
 def confirmar_inmediatas(sesion: Session, planta: Planta, series: dict, dia, turno: str) -> list[Alerta]:
     """Revisa con el promedio completo del turno cerrado las alertas inmediatas de ese turno todavía sin revisar
-    (confirmada vacía). Confirmada: el promedio del turno completo sigue más allá de sigma_alerta_inmediata (en una
+    (confirmada vacía; no las "histórico", que salen de la evaluación completa). Confirmada: el promedio del turno completo sigue más allá de sigma_alerta_inmediata (en una
     alerta común de planta, en todos los eBOE). Si no, confirmada = no y se agrega el comentario NO_CONFIRMADA; la
     alerta no se borra. Devuelve las alertas revisadas."""
     turno_id = next(t.id for t in planta.turnos if t.nombre == turno)
     alertas = sesion.scalars(select(Alerta).where(
         Alerta.inmediata.is_(True), Alerta.confirmada.is_(None), Alerta.origen == ORIGEN_NELSON,
+        Alerta.estado != "histórico",                     # las del histórico ya salen de la evaluación completa
         Alerta.fecha_produccion == dia, Alerta.turno_id == turno_id)).all()
     for alerta in alertas:
         serie = series.get(alerta.variable)
@@ -535,17 +536,24 @@ def evaluar_turnos_cerrados(sesion: Session, planta: Planta, ahora: datetime, ev
     primero = datetime.combine(pendientes[0][0], datetime.min.time())
     series = series_recientes(sesion, planta, primero - timedelta(days=DIAS_PREVIOS))
     for dia, turno in pendientes:
-        for variable, serie in series.items():
-            nuevos = serie[(serie["fecha_produccion"] == pd.Timestamp(dia)) & (serie["turno"] == turno)]
-            if nuevos.empty:
-                continue
-            previos = serie[serie["fecha_hora"] < nuevos["fecha_hora"].min()]
-            evaluar_nuevos(sesion, planta, variable, nuevos, previos, historico=False, creado_por=evaluado_por)
-        confirmar_inmediatas(sesion, planta, series, dia, turno)
+        evaluar_turno(sesion, planta, series, dia, turno, evaluado_por)
         sesion.add(TurnoEvaluado(planta_id=planta.id, fecha_produccion=dia, turno_id=turnos[turno].id,
                                  evaluado_en=ahora, evaluado_por=evaluado_por))
         sesion.commit()
     return pendientes
+
+
+def evaluar_turno(sesion: Session, planta: Planta, series: dict, dia, turno: str, creado_por: str,
+                  historico: bool = False) -> None:
+    """Evaluación completa de un turno (todas las variables de las series, con sus datos anteriores) y la
+    confirmación de sus alertas inmediatas. historico=True: las alertas nuevas quedan "histórico"."""
+    for variable, serie in series.items():
+        nuevos = serie[(serie["fecha_produccion"] == pd.Timestamp(dia)) & (serie["turno"] == turno)]
+        if nuevos.empty:
+            continue
+        previos = serie[serie["fecha_hora"] < nuevos["fecha_hora"].min()]
+        evaluar_nuevos(sesion, planta, variable, nuevos, previos, historico=historico, creado_por=creado_por)
+    confirmar_inmediatas(sesion, planta, series, dia, turno)
 
 
 def estado_alertas(sesion: Session) -> dict:

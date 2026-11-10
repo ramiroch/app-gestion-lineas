@@ -29,6 +29,7 @@ from openpyxl import load_workbook
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from core.cambios import claves_protegidas
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
 from core.duplicados import separar_repetidas
@@ -78,7 +79,7 @@ class ErrorFila(Exception):
 class Reporte:
     """Filas rechazadas, corregidas o con aviso: (hoja, fila, tipo, motivo)."""
 
-    TIPOS = ("rechazada", "corregida", "aviso")
+    TIPOS = ("rechazada", "corregida", "aviso", "corregido en la app")
 
     def __init__(self):
         self.filas = []
@@ -311,6 +312,9 @@ def importar_ledesma(sesion: Session, ruta: Path = RUTA_EXCEL, cliente: str = "L
     return resumen, reporte
 
 
+TABLA_CAMBIO = {"AnalisisScott": "analisis_scott", "LecturaOperacion": "lectura_operacion"}   # tabla en Cambio
+
+
 class _Cargador:
     """Crea o actualiza registros por su clave, con los existentes ya leídos de la base."""
 
@@ -325,6 +329,7 @@ class _Cargador:
             select(LecturaOperacion).where(LecturaOperacion.equipo_id.in_(equipos)))}
         self.registros = {(r.fecha_produccion, r.turno_id, r.proceso_id): r
                           for r in planta.registros_produccion}
+        self.protegidas = claves_protegidas(sesion)      # corregidos en la app: no se pisan ni se recrean
 
     def proceso(self, temporada: int, numero: int) -> Proceso:
         """El proceso de la temporada; lo crea si no existe."""
@@ -504,7 +509,13 @@ def _cargar_fila_boe(numero: int, datos: dict, archivo: str, blanco: float, punt
 
 
 def _guardar_o_reportar(cargador, tabla, existentes, clave, modelo, campos, que, numero, reporte):
-    """Guarda un registro; si el modelo lo rechaza, lo anota y sigue con el resto de la fila."""
+    """Guarda un registro; si el modelo lo rechaza, lo anota y sigue con el resto de la fila. Un análisis o una
+    lectura con historial de cambios en la app (core.cambios.claves_protegidas) no se toca: va al reporte como
+    "corregido en la app"."""
+    if (TABLA_CAMBIO.get(tabla), clave) in cargador.protegidas:
+        reporte.agregar("BOE", numero, "corregido en la app",
+                        f"No se toca el {que}: tiene historial de cambios en la app (editado, borrado o restaurado).")
+        return
     try:
         cargador.guardar(tabla, existentes, clave, modelo, campos)
     except ValueError as error:

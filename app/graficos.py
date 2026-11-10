@@ -1126,3 +1126,45 @@ def histograma_capacidad(valores: pd.Series, resultado: dict, limites: dict, tit
     estilo(figura)
     figura.update_layout(margin=dict(t=90), legend=dict(y=1.1))          # la leyenda arriba de los rótulos LIE / LSE
     return figura
+
+
+def carta_alerta(carta: dict) -> go.Figure:
+    """Carta del período de una alerta (core.gestion_alertas.carta_de_alerta): promedio del turno arriba (LC continua,
+    LCS y LCI punteadas en gris; banda del rango de referencia si la alerta es de rango) y desvío del turno (S)
+    abajo, con su LCS. Los turnos del episodio van con cuadrado rojo. Eje X: turno (fecha y turno)."""
+    tabla = carta["tabla"]
+    unidad = carta["unidad"]
+    x = [f"{f:%d/%m} {t}" for f, t in zip(tabla["fecha_produccion"], tabla["turno"])]
+    textos = [f"{f:%d/%m/%Y} turno {t}<br>Promedio: {numero(m, 2)} {unidad} (N {n})"
+              + ("" if pd.isna(d) else f"<br>Desvío: {numero(d, 2)}") + ("<br>En el episodio" if e else "")
+              for f, t, m, n, d, e in zip(tabla["fecha_produccion"], tabla["turno"], tabla["media"], tabla["n"],
+                                          tabla["desvio"], tabla["en_episodio"])]
+    figura = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.65, 0.35])
+    if carta.get("rango"):
+        minimo, maximo = carta["rango"]
+        figura.add_hrect(y0=minimo if minimo is not None else tabla["media"].min(),
+                         y1=maximo if maximo is not None else tabla["media"].max(),
+                         fillcolor=COLOR_BANDA_PLANTA, opacity=OPACIDAD_BANDA, line_width=0, row=1, col=1)
+    figura.add_scatter(x=x, y=tabla["media"], mode="lines+markers", name="Promedio del turno",
+                       line=dict(color=COLOR_DATOS, width=1), marker=dict(color=COLOR_DATOS, size=5),
+                       text=textos, hovertemplate="%{text}<extra></extra>", row=1, col=1)
+    for columna, nombre, trazo, fila in (("lc", "LC", "solid", 1), ("lcs", "LCS", "dash", 1), ("lci", "LCI", "dash", 1),
+                                         ("s_lcs", "LCS de S", "dash", 2)):
+        if tabla[columna].notna().any():
+            figura.add_scatter(x=x, y=tabla[columna], mode="lines", name=nombre, showlegend=fila == 1 and columna != "lc",
+                               line=dict(color=GRIS, width=1, dash=trazo, shape="hv"), hoverinfo="skip", row=fila, col=1)
+    episodio = tabla["en_episodio"].to_numpy(dtype=bool)
+    figura.add_scatter(x=[v for v, e in zip(x, episodio) if e], y=tabla.loc[episodio, "media"], mode="markers",
+                       name="Turnos del episodio", marker=dict(color=COLOR_REGLA_1, symbol="square", size=10,
+                                                               line=dict(color="white", width=1)),
+                       text=[t for t, e in zip(textos, episodio) if e], hovertemplate="%{text}<extra></extra>",
+                       row=1, col=1)
+    figura.add_scatter(x=x, y=tabla["desvio"], mode="lines+markers", name="Desvío del turno (S)", showlegend=False,
+                       line=dict(color=COLOR_DATOS, width=1), marker=dict(color=COLOR_DATOS, size=4),
+                       text=textos, hovertemplate="%{text}<extra></extra>", connectgaps=False, row=2, col=1)
+    figura.update_yaxes(title_text=f"Promedio ({unidad})", row=1, col=1)
+    figura.update_yaxes(title_text=f"S ({unidad})", rangemode="tozero", row=2, col=1)
+    figura.update_xaxes(title_text="Turno", type="category", row=2, col=1)
+    estilo(figura, ALTURA_CARTA)
+    figura.update_layout(title=carta["titulo"], margin=dict(t=70, b=10, l=10, r=10), hovermode="closest")
+    return figura

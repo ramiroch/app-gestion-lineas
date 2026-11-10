@@ -318,3 +318,25 @@ def test_misma_clave_con_datos_distintos_no_se_carga_ninguna(sesion, tmp_path):
     rechazadas = [f for h, f, t, m in reporte.filas if t == "rechazada" and "misma clave" in m]
     assert rechazadas == [4, 15]
     assert sesion.scalars(select(AnalisisScott).where(AnalisisScott.origen.like("% fila 4"))).first() is None
+
+
+def test_no_pisa_ni_recrea_lo_corregido_en_la_app(sesion, tmp_path):
+    from core.cambios import clave_de, fila_completa, registrar
+    ruta = escribir_excel(tmp_path / "m.xlsx")
+    importar(sesion, ruta)
+    corregido, borrado = sesion.scalars(select(AnalisisScott).order_by(AnalisisScott.id)).all()[:2]
+    ahora = datetime(2026, 11, 10, 9, 0)
+    registrar(sesion, "analisis_scott", corregido.id, "edición", "tipeo", "Ramiro", ahora, "g1",
+              clave_de("analisis_scott", corregido), "vol_ml", corregido.vol_ml, 99.0)
+    corregido.vol_ml = 99.0
+    registrar(sesion, "analisis_scott", borrado.id, "borrado", "muestra contaminada", "Ramiro", ahora, "g2",
+              clave_de("analisis_scott", borrado), anterior=fila_completa(borrado))
+    sesion.delete(borrado)
+    sesion.commit()
+    antes = contar(sesion)["AnalisisScott"]
+
+    _, reporte = importar(sesion, ruta)
+
+    assert sesion.get(AnalisisScott, corregido.id).vol_ml == 99.0               # no se pisa
+    assert contar(sesion)["AnalisisScott"] == antes                             # el borrado no vuelve
+    assert reporte.cantidad("corregido en la app") == 2

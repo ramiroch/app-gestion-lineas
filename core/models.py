@@ -25,6 +25,7 @@ REGLAS_MARCA_IMR = "5,MR"                  # I-MR: se marcan en la carta, no ale
 REGLAS_MARCA_POR_TURNO = "5,S"             # X̄-S y entre/dentro: se marcan, no alertan ("S": desvío del turno)
 ORIGENES_ALERTA = ("nelson", "rango")
 ESTADOS_ALERTA = ("abierta", "en análisis", "cerrada", "histórico")
+ACCIONES_CAMBIO = ("edición", "borrado", "restaurado", "hora", "estado", "seguimiento")
 
 
 class Base(DeclarativeBase):
@@ -711,3 +712,42 @@ class TurnoEvaluado(Base):
     evaluado_por: Mapped[str] = mapped_column(String(100))
 
     turno: Mapped["Turno"] = relationship()
+
+
+class Cambio(Base):
+    """Historial de cambios de un dato (análisis, lectura de operación) o de una alerta. Nunca se borra.
+
+    tabla y dato_id: qué se cambió ("analisis_scott", "lectura_operacion" o "alerta"). clave: punto o equipo y
+    fecha_hora del dato cuando se cambió ("12|2026-11-10 06:10:00"), para que los importadores no pisen ni vuelvan a
+    crear datos corregidos en la app (también después de borrarlos). accion: una de ACCIONES_CAMBIO. Edición, hora,
+    estado y seguimiento: un registro por campo, con valor_anterior y valor_nuevo como texto. Borrado: valor_anterior
+    es la fila completa (JSON), así nunca se pierde el dato original y se puede restaurar. motivo: obligatorio.
+    grupo: junta los registros de un mismo guardado (por ejemplo, una ronda borrada).
+    """
+
+    __tablename__ = "cambio"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tabla: Mapped[str] = mapped_column(String(30))
+    dato_id: Mapped[int]
+    clave: Mapped[str | None] = mapped_column(String(80))
+    accion: Mapped[str] = mapped_column(String(15))
+    campo: Mapped[str | None] = mapped_column(String(40))
+    valor_anterior: Mapped[str | None] = mapped_column(Text)
+    valor_nuevo: Mapped[str | None] = mapped_column(Text)
+    motivo: Mapped[str] = mapped_column(Text)
+    cambiado_por: Mapped[str] = mapped_column(String(100))
+    cambiado_en: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    grupo: Mapped[str] = mapped_column(String(32))
+
+    @validates("accion")
+    def validar_accion(self, clave, valor):
+        if valor not in ACCIONES_CAMBIO:
+            raise ValueError(f'Acción "{valor}" no válida. Usá una de: {", ".join(ACCIONES_CAMBIO)}.')
+        return valor
+
+    @validates("motivo")
+    def validar_motivo(self, clave, valor):
+        if not (valor or "").strip():
+            raise ValueError("El motivo del cambio es obligatorio.")
+        return valor.strip()
