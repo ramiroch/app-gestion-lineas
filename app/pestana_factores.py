@@ -25,10 +25,11 @@ from core.factores import (CATEGORIAS, NOTA_HOROMETRO_MODELO, con_fuente_pares, 
                            frase_quintil_eboe, por_quintil_eboe, preparar_pares, promedio_por_temporada,
                            residual_planta, resumen_factores, separar_errores, toneladas_por_eboe)
 from core.formato import numero, texto_p
+from core.repetidas import sin_entradas_repetidas
 from core.precios import (BRIX_REFERENCIA, SIN_PRECIOS, UNIDADES, Precios, guardar_precios, kg_a_65_brix,
                            leer_precios, usd)
 from descargas import Descargas
-from filtros import (filtros_elegidos, planta_elegida, produccion_planta, tabla_emulsion_planta, tabla_planta,
+from filtros import (casilla_repetidas, filtros_elegidos, planta_elegida, produccion_planta, tabla_emulsion_planta, tabla_planta,
                      toneladas_planta)
 from graficos import GRIS, barras_importancia, cascada, cascada_pasos, columnas_agrupadas, intervalos, intervalos_agrupados
 
@@ -298,6 +299,9 @@ def bloque_justa(pares: pd.DataFrame, otros: pd.DataFrame, fuente: str, cortes: 
                f"{N_MINIMO_JUSTA} pares de cada eBOE; las diferencias de las celdas se promedian ponderando por los pares "
                "del eBOE. Todas las versiones usan los mismos pares (los que tienen calibre, programa, MTPH y emulsión); "
                f"promedio simple dentro de cada celda. Ignora fechas y proceso de la barra. Programa y MTPH: {fuente}.")
+    if not casilla_repetidas("justa_repetidas"):
+        pares, otros = sin_entradas_repetidas(pares), sin_entradas_repetidas(otros)
+        st.caption("Sin las entradas repetidas en varios eBOE (posible copia).")
     datos, resumen = justa_en_cache(pares, cortes, cortes_emulsion)
     if resumen.empty:
         st.info("Hace falta más de un eBOE para comparar.")

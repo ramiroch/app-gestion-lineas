@@ -21,8 +21,8 @@ n variable, core.limites.subgrupos_por_turno).
   a mano no se reabre. Sin límites vigentes por turno, no evalúa Nelson pero sí el rango; con límites, el rango
   alerta solo si "rango" está en sus reglas_alerta (el pH: solo "rango"). Los datos inválidos no entran.
 - separar_comunes(): si la misma regla y variable salta en TODOS los eBOE de la planta en el mismo turno, se crea
-  una sola alerta de ámbito planta (comun_eboe y un comentario automático: los eBOE comparten la muestra de entrada)
-  en lugar de una por equipo. Las de equipo quedan solo para los turnos que no son comunes. Se detecta entre los
+  una sola alerta de ámbito planta (comun_eboe y el comentario COMENTARIO_COMUN: algo común a los 3 eBOE, como la
+  fruta del día, el laboratorio o el proceso) en lugar de una por equipo. Las de equipo quedan solo para los turnos que no son comunes. Se detecta entre los
   datos que se evalúan juntos (por eso conviene evaluar los eBOE de un turno en la misma llamada).
 - alertas_de(): las alertas de un análisis o muestra (para mostrarlas y revisarlas si se corrige un dato).
 """
@@ -45,7 +45,7 @@ ORIGEN_NELSON, ORIGEN_RANGO = "nelson", "rango"
 ABIERTA, HISTORICO, CERRADA = "abierta", "histórico", "cerrada"
 TURNOS_ANTERIORES = 14            # la regla 4 mira 14 puntos atrás; las demás, menos
 POR_TURNO = (ENTRE_DENTRO, XBAR_S)
-COMENTARIO_COMUN = "posible causa común: muestra de entrada, laboratorio o fruta"
+COMENTARIO_COMUN = "posible causa común a los 3 eBOE: fruta del día, laboratorio o proceso"
 LADOS_ALERTA = ("abajo", "arriba", "ambos")
 REGLAS_CON_LADO = (1, 2, 3, 5, 6)   # 1, 2, 5, 6: lado del punto respecto de la LC; 3: sentido de la tendencia
 

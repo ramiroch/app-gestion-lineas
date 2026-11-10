@@ -291,6 +291,8 @@ class AnalisisScott(Auditoria, Base):
     normalidad (N del BrO3, ≈ 0,100 en fruta de entrada y ≈ 0,010 en salida).
     Opcionales de fruta: peso_fruta_kg, n_frutos, calidad, rallado.
     Opcionales de emulsión: ph, brix (°Brix), solidos_centrifugables (%).
+    revisar: motivos para revisar el análisis, separados por "; " (por ejemplo, entrada repetida en varios eBOE);
+    no lo excluyen de los cálculos.
     Único por punto de muestreo + fecha_hora.
     """
 
@@ -317,6 +319,7 @@ class AnalisisScott(Auditoria, Base):
     ticket: Mapped[str | None] = mapped_column(String(50))
     licuadora: Mapped[str | None] = mapped_column(String(50))
     observaciones: Mapped[str | None] = mapped_column(Text)
+    revisar: Mapped[str | None] = mapped_column(String(200))
 
     punto_muestreo: Mapped["PuntoMuestreo"] = relationship(back_populates="analisis")
     proceso: Mapped["Proceso"] = relationship(back_populates="analisis")

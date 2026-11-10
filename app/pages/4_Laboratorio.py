@@ -2,7 +2,7 @@
 
 Usa la barra de filtros global. Arriba, un resumen con los hallazgos principales (para el informe);
 debajo, una pestaña por bloque: gramaje y mL, formas de pesar, gramaje y resultado, precisión,
-dígitos, muestras compartidas, analistas y normalidad del titulante. Solo se dibuja la pestaña abierta;
+dígitos, entradas repetidas, analistas y normalidad del titulante. Solo se dibuja la pestaña abierta;
 cada gráfico tiene botón PNG, cada tabla Excel y cada pestaña "Descargar todo".
 Solo muestra: la lógica está en core/laboratorio.py.
 """
@@ -16,9 +16,9 @@ from core.analisis import filtrar
 from core.formato import numero
 from core.laboratorio import (DIAS_MISMA_NORMALIDAD, ERROR_MAXIMO_PCT, N_MINIMO_DIGITOS, PESO_FIJO, POSICIONES,
                               VOL_MAXIMO_ML, agregar_ml_por_g, carta_normalidad, comparar_analistas, comparar_formas,
-                              compartidas_por_mes, curva_kde, error_de_lectura, forma_de_pesar, forma_distribucion,
+                              repetidas_por_mes, curva_kde, error_de_lectura, forma_de_pesar, forma_distribucion,
                               frase_analistas, frase_digitos, frase_forma, frase_formas, frase_gramaje,
-                              frase_periodos, frase_precision, gramaje_vs_resultado, muestras_compartidas,
+                              frase_periodos, frase_precision, gramaje_vs_resultado, entradas_repetidas_grupos,
                               muestras_vol_alto, normalidad_diaria, periodos_misma_normalidad, porcentaje_fijo,
                               precision_titulacion, preferencia_digitos, probabilidad_normal, referencia_planta,
                               resumen_hallazgos)
@@ -76,7 +76,7 @@ def calcular_resumen(datos: pd.DataFrame, datos_sin_eboe: pd.DataFrame) -> list[
     return resumen_hallazgos(
         porcentaje_fijo(datos.assign(todas="todas"), "todas"), porcentaje_fijo(datos, "analista"),
         comparar_formas(datos), precision_titulacion(datos), preferencia_digitos(datos, "centesimo"),
-        compartidas_por_mes(datos_sin_eboe), comparar_analistas(solo_lugar(datos, "Salida"), "aceite_fruta"))
+        repetidas_por_mes(datos_sin_eboe), comparar_analistas(solo_lugar(datos, "Salida"), "aceite_fruta"))
 
 
 # ---------------------------------------------------------------- 1. gramaje y mL
@@ -256,42 +256,43 @@ def pestana_digitos(datos: pd.DataFrame, registro: Descargas) -> None:
             registro.tabla(con_coma(mostrada, 1, p=4, **{"p pares": 4}), f"Dígitos - {nombre}")
 
 
-# ---------------------------------------------------------------- 6. compartidas
+# ---------------------------------------------------------------- 6. entradas repetidas
 
-def pestana_compartidas(datos_sin_eboe: pd.DataFrame, registro: Descargas) -> None:
-    st.caption("Muestras de Entrada con la misma fecha y hora, el mismo peso y los mismos mL en más de un eBOE. Es "
-               "muy poco probable que frutas distintas den exactamente lo mismo: lo más probable es que se haya "
-               "titulado una sola muestra y se anotó para varios eBOE. Se miran todos los eBOE (no se aplica el "
+def pestana_repetidas(datos_sin_eboe: pd.DataFrame, registro: Descargas) -> None:
+    st.caption("Muestras de Entrada con la misma fecha y hora, el mismo peso y los mismos mL en más de un eBOE. Cada "
+               "eBOE tiene su propia muestra de entrada y es muy poco probable que frutas distintas den exactamente lo "
+               "mismo: lo más probable es que se haya copiado el dato. Se miran todos los eBOE (no se aplica el "
                "filtro de eBOE).")
-    st.info("Si la entrada se muestrea una sola vez para los tres eBOE, sus eficiencias no son independientes.")
-    grupos = muestras_compartidas(datos_sin_eboe)
-    por_mes = compartidas_por_mes(datos_sin_eboe)
+    st.info("Las entradas repetidas quedan marcadas para revisar: siguen en los cálculos, pero no en las comparaciones "
+            "entre eBOE (salvo que se marque «Incluir entradas repetidas»).")
+    grupos = entradas_repetidas_grupos(datos_sin_eboe)
+    por_mes = repetidas_por_mes(datos_sin_eboe)
     entradas = int(por_mes["entradas"].sum())
-    compartidas = int(por_mes["compartidas"].sum())
+    repetidas = int(por_mes["repetidas"].sum())
     uno, dos, tres = st.columns(3)
-    uno.metric("Grupos compartidos", numero(len(grupos), 0))
-    dos.metric("Muestras de entrada en esos grupos", numero(compartidas, 0))
-    tres.metric("% de las muestras de entrada", f"{numero(100 * compartidas / entradas, 1) if entradas else '—'} %")
+    uno.metric("Grupos repetidos", numero(len(grupos), 0))
+    dos.metric("Muestras de entrada en esos grupos", numero(repetidas, 0))
+    tres.metric("% de las muestras de entrada", f"{numero(100 * repetidas / entradas, 1) if entradas else '—'} %")
     tres.caption(f"N = {numero(entradas, 0)} muestras de entrada")
     avisar_n(entradas, "muestras de entrada")
     if por_mes.empty:
         return
     tabla = por_mes.assign(valor=por_mes["pct"], n=por_mes["entradas"])
-    registro.grafico(columnas_mensuales(tabla, eje_de_meses(por_mes["mes"]), "% de muestras de entrada compartidas", "%",
-                                        por_eboe=False), "Muestras compartidas por mes")
+    registro.grafico(columnas_mensuales(tabla, eje_de_meses(por_mes["mes"]), "% de muestras de entrada repetidas", "%",
+                                        por_eboe=False), "Entradas repetidas por mes")
     with st.expander("Tabla por mes"):
-        registro.tabla(con_coma(por_mes[["etiqueta", "entradas", "grupos", "compartidas", "pct"]].rename(columns={
-            "etiqueta": "Mes", "entradas": "Muestras de entrada", "grupos": "Grupos", "compartidas": "Compartidas",
-            "pct": "%"}), 1), "Muestras compartidas por mes")
-    st.subheader("Grupos compartidos")
+        registro.tabla(con_coma(por_mes[["etiqueta", "entradas", "grupos", "repetidas", "pct"]].rename(columns={
+            "etiqueta": "Mes", "entradas": "Muestras de entrada", "grupos": "Grupos", "repetidas": "Repetidas",
+            "pct": "%"}), 1), "Entradas repetidas por mes")
+    st.subheader("Grupos repetidos")
     if grupos.empty:
-        st.info("No hay muestras compartidas con estos filtros.")
+        st.info("No hay entradas repetidas con estos filtros.")
         return
     lista = grupos.assign(fecha_hora=grupos["fecha_hora"].dt.strftime("%d/%m/%Y %H:%M")).drop(
         columns="fecha_produccion").rename(columns={
             "fecha_hora": "Fecha y hora", "peso_muestra_g": "Peso (g)", "vol_ml": "Volumen (mL)", "eboes": "eBOE",
             "n_eboes": "Cantidad de eBOE", "analistas": "Analista"})
-    registro.tabla(con_coma(lista, 2, **{"Peso (g)": 3}), "Grupos compartidos")
+    registro.tabla(con_coma(lista, 2, **{"Peso (g)": 3}), "Grupos repetidos")
 
 
 # ---------------------------------------------------------------- 7. analistas
@@ -405,7 +406,7 @@ PESTANAS = {
     "Gramaje y resultado": lambda registro: pestana_gramaje_resultado(datos, registro),
     "Precisión": lambda registro: pestana_precision(datos, registro),
     "Dígitos": lambda registro: pestana_digitos(datos, registro),
-    "Muestras compartidas": lambda registro: pestana_compartidas(datos_sin_eboe, registro),
+    "Entradas repetidas": lambda registro: pestana_repetidas(datos_sin_eboe, registro),
     "Analistas": lambda registro: pestana_analistas(datos, registro),
     "Normalidad": lambda registro: pestana_normalidad(datos, registro),
 }

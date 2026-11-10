@@ -328,7 +328,8 @@ VARIABLES_CAPACIDAD = {
 
 def datos_capacidad(analisis: pd.DataFrame, emulsion: pd.DataFrame, variable: str, equipo: int | None = None,
                     desde=None, hasta=None, fruta: str | None = None) -> pd.DataFrame:
-    """Datos de una variable para la capacidad, en orden de tiempo: columnas fecha_hora, eboe, valor.
+    """Datos de una variable para la capacidad, en orden de tiempo: columnas fecha_hora, eboe, valor y
+    entrada_repetida (la entrada del par está repetida en otro eBOE; siempre False en la emulsión).
 
     eficiencia (%) = eficiencia del par entrada/salida × 100; rendimiento (kg/MT) = aceite entrada − salida del
     mismo eBOE y hora; aceite_emulsion (%), brix y ph de los análisis de emulsión. Filtros: eBOE (equipo), días
@@ -346,12 +347,13 @@ def datos_capacidad(analisis: pd.DataFrame, emulsion: pd.DataFrame, variable: st
                                       aggfunc="first")
             pares = pares.dropna(subset=[c for c in ("Entrada", "Salida") if c in pares]).reset_index()
             datos = pares.assign(valor=pares.get("Entrada") - pares.get("Salida")).merge(
-                tabla[tabla["lugar"] == "Entrada"][["eboe", "fecha_hora", "fecha_produccion", "fruta"]],
+                tabla[tabla["lugar"] == "Entrada"][[c for c in ("eboe", "fecha_hora", "fecha_produccion", "fruta",
+                                                                "entrada_repetida") if c in tabla]],
                 on=["eboe", "fecha_hora"])
     else:
         columna = {"aceite_emulsion": "aceite_emulsion", "brix": "brix", "ph": "ph"}[variable]
         tabla = emulsion
-        datos = tabla.assign(valor=tabla[columna])
+        datos = tabla.assign(valor=tabla[columna], entrada_repetida=False)
     if equipo is not None:
         datos = datos[datos["eboe"] == equipo]
     if desde is not None:
@@ -360,8 +362,10 @@ def datos_capacidad(analisis: pd.DataFrame, emulsion: pd.DataFrame, variable: st
         datos = datos[datos["fecha_produccion"] <= pd.Timestamp(hasta)]
     if fruta is not None and "fruta" in datos:
         datos = datos[datos["fruta"].map(especie) == fruta.lower()]
-    return datos.dropna(subset=["valor"]).sort_values("fecha_hora")[["fecha_hora", "eboe", "valor"]].reset_index(
-        drop=True)
+    if "entrada_repetida" not in datos:
+        datos = datos.assign(entrada_repetida=False)
+    return datos.dropna(subset=["valor"]).sort_values("fecha_hora")[
+        ["fecha_hora", "eboe", "valor", "entrada_repetida"]].reset_index(drop=True)
 
 
 def limites_capacidad(sesion, planta_id: int, variable: str, fruta: str | None = None) -> dict | None:

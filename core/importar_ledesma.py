@@ -576,5 +576,10 @@ if __name__ == "__main__":
     crear_tablas(motor)
     with crear_sesion(motor) as sesion:
         resumen, reporte = importar_ledesma(sesion)
+        from core.repetidas import marcar_entradas_repetidas
+        ledesma = sesion.scalars(select(Planta).where(Planta.nombre == "LEDESMA")).one()
+        repetidas = marcar_entradas_repetidas(sesion, ledesma.id)
     reporte.guardar()
     print(texto_resumen(resumen, reporte))
+    print("\nEntradas repetidas en varios eBOE (posible copia), por temporada:")
+    print(repetidas.to_string(index=False))

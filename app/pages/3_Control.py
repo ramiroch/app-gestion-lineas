@@ -20,9 +20,10 @@ from core.control import POR_MUESTRA, POR_TURNO, VARIABLES, carta_de_control, fr
 from core.formato import numero
 from core.laboratorio import texto_p_ad
 from core.operacion import especie
+from core.repetidas import sin_entradas_repetidas
 from core.spc import DESCRIPCION_REGLAS, REGLAS, resumen_reglas
 from descargas import Descargas
-from filtros import (barra_filtros, filtros_elegidos, limites_capacidad_planta, planta_elegida,
+from filtros import (barra_filtros, casilla_repetidas, filtros_elegidos, limites_capacidad_planta, planta_elegida,
                      tabla_emulsion_planta, tabla_planta)
 from graficos import carta_control, histograma_capacidad
 
@@ -260,6 +261,8 @@ def pestana_capacidad(registro: Descargas) -> None:
     if len(eboes) > 1:
         st.subheader("Comparación por eBOE")
         st.caption("Una fila por eBOE, del peor al mejor según Ppk (con un solo lado, es el índice de ese lado).")
+        if variable in ("eficiencia", "rendimiento"):
+            todos = sin_entradas_repetidas(todos, casilla_repetidas("capacidad_repetidas"))
         registro.tabla(tabla_equipos(comparar_equipos(todos, limites["lie"], limites["lse"]), decimales),
                        f"Capacidad por eBOE {nombre}")
 

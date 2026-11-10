@@ -9,10 +9,10 @@ import statsmodels.formula.api as smf
 from scipy import stats
 
 from core.laboratorio import (agregar_ml_por_g, anderson_darling, carta_normalidad, comparar_analistas,
-                              comparar_formas, compartidas_por_mes, curva_kde, digitos, error_de_lectura,
+                              comparar_formas, repetidas_por_mes, curva_kde, digitos, error_de_lectura,
                               forma_de_pesar, forma_distribucion, frase_analistas, frase_digitos, frase_forma,
                               frase_formas, frase_gramaje, frase_periodos, frase_precision, gramaje_vs_resultado,
-                              muestras_compartidas, muestras_vol_alto, normalidad_diaria, periodos_misma_normalidad,
+                              entradas_repetidas_grupos, muestras_vol_alto, normalidad_diaria, periodos_misma_normalidad,
                               porcentaje_fijo, precision_titulacion, preferencia_digitos, probabilidad_normal,
                               referencia_planta, resumen_hallazgos, semana_de, texto_p_ad)
 
@@ -227,11 +227,11 @@ def test_frase_sin_preferencia_y_otro_digito():
     assert "Ana anota el 7 un " in frase_digitos(preferencia_digitos(sietes, "centesimo"), "centesimo")
 
 
-# ---------------------------------------------------------------- muestras compartidas
+# ---------------------------------------------------------------- entradas repetidas
 
-def test_muestras_compartidas_y_por_mes():
+def test_entradas_repetidas_grupos_y_por_mes():
     datos = pd.DataFrame([
-        _muestra(1, "Entrada", "2025-07-10 06:00", 8.123, 10.5, "Ana"),     # compartida por los 3 eBOE
+        _muestra(1, "Entrada", "2025-07-10 06:00", 8.123, 10.5, "Ana"),     # repetida en los 3 eBOE
         _muestra(2, "Entrada", "2025-07-10 06:00", 8.123, 10.5, "Ana"),
         _muestra(3, "Entrada", "2025-07-10 06:00", 8.123, 10.5, "Ana"),
         _muestra(1, "Entrada", "2025-07-10 08:00", 8.0, 10.5),              # mismo vol, otro peso: no
@@ -243,14 +243,14 @@ def test_muestras_compartidas_y_por_mes():
     ])
     datos.loc[datos["fecha_hora"] == pd.Timestamp("2025-08-01 02:00"), "fecha_produccion"] = pd.Timestamp("2025-07-31")
 
-    grupos = muestras_compartidas(datos)
+    grupos = entradas_repetidas_grupos(datos)
     assert grupos["eboes"].tolist() == ["1, 2, 3", "1, 2"] and grupos["n_eboes"].tolist() == [3, 2]
 
-    por_mes = compartidas_por_mes(datos).set_index("etiqueta")
+    por_mes = repetidas_por_mes(datos).set_index("etiqueta")
     julio = por_mes.loc["Jul 2025"]
-    assert (julio["entradas"], julio["grupos"], julio["compartidas"]) == (7, 2, 5)
+    assert (julio["entradas"], julio["grupos"], julio["repetidas"]) == (7, 2, 5)
     assert julio["pct"] == pytest.approx(100 * 5 / 7)
-    assert por_mes.loc["Ago 2025", "compartidas"] == 0
+    assert por_mes.loc["Ago 2025", "repetidas"] == 0
 
 
 # ---------------------------------------------------------------- analistas
@@ -392,10 +392,10 @@ def test_resumen_hallazgos():
                             "variable_p90": 11.0}])
     precision = pd.DataFrame({"lugar": ["Entrada"], "n": [200], "mediana": [0.4], "n_mayor": [2], "pct_mayor": [1.0]})
     digitos_tabla = pd.DataFrame({"grupo": ["Ana", "Beto"], "p": [0.001, 0.5], "exceso_0_5": [0.6, 0.0]})
-    compartidas = pd.DataFrame({"entradas": [100, 100], "compartidas": [5, 15], "pct": [5.0, 15.0]})
+    repetidas = pd.DataFrame({"entradas": [100, 100], "repetidas": [5, 15], "pct": [5.0, 15.0]})
     analistas = {"p": 0.001, "alfa": 0.05, "medias": pd.DataFrame({"grupo": ["Ana", "Beto"], "media": [1.5, 1.2]})}
 
-    frases = resumen_hallazgos(lugar, analista, formas, precision, digitos_tabla, compartidas, analistas)
+    frases = resumen_hallazgos(lugar, analista, formas, precision, digitos_tabla, repetidas, analistas)
 
     assert len(frases) == 5
     assert frases[0] == ("Conviven dos formas de pesar: se pesan a 5 g fijo el 1 % de las de entrada y el 20 % de las "

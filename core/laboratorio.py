@@ -11,8 +11,8 @@ análisis de fruta: peso_muestra_g (g), vol_ml (mL de titulante), blanco_ml (mL)
 - Precisión de la titulación: error relativo de lectura = 0,05 mL / (vol_ml − blanco_ml).
 - Preferencia de dígitos: frecuencia del primer decimal y del último dígito (centésimo) de vol_ml por
   analista, con chi² contra la uniforme (cada dígito, 10 %), y pares contra impares.
-- Muestras compartidas: el mismo peso y volumen, a la misma hora, en la Entrada de más de un eBOE (una
-  sola titulación anotada para varias máquinas).
+- Entradas repetidas: el mismo peso y volumen, a la misma hora, en la Entrada de más de un eBOE. Cada eBOE
+  tiene su propia muestra de entrada: si dan lo mismo, lo más probable es que se haya copiado (core.repetidas).
 - Analistas: ANOVA de dos factores (analista + bloque eBOE × semana) para comparar analistas que
   trabajaron sobre el mismo eBOE en la misma semana, con medias ajustadas por bloque.
 - Normalidad: un valor por día de producción y los períodos con la misma normalidad.
@@ -432,21 +432,21 @@ def frase_digitos(tabla: pd.DataFrame, posicion: str, alfa: float = ALFA) -> str
     return texto
 
 
-# ---------------------------------------------------------------- muestras compartidas
+# ---------------------------------------------------------------- entradas repetidas
 
-def muestras_compartidas(datos: pd.DataFrame) -> pd.DataFrame:
+def entradas_repetidas_grupos(datos: pd.DataFrame) -> pd.DataFrame:
     """Grupos de muestras de Entrada con la misma fecha_hora, peso_muestra_g y vol_ml en más de un eBOE.
 
-    Es muy poco probable que dos frutas distintas den exactamente el mismo peso y volumen: lo más
-    probable es que se tituló una sola muestra y se anotó para varios eBOE.
+    Cada eBOE tiene su propia muestra de entrada y es muy poco probable que dos frutas distintas den exactamente
+    el mismo peso y volumen: lo más probable es que se haya copiado el dato de un eBOE a otro.
     Devuelve una fila por grupo: fecha_hora, fecha_produccion, peso_muestra_g, vol_ml, eboes ("1, 2"),
     n_eboes y analistas.
     """
     entradas = datos[datos["lugar"] == "Entrada"].dropna(subset=["peso_muestra_g", "vol_ml"])
     claves = ["fecha_hora", "peso_muestra_g", "vol_ml"]
-    compartidas = entradas[entradas.groupby(claves)["eboe"].transform("nunique") > 1]
+    repetidas = entradas[entradas.groupby(claves)["eboe"].transform("nunique") > 1]
     filas = []
-    for (fecha_hora, peso, vol), sub in compartidas.groupby(claves, sort=True):
+    for (fecha_hora, peso, vol), sub in repetidas.groupby(claves, sort=True):
         filas.append({"fecha_hora": fecha_hora, "fecha_produccion": sub["fecha_produccion"].iloc[0],
                       "peso_muestra_g": peso, "vol_ml": vol,
                       "eboes": ", ".join(str(e) for e in sorted(sub["eboe"].unique())),
@@ -456,23 +456,23 @@ def muestras_compartidas(datos: pd.DataFrame) -> pd.DataFrame:
                                         "n_eboes", "analistas"])
 
 
-def compartidas_por_mes(datos: pd.DataFrame) -> pd.DataFrame:
-    """Cantidad y % de muestras de Entrada que están en un grupo compartido, por mes de producción.
+def repetidas_por_mes(datos: pd.DataFrame) -> pd.DataFrame:
+    """Cantidad y % de muestras de Entrada repetidas en más de un eBOE, por mes de producción.
 
-    Columnas: mes, etiqueta ("Jul 2025"), entradas (muestras de Entrada del mes), grupos (grupos
-    compartidos), compartidas (muestras dentro de esos grupos) y pct (compartidas / entradas, %).
+    Columnas: mes, etiqueta ("Jul 2025"), entradas (muestras de Entrada del mes), grupos (grupos de
+    entradas repetidas), repetidas (muestras dentro de esos grupos) y pct (repetidas / entradas, %).
     """
     entradas = datos[datos["lugar"] == "Entrada"].dropna(subset=["peso_muestra_g", "vol_ml"])
     claves = ["fecha_hora", "peso_muestra_g", "vol_ml"]
     eboes_por_grupo = entradas.groupby(claves)["eboe"].transform("nunique")
-    entradas = entradas.assign(mes=mes_de(entradas["fecha_produccion"]), compartida=eboes_por_grupo > 1)
+    entradas = entradas.assign(mes=mes_de(entradas["fecha_produccion"]), repetida=eboes_por_grupo > 1)
     filas = []
     for mes, sub in entradas.groupby("mes", sort=True):
-        compartidas = sub[sub["compartida"]]
+        repetidas = sub[sub["repetida"]]
         filas.append({"mes": mes, "etiqueta": etiqueta_mes(mes), "entradas": len(sub),
-                      "grupos": len(compartidas.drop_duplicates(claves)), "compartidas": len(compartidas),
-                      "pct": 100 * len(compartidas) / len(sub)})
-    return pd.DataFrame(filas, columns=["mes", "etiqueta", "entradas", "grupos", "compartidas", "pct"])
+                      "grupos": len(repetidas.drop_duplicates(claves)), "repetidas": len(repetidas),
+                      "pct": 100 * len(repetidas) / len(sub)})
+    return pd.DataFrame(filas, columns=["mes", "etiqueta", "entradas", "grupos", "repetidas", "pct"])
 
 
 # ---------------------------------------------------------------- analistas
@@ -701,14 +701,14 @@ def frase_gramaje(regresion: dict, alfa: float = ALFA) -> str:
 # ---------------------------------------------------------------- resumen
 
 def resumen_hallazgos(porcentaje_lugar: pd.DataFrame, porcentaje_analista: pd.DataFrame, formas: pd.DataFrame,
-                      precision: pd.DataFrame, digitos_centesimo: pd.DataFrame, compartidas_mes: pd.DataFrame,
+                      precision: pd.DataFrame, digitos_centesimo: pd.DataFrame, repetidas_mes: pd.DataFrame,
                       analistas_salida: dict, alfa: float = ALFA) -> list[str]:
     """Las 5 frases principales de la página, para el informe.
 
     porcentaje_lugar: % de 5 g fijo por lugar (porcentaje_fijo() con una sola categoría: lugar, n, n_fijo, pct_fijo);
     porcentaje_analista: porcentaje_fijo(datos, "analista"); formas: comparar_formas(); precision:
-    precision_titulacion(); digitos_centesimo: preferencia_digitos(datos, "centesimo"); compartidas_mes:
-    compartidas_por_mes(); analistas_salida: comparar_analistas() del aceite de salida.
+    precision_titulacion(); digitos_centesimo: preferencia_digitos(datos, "centesimo"); repetidas_mes:
+    repetidas_por_mes(); analistas_salida: comparar_analistas() del aceite de salida.
     """
     frases = []
 
@@ -743,12 +743,12 @@ def resumen_hallazgos(porcentaje_lugar: pd.DataFrame, porcentaje_analista: pd.Da
             frase += f", y {_lista(nombres)} {verbo} el último dígito de los mL a 0 o 5"
         frases.append(frase + ".")
 
-    # 4. Muestras de entrada compartidas
-    if not compartidas_mes.empty and compartidas_mes["entradas"].sum() > 0:
-        pct = 100 * compartidas_mes["compartidas"].sum() / compartidas_mes["entradas"].sum()
+    # 4. Entradas repetidas en varios eBOE (posible copia)
+    if not repetidas_mes.empty and repetidas_mes["entradas"].sum() > 0:
+        pct = 100 * repetidas_mes["repetidas"].sum() / repetidas_mes["entradas"].sum()
         frases.append(f"El {numero(pct, 1)} % de las muestras de entrada está anotado igual en más de un eBOE "
-                      f"(máximo mensual {numero(compartidas_mes['pct'].max(), 1)} %): en esos casos las eficiencias de "
-                      "los eBOE no son independientes.")
+                      f"(máximo mensual {numero(repetidas_mes['pct'].max(), 1)} %): cada eBOE tiene su propia entrada, "
+                      "así que lo más probable es que se hayan copiado; quedan fuera de las comparaciones entre eBOE.")
 
     # 5. Analistas: si el que más da es también el que más pesa a 5 g en la salida, y las muestras de 5 g
     # dan más, parte de la diferencia es por el gramaje y no por el analista.

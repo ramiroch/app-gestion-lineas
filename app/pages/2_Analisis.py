@@ -33,9 +33,10 @@ from core.programa import (N_MINIMO, N_MINIMO_RANKING, combinaciones, de_combina
 from core.proceso import (INDICADORES_EBOE, INDICADORES_TOTALES, comparar_resumenes, filtrar_produccion,
                           resumen_proceso)
 from core.regresion import frase_pendiente, regresiones_por_grupo
+from core.repetidas import sin_entradas_repetidas
 from descargas import Descargas
 from pestana_factores import pestana_factores
-from filtros import (barra_filtros, filtros_elegidos, planta_elegida, produccion_planta, rango_planta,
+from filtros import (barra_filtros, casilla_repetidas, filtros_elegidos, planta_elegida, produccion_planta, rango_planta,
                      tabla_emulsion_planta, tabla_planta, toneladas_planta)
 from graficos import (barras_uso, boxplot, boxplot_temporadas, burbujas, columnas_mensuales, combinaciones_de_puntos,
                       contorno, dispersion_por_eboe, histograma,
@@ -102,6 +103,11 @@ def pestana_periodo(datos: pd.DataFrame, registro: Descargas) -> None:
     registro.grafico(histograma(datos), "Distribución del aceite en fruta")
 
     st.subheader("Aceite en fruta por eBOE y lugar")
+    incluir = casilla_repetidas("periodo_repetidas")
+    datos = sin_entradas_repetidas(datos, incluir)
+    salidas = datos[datos["lugar"] == "Salida"]
+    if not incluir:
+        st.caption("Sin las entradas repetidas en varios eBOE (posible copia) ni sus salidas.")
     registro.grafico(boxplot(datos), "Aceite en fruta por eBOE y lugar")
     st.caption("Caja: Q1 a Q3 con la mediana. Bigotes: hasta el último valor dentro de los límites IQR. "
                "Círculos abiertos: outliers (se marcan, no se borran). El N de cada caja está en su tooltip.")

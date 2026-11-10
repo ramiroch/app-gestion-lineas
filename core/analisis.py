@@ -26,7 +26,7 @@ COLUMNAS = ["analisis_id", "fecha_hora", "fecha_produccion", "turno", "temporada
             "proceso", "eboe", "lugar", "analista", "aceite_fruta", "eficiencia_par", "programa", "tph",
             "caudal_fase_pesada", "rallado", "peso_muestra_g", "vol_ml", "blanco_ml", "normalidad", "n_frutos",
             "peso_fruta_kg", "calidad", "fruta", "programa_plc", "ton_set_plc", "ton_calc_plc",
-            "horometro_plc"]
+            "horometro_plc", "revisar"]
 TIPO_EMULSION = "emulsión"
 COLUMNAS_EMULSION = ["analisis_id", "fecha_hora", "fecha_produccion", "turno", "temporada", "proceso_id",
                      "proceso", "eboe", "analista", "aceite_emulsion", "brix", "ph", "programa", "tph",
@@ -113,7 +113,8 @@ def tabla_analisis(sesion: Session, planta_id: int) -> pd.DataFrame:
     fecha_hora, y queda vacía si falta una de las dos; programa y tph salen de la lectura
     de operación del mismo eBOE y fecha_hora (si la hay). Los datos crudos de la titulación
     (peso_muestra_g, vol_ml, blanco_ml, normalidad) y de la fruta (n_frutos, peso_fruta_kg, calidad) van tal
-    como se cargaron, para las páginas de laboratorio y factores.
+    como se cargaron, para las páginas de laboratorio y factores. revisar: motivos del análisis;
+    entrada_repetida: la entrada del par está repetida en otro eBOE (core.repetidas), en las dos filas del par.
     """
     planta, filas = _leer(sesion, planta_id, LUGARES)
     for fila in filas:
@@ -125,9 +126,21 @@ def tabla_analisis(sesion: Session, planta_id: int) -> pd.DataFrame:
         fila["n_frutos"], fila["peso_fruta_kg"], fila["calidad"] = a.n_frutos, a.peso_fruta_kg, a.calidad
         fila["fruta"] = a.fruta
         fila["aceite_fruta"] = aceite_en_fruta(planta, a.vol_ml, a.blanco_ml, a.normalidad, a.peso_muestra_g)
+        fila["revisar"] = a.revisar
     tabla = unir_plc(_a_tabla(filas, COLUMNAS), lecturas_plc(sesion, planta_id))
     tabla["eficiencia_par"] = _eficiencias_de_pares(tabla)
+    tabla["entrada_repetida"] = _entradas_repetidas(tabla)
     return tabla.drop(columns="_equipo_id").sort_values(["fecha_hora", "eboe", "lugar"], ignore_index=True)
+
+
+def _entradas_repetidas(tabla: pd.DataFrame) -> pd.Series:
+    """True en las dos filas (entrada y salida) del par cuya entrada tiene la marca de entrada repetida."""
+    from core.repetidas import REVISAR_ENTRADA_REPETIDA
+    marcada = (tabla["lugar"] == "Entrada") & tabla["revisar"].fillna("").str.contains(REVISAR_ENTRADA_REPETIDA,
+                                                                                         regex=False)
+    claves = set(zip(tabla.loc[marcada, "eboe"], tabla.loc[marcada, "fecha_hora"]))
+    return pd.Series([(e, f) in claves for e, f in zip(tabla["eboe"], tabla["fecha_hora"])], index=tabla.index,
+                     dtype=bool)
 
 
 def tabla_emulsion(sesion: Session, planta_id: int) -> pd.DataFrame:

@@ -51,6 +51,13 @@ def tabla_emulsion_planta(planta_id: int):
         return tabla_emulsion(sesion, planta_id)
 
 
+def casilla_repetidas(clave: str) -> bool:
+    """Casilla "Incluir entradas repetidas" (por defecto no) para las comparaciones entre eBOE."""
+    return st.checkbox("Incluir entradas repetidas", value=False, key=clave,
+                       help="Entradas con los mismos g y mL que la de otro eBOE en la misma ronda (posible copia). Por "
+                            "defecto quedan afuera de las comparaciones entre eBOE; en los demás cálculos están.")
+
+
 def filtros_elegidos() -> Filtros | None:
     """Filtros elegidos en la barra (llamar después de barra_filtros()); None si no hay datos."""
     return st.session_state.get(CLAVE_ACTUALES)
