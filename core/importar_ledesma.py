@@ -33,7 +33,7 @@ from core.cambios import claves_protegidas
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
 from core.duplicados import separar_repetidas
-from core.models import (AnalisisScott, Cliente, LecturaOperacion, Planta, Proceso, RegistroProduccion,
+from core.models import (AnalisisScott, Cambio, Cliente, LecturaOperacion, Planta, Proceso, RegistroProduccion,
                          texto_origen)
 from core.parametros import validar_parametros
 from core.turnos import fecha_produccion
@@ -330,6 +330,8 @@ class _Cargador:
         self.registros = {(r.fecha_produccion, r.turno_id, r.proceso_id): r
                           for r in planta.registros_produccion}
         self.protegidas = claves_protegidas(sesion)      # corregidos en la app: no se pisan ni se recrean
+        self.produccion_con_cambios = set(sesion.scalars(select(Cambio.dato_id).where(
+            Cambio.tabla == "registro_produccion")))
 
     def proceso(self, temporada: int, numero: int) -> Proceso:
         """El proceso de la temporada; lo crea si no existe."""
@@ -557,9 +559,16 @@ def _importar_resumen(hoja, archivo: str, planta: Planta, turnos: dict, cargador
         try:
             proceso = cargador.proceso(datos["fecha"].year, datos["proceso"])
             turno = turnos[datos["turno"]]
+            existente = cargador.registros.get((datos["fecha"], turno.id, proceso.id))
+            if existente is not None and (existente.origen_carga == "app"
+                                          or existente.id in cargador.produccion_con_cambios):
+                reporte.agregar("Resumen", numero, "corregido en la app",
+                                "No se toca el registro de producción: se cargó o se corrigió en la app.")
+                continue
             campos = {"planta_id": planta.id, "fecha_produccion": datos["fecha"], "turno_id": turno.id,
                       "proceso_id": proceso.id, "cargado_por": CARGADO_POR,
-                      "origen": texto_origen(archivo, "Resumen", numero)}
+                      "origen": texto_origen(archivo, "Resumen", numero), "estado": "aprobado",
+                      "origen_carga": "importación", "aprobado_por": CARGADO_POR}
             for clave in PRODUCCION:
                 campos[clave] = _numero(datos, clave, notas)
             cargador.guardar("RegistroProduccion", cargador.registros,

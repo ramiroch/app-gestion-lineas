@@ -33,12 +33,13 @@ from core.parametros import ParametrosIncompletos
 from core.programa import (N_MINIMO, N_MINIMO_RANKING, combinaciones, de_combinaciones, frase_programa, frase_uso, numero_programa,
                            grilla, mejores_y_peores, rallado_por_programa, uso_de_programas)
 from core.proceso import (INDICADORES_EBOE, INDICADORES_TOTALES, comparar_resumenes, filtrar_produccion,
+                          turnos_sin_aprobar,
                           resumen_proceso)
 from core.regresion import frase_pendiente, regresiones_por_grupo
 from core.repetidas import sin_entradas_repetidas
 from descargas import Descargas
 from pestana_factores import pestana_factores
-from filtros import (barra_filtros, casilla_repetidas, filtros_elegidos, planta_elegida, produccion_planta, rango_planta,
+from filtros import (barra_filtros, casilla_repetidas, produccion_con_borradores, filtros_elegidos, planta_elegida, produccion_planta, rango_planta,
                      tabla_emulsion_planta, tabla_planta, toneladas_planta)
 from graficos import (barras_uso, boxplot, boxplot_temporadas, burbujas, columnas_mensuales, combinaciones_de_puntos,
                       contorno, dispersion_por_eboe, histograma,
@@ -647,7 +648,12 @@ def pestana_proceso(registro: Descargas) -> None:
     st.caption("Los análisis respetan todos los filtros de la barra. La producción (fruta procesada y aceite "
                "envasado) es de la planta: respeta fechas, turno y proceso, pero no eBOE ni programa. Rendimiento "
                "y eficiencia del proceso se calculan con totales del período (Σ aceite envasado / Σ fruta "
-               "procesada), no como promedio de turnos, porque por turno hay desfase de envasado.")
+               "procesada), no como promedio de turnos, porque por turno hay desfase de envasado. Solo cuentan los "
+               "registros de producción aprobados.")
+    sin_aprobar = turnos_sin_aprobar(produccion_con_borradores(planta_elegida()), filtros)
+    if sin_aprobar:
+        st.warning(f"{sin_aprobar} turno{'s' if sin_aprobar > 1 else ''} sin aprobar, no incluido"
+                   f"{'s' if sin_aprobar > 1 else ''} (se aprueban en la página Producción).")
     resumen = resumen_de(filtros)
     if not resumen["eboes"]:
         st.info("No hay pares entrada/salida con estos filtros.")

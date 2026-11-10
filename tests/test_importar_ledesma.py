@@ -340,3 +340,19 @@ def test_no_pisa_ni_recrea_lo_corregido_en_la_app(sesion, tmp_path):
     assert sesion.get(AnalisisScott, corregido.id).vol_ml == 99.0               # no se pisa
     assert contar(sesion)["AnalisisScott"] == antes                             # el borrado no vuelve
     assert reporte.cantidad("corregido en la app") == 2
+
+
+def test_produccion_importada_aprobada_y_respeta_lo_cargado_en_la_app(sesion, tmp_path):
+    ruta = escribir_excel(tmp_path / "m.xlsx")
+    importar(sesion, ruta)
+    registros = sesion.scalars(select(RegistroProduccion).order_by(RegistroProduccion.id)).all()
+    assert {(r.estado, r.origen_carga) for r in registros} == {("aprobado", "importación")}
+    de_la_app = registros[0]
+    de_la_app.origen_carga, de_la_app.estado, de_la_app.fruta_t = "app", "borrador", 999.0
+    sesion.commit()
+
+    _, reporte = importar(sesion, ruta)
+
+    sesion.refresh(de_la_app)
+    assert (de_la_app.fruta_t, de_la_app.estado) == (999.0, "borrador")          # no se pisa
+    assert reporte.cantidad("corregido en la app") == 1

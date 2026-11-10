@@ -25,6 +25,8 @@ REGLAS_MARCA_IMR = "5,MR"                  # I-MR: se marcan en la carta, no ale
 REGLAS_MARCA_POR_TURNO = "5,S"             # X̄-S y entre/dentro: se marcan, no alertan ("S": desvío del turno)
 ORIGENES_ALERTA = ("nelson", "rango")
 ESTADOS_ALERTA = ("abierta", "en análisis", "cerrada", "histórico")
+ESTADOS_PRODUCCION = ("borrador", "aprobado")
+ORIGENES_CARGA = ("importación", "app")
 ACCIONES_CAMBIO = ("edición", "borrado", "restaurado", "hora", "estado", "seguimiento")
 
 
@@ -493,8 +495,13 @@ class MuestraCentrifuga(Auditoria, Base):
 class RegistroProduccion(Auditoria, Base):
     """Producción de una planta en un turno de un día de producción (carga manual).
 
-    fruta_t: fruta procesada (t). aceite_envasado_kg, jugo_conc_kg y reproceso_kg en kg.
-    qf3 y brix_fritz: datos de laboratorio de otros archivos.
+    fruta_t: fruta procesada (t; en LEDESMA sale de la balanza de camiones). aceite_envasado_kg, jugo_conc_kg y
+    reproceso_kg en kg; jugo_conc_kg ya viene a 65 °Brix (sin conversión). qf3 y brix_fritz: datos de laboratorio
+    de otros archivos. comentario: texto libre de la carga.
+    estado: "borrador" (cargado en la app, todavía no cuenta en los KPI) o "aprobado" (por defecto: lo importado del
+    histórico entra aprobado); aprobado_por y aprobado_en. Solo los aprobados entran en los KPI y en la ponderación
+    por toneladas. origen_carga: "importación" o "app" (lo cargado en la app no lo pisa el importador). Un aprobado se
+    puede corregir con motivo (queda en Cambio) y sigue aprobado; los borradores se editan sin historial.
     Único por planta + fecha de producción + turno + proceso: un turno puede tener dos
     registros si en él termina un proceso y empieza otro. Las toneladas del turno se
     obtienen sumando sus registros (core.produccion.toneladas_turno). El proceso es
@@ -515,6 +522,11 @@ class RegistroProduccion(Auditoria, Base):
     reproceso_kg: Mapped[float | None] = mapped_column(Float)
     qf3: Mapped[float | None] = mapped_column(Float)
     brix_fritz: Mapped[float | None] = mapped_column(Float)
+    comentario: Mapped[str | None] = mapped_column(Text)
+    estado: Mapped[str | None] = mapped_column(String(10), default="aprobado")
+    aprobado_por: Mapped[str | None] = mapped_column(String(100))
+    aprobado_en: Mapped[datetime | None] = mapped_column(DateTime)
+    origen_carga: Mapped[str | None] = mapped_column(String(15), default="importación")
 
     planta: Mapped["Planta"] = relationship(back_populates="registros_produccion")
     turno: Mapped["Turno"] = relationship()
@@ -523,6 +535,18 @@ class RegistroProduccion(Auditoria, Base):
     @validates("fruta_t", "aceite_envasado_kg", "jugo_conc_kg", "reproceso_kg", "qf3", "brix_fritz")
     def validar_no_negativos(self, clave, valor):
         return _no_negativo(clave, valor)
+
+    @validates("estado")
+    def validar_estado(self, clave, valor):
+        if valor not in ESTADOS_PRODUCCION:
+            raise ValueError(f'Estado "{valor}" no válido. Usá uno de: {", ".join(ESTADOS_PRODUCCION)}.')
+        return valor
+
+    @validates("origen_carga")
+    def validar_origen_carga(self, clave, valor):
+        if valor not in ORIGENES_CARGA:
+            raise ValueError(f'Origen "{valor}" no válido. Usá uno de: {", ".join(ORIGENES_CARGA)}.')
+        return valor
 
 
 class LimitesControl(Base):

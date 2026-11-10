@@ -4,6 +4,8 @@ Liviano a propósito (solo modelos): lo usan core.edicion, core.gestion_alertas 
 vuelven a crear datos con historial en Cambio ("corregido en la app").
 - puede_editar(): el ÚNICO punto donde se decide si un usuario puede cambiar un dato. Hoy siempre sí; en la tarea 22:
   laboratorio solo lo que cargó y en las últimas 24 h, ingeniero todo.
+- puede_aprobar(): el ÚNICO punto donde se decide si un usuario puede aprobar (o devolver a borrador) un registro de
+  producción. Hoy siempre sí; en la tarea 22: solo ingeniero o jefe.
 - clave_de(), fila_completa(), desde_fila(): la clave (punto o equipo + fecha_hora) y la fila completa como texto
   JSON (para el borrado y la restauración).
 - registrar(): un registro de Cambio. claves_protegidas(): lo que los importadores no tienen que tocar.
@@ -27,6 +29,18 @@ COLUMNA_CLAVE = {"analisis_scott": "punto_muestreo_id", "lectura_operacion": "eq
 def puede_editar(usuario: str, dato) -> bool:
     """True si el usuario puede editar, borrar o restaurar el dato. Hoy siempre True (tarea 22: permisos por rol)."""
     return True
+
+
+def puede_aprobar(usuario: str, registro) -> bool:
+    """True si el usuario puede aprobar o devolver a borrador el registro de producción. Hoy siempre True (tarea 22:
+    solo ingeniero o jefe)."""
+    return True
+
+
+def exigir_aprobacion(usuario: str, registro) -> None:
+    """Error claro si puede_aprobar() dice que no."""
+    if not puede_aprobar(usuario, registro):
+        raise PermissionError(f"{usuario} no tiene permiso para aprobar registros de producción.")
 
 
 def exigir_permiso(usuario: str, dato) -> None:

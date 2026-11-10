@@ -96,9 +96,10 @@ Fuente: `Plan diario - Primera planta LEDESMA.xlsx` (App_Gestion). Bloques de 2 
 - **Listo cuando:** Un valor fuera de rango queda marcado.
 - **Notas:** 10/11: página Datos (lista por ronda con filtros, corrección, borrado de un dato o de la ronda, cambio de hora, historial y restaurar; motivo obligatorio; tabla Cambio con la fila completa de lo borrado; permiso en un único punto, core.cambios.puede_editar) y página Alertas (filtros, carta del período, datos, causa / acción / comentario, estados). Al corregir: recálculo, marca de entrada repetida y reevaluación del turno; una alerta sin datos se cierra sola con "dato corregido". El importador no pisa ni recrea lo corregido en la app. Modo prueba con APP_DB. 463 tests.
 
-## Tarea 20 · Carga de producción por turno con aprobación (20/11) — Pendiente
+## Tarea 20 · Carga de producción por turno con aprobación (20/11) — Hecha
 - **Qué hacer:** Formulario de RegistroProduccion (borrador → aprobado). Revisión de la semana.
 - **Listo cuando:** Un registro aprobado entra en los KPIs; uno en borrador no.
+- **Notas:** 10/11: core/carga_produccion.py + página Producción (cargar con el turno que acaba de terminar, rendimientos en vivo contra las últimas 2 semanas, aviso de tipeo por percentiles; aprobar y devolver a borrador con motivo; un aprobado se corrige con motivo y sigue aprobado). Permiso de aprobación en un único punto (core.cambios.puede_aprobar). KPI y ponderación por toneladas solo con aprobados; aviso de turnos sin aprobar en Proceso. El importador no pisa lo cargado en la app.
 
 ## Tarea 21 · Día colchón (23/11) — Pendiente
 - **Qué hacer:** Ponerse al día. (Verificar si es feriado.) Inicio con semáforo por equipo y alertas abiertas (checklist 12 y 13).

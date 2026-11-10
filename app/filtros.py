@@ -72,9 +72,16 @@ def toneladas_planta(planta_id: int):
 
 @st.cache_data(ttl=600)
 def produccion_planta(planta_id: int):
-    """Registros de producción de la planta (por turno y proceso), en caché 10 minutos."""
+    """Registros de producción APROBADOS de la planta (por turno y proceso), en caché 10 minutos."""
     with crear_sesion(motor()) as sesion:
         return tabla_produccion(sesion, planta_id)
+
+
+@st.cache_data(ttl=600)
+def produccion_con_borradores(planta_id: int):
+    """Registros de producción de la planta, también los borradores (para contar los turnos sin aprobar)."""
+    with crear_sesion(motor()) as sesion:
+        return tabla_produccion(sesion, planta_id, solo_aprobados=False)
 
 
 @st.cache_data(ttl=600, show_spinner="Leyendo los datos del PLC…")
@@ -170,6 +177,7 @@ def _recargar() -> None:
     toneladas_planta.clear()
     plc_planta.clear()
     produccion_planta.clear()
+    produccion_con_borradores.clear()
     rango_planta.clear()
     plantas.clear()
     centrifugas_planta.clear()

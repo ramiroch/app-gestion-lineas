@@ -52,6 +52,14 @@ def filtrar_produccion(produccion: pd.DataFrame, filtros: Filtros) -> pd.DataFra
     return produccion[seleccion].reset_index(drop=True)
 
 
+def turnos_sin_aprobar(produccion: pd.DataFrame, filtros: Filtros) -> int:
+    """Turnos (fecha de producción + turno) del período con algún registro en "borrador": no entran en los KPI.
+    produccion: core.produccion.tabla_produccion(solo_aprobados=False)."""
+    del_periodo = filtrar_produccion(produccion, filtros)
+    borradores = del_periodo[del_periodo["estado"] == "borrador"]
+    return len(borradores.drop_duplicates(["fecha_produccion", "turno"]))
+
+
 def _media_simple(serie: pd.Series) -> float | None:
     serie = serie.dropna()
     return float(serie.mean()) if len(serie) else None
