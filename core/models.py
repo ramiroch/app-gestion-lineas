@@ -687,3 +687,23 @@ class AlertaDato(Base):
     dato_id: Mapped[int]
 
     alerta: Mapped["Alerta"] = relationship(back_populates="datos")
+
+
+class TurnoEvaluado(Base):
+    """Marca de un turno de producción ya evaluado por completo para alertas (reglas, persistencia y comunes).
+
+    La evaluación completa se hace cuando el turno terminó (core.carga_scott.evaluar_turnos_cerrados); esta marca
+    evita repetirla. Como Alerta, guarda la fecha de producción y el turno porque es un evento.
+    """
+
+    __tablename__ = "turno_evaluado"
+    __table_args__ = (UniqueConstraint("planta_id", "fecha_produccion", "turno_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    planta_id: Mapped[int] = mapped_column(ForeignKey("planta.id"))
+    fecha_produccion: Mapped[date] = mapped_column(Date)
+    turno_id: Mapped[int] = mapped_column(ForeignKey("turno.id"))
+    evaluado_en: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    evaluado_por: Mapped[str] = mapped_column(String(100))
+
+    turno: Mapped["Turno"] = relationship()

@@ -24,6 +24,8 @@ n variable, core.limites.subgrupos_por_turno).
   una sola alerta de ámbito planta (comun_eboe y el comentario COMENTARIO_COMUN: algo común a los 3 eBOE, como la
   fruta del día, el laboratorio o el proceso) en lugar de una por equipo. Las de equipo quedan solo para los turnos que no son comunes. Se detecta entre los
   datos que se evalúan juntos (por eso conviene evaluar los eBOE de un turno en la misma llamada).
+- guardar_evaluados(): separa las comunes y guarda los episodios de violaciones ya calculadas (la usan
+  evaluar_nuevos() y el chequeo inmediato del formulario de carga, core.carga_scott).
 - alertas_de(): las alertas de un análisis o muestra (para mostrarlas y revisarlas si se corrige un dato).
 """
 
@@ -187,7 +189,6 @@ def evaluar_nuevos(sesion: Session, planta: Planta, variable: str, nuevos: pd.Da
     if variable not in VARIABLES_CONTROL:
         raise ValueError(f'Variable "{variable}" no válida. Usá una de: {", ".join(VARIABLES_CONTROL)}.')
     parametros = validar_parametros(planta, ["turnos_fin_episodio", "turnos_para_alertar"])
-    turnos = {t.nombre: t.id for t in planta.turnos}
     resumen = {"creadas": 0, "inmediatas": 0, "turnos": 0, "por_regla": Counter(), "sin_limites": []}
     previos_validos = previos[previos["invalido"].isna()] if previos is not None and not previos.empty else None
     lado = VARIABLES_CONTROL[variable]["lado_alerta"]
@@ -224,10 +225,27 @@ def evaluar_nuevos(sesion: Session, planta: Planta, variable: str, nuevos: pd.Da
         evaluados.append({"ambito": ambito, "equipo_id": equipo_id, "planta_id": planta_id, "subgrupos": evaluar,
                           "violaciones": violaciones,
                           "linea": pd.concat([anteriores, grupo])[["fecha_produccion", "turno", "fecha_hora"]]})
+    guardar_evaluados(sesion, planta, variable, evaluados, parametros, historico, creado_por,
+                      comunes and not nuevos.empty and (nuevos["tipo"] == TIPO_EBOE).all(), resumen)
+    return resumen
+
+
+def guardar_evaluados(sesion: Session, planta: Planta, variable: str, evaluados: list[dict], parametros: dict,
+                      historico: bool = False, creado_por: str = "evaluar_nuevos", comunes: bool = True,
+                      resumen: dict | None = None) -> dict:
+    """Guarda en episodios las violaciones ya calculadas de cada ámbito.
+
+    evaluados: [{ambito, equipo_id, planta_id, subgrupos, violaciones, linea}] (como los arma evaluar_nuevos()).
+    parametros: turnos_fin_episodio y turnos_para_alertar de la planta. comunes=True: en las variables de equipo de
+    los eBOE, las violaciones de la misma regla en todos los eBOE en el mismo turno van a una alerta de planta.
+    Devuelve el resumen (creadas, inmediatas, turnos, por_regla).
+    """
+    if resumen is None:
+        resumen = {"creadas": 0, "inmediatas": 0, "turnos": 0, "por_regla": Counter(), "sin_limites": []}
+    turnos = {t.nombre: t.id for t in planta.turnos}
     for e in evaluados:                     # antes de separar las comunes: cuentan para la persistencia del equipo
         e["violados"] = _violados(e)
-    if comunes and VARIABLES_CONTROL[variable]["nivel"] == "equipo" and not nuevos.empty \
-            and (nuevos["tipo"] == TIPO_EBOE).all():
+    if comunes and VARIABLES_CONTROL[variable]["nivel"] == "equipo":
         eboes = sesion.scalars(select(Equipo.id).join(Linea).where(Linea.planta_id == planta.id,
                                                                     Equipo.tipo == TIPO_EBOE)).all()
         comun = separar_comunes(evaluados, [ambito_de(equipo_id=e) for e in eboes], planta.id)

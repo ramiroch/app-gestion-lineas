@@ -47,3 +47,20 @@ def fecha_produccion(planta: Planta, fecha_hora: datetime) -> date:
     if fecha_hora.time() >= inicio:
         return fecha_hora.date()
     return fecha_hora.date() - timedelta(days=1)
+
+
+def fin_de_turno(planta: Planta, dia_produccion: date, turno: Turno) -> datetime:
+    """Momento en que termina el turno de ese día de producción (el minuto siguiente a hora_fin).
+
+    El turno empieza en dia_produccion a su hora_inicio, o al día siguiente si la hora es anterior al inicio del día
+    de producción (la madrugada). Si hora_fin es anterior a hora_inicio, cruza la medianoche.
+    Ejemplo LEDESMA: turno N del 24/06 (21:00–04:59) → termina el 25/06 a las 05:00.
+    """
+    inicio_dia = validar_parametros(planta, ["hora_inicio_dia"])["hora_inicio_dia"]
+    inicio = datetime.combine(dia_produccion, turno.hora_inicio)
+    if turno.hora_inicio < inicio_dia:
+        inicio += timedelta(days=1)
+    fin = datetime.combine(inicio.date(), turno.hora_fin)
+    if fin < inicio:
+        fin += timedelta(days=1)
+    return fin + timedelta(minutes=1)

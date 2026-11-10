@@ -6,7 +6,7 @@ import pytest
 
 from core.models import Planta, Turno
 from core.parametros import ParametrosIncompletos
-from core.turnos import fecha_produccion, turno_de
+from core.turnos import fecha_produccion, fin_de_turno, turno_de
 
 
 @pytest.fixture
@@ -69,3 +69,10 @@ def test_hora_sin_turno_o_en_dos_turnos(planta):
 def test_fecha_produccion_sin_hora_de_inicio():
     with pytest.raises(ParametrosIncompletos, match="hora de inicio del día"):
         fecha_produccion(Planta(nombre="Citromax"), datetime(2025, 7, 10, 8, 0))
+
+
+def test_fin_de_turno(planta):
+    m, t, n = planta.turnos
+    assert fin_de_turno(planta, date(2025, 6, 24), m) == datetime(2025, 6, 24, 13, 0)
+    assert fin_de_turno(planta, date(2025, 6, 24), t) == datetime(2025, 6, 24, 21, 0)
+    assert fin_de_turno(planta, date(2025, 6, 24), n) == datetime(2025, 6, 25, 5, 0)     # cruza la medianoche
