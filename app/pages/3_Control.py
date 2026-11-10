@@ -14,6 +14,8 @@ core/capacidad.py, y los gráficos en app/graficos.py.
 import pandas as pd
 import streamlit as st
 
+from cartel import cartel_modo_prueba
+
 from core.analisis import filtrar, filtros_sin_periodo
 from core.capacidad import NO_APLICA, VARIABLES_CAPACIDAD, comparar_equipos, datos_capacidad, evaluar_capacidad
 from core.control import POR_MUESTRA, POR_TURNO, VARIABLES, carta_de_control, frase_control, muestras_de
@@ -314,6 +316,7 @@ def pestana_cartas(registro: Descargas) -> None:
 # ---------------------------------------------------------------- página
 
 st.set_page_config(page_title="Gráficos de control", layout="wide")
+cartel_modo_prueba()
 st.title("Gráficos de control")
 
 datos = barra_filtros()

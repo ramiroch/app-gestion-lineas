@@ -100,7 +100,7 @@ Fuente: `Plan diario - Primera planta LEDESMA.xlsx` (App_Gestion). Bloques de 2 
 - **Listo cuando:** Un registro aprobado entra en los KPIs; uno en borrador no.
 
 ## Tarea 21 · Día colchón (23/11) — Pendiente
-- **Qué hacer:** Ponerse al día. (Verificar si es feriado.)
+- **Qué hacer:** Ponerse al día. (Verificar si es feriado.) Inicio con semáforo por equipo y alertas abiertas (checklist 12 y 13).
 - **Listo cuando:** Nada atrasado.
 
 ## Tarea 22 · Usuarios y roles básicos (24/11) — Pendiente
@@ -122,3 +122,6 @@ Fuente: `Plan diario - Primera planta LEDESMA.xlsx` (App_Gestion). Bloques de 2 
 ## Tarea 26 · Entrega: LEDESMA lista (v0.1) (30/11) — Pendiente
 - **Qué hacer:** Checklist de aceptación, video de demo, tag v0.1.
 - **Listo cuando:** Checklist completo y v0.1 en GitHub.
+
+## Pendientes fuera del 30/11
+- Formulario de carga de centrífugas (para la temporada 2027).

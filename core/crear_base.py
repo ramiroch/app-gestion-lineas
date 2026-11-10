@@ -6,7 +6,7 @@ Hacé una copia de data/app.db antes, por las dudas.
 
 from sqlalchemy import Engine, inspect, text
 
-from core.db import RUTA_BASE, crear_motor
+from core.db import crear_motor, ruta_base
 from core.models import Base
 
 
@@ -50,5 +50,5 @@ if __name__ == "__main__":
     motor = crear_motor()
     agregadas = agregar_columnas_nuevas(motor)
     crear_tablas(motor)
-    print(f"Tablas creadas en {RUTA_BASE}")
+    print(f"Tablas creadas en {ruta_base()}")
     print(f"Columnas agregadas: {', '.join(agregadas)}" if agregadas else "No había columnas nuevas.")

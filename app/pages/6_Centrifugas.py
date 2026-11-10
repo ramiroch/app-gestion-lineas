@@ -10,6 +10,8 @@ Solo muestra: la lógica está en core/analisis_centrifugas.py y los rangos en R
 import pandas as pd
 import streamlit as st
 
+from cartel import cartel_modo_prueba
+
 from core.analisis import filtrar
 from core.analisis_centrifugas import (A_DEFINIR, CALCULADO, NO_APLICA, ORDEN_EQUIPOS, PRIMARIA, PULIDORA, RECIRCULADO,
                                        SIN_DATOS, VARIABLES, agua_por_eboe, con_motivo, filtrar_centrifugas, motivos,
@@ -306,6 +308,7 @@ def pestana_revisar(registro: Descargas) -> None:
 # ---------------------------------------------------------------- página
 
 st.set_page_config(page_title="Centrífugas", layout="wide")
+cartel_modo_prueba()
 st.title("Centrífugas de aceite")
 
 datos = barra_filtros()

@@ -12,6 +12,8 @@ from dataclasses import replace
 import pandas as pd
 import streamlit as st
 
+from cartel import cartel_modo_prueba
+
 from core.analisis import filtrar
 from core.formato import numero
 from core.laboratorio import (DIAS_MISMA_NORMALIDAD, ERROR_MAXIMO_PCT, N_MINIMO_DIGITOS, PESO_FIJO, POSICIONES,
@@ -372,6 +374,7 @@ def pestana_normalidad(datos: pd.DataFrame, registro: Descargas) -> None:
 # ---------------------------------------------------------------- página
 
 st.set_page_config(page_title="Confiabilidad del laboratorio", layout="wide")
+cartel_modo_prueba()
 st.title("Confiabilidad del laboratorio")
 
 datos = barra_filtros()

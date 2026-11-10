@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 import pandas as pd
 import streamlit as st
 
+from cartel import cartel_modo_prueba
+
 from core.carga_scott import (CALIDADES, PROGRAMAS, RALLADOS, RESULTADOS, calcular_ronda, cambios_de_alertas,
                               contexto_validacion, estado_alertas, evaluar_turnos_cerrados, guardar_ronda,
                               percentiles_historicos, rangos_resultados, semaforo, validar_ronda, valores_por_defecto)
@@ -35,6 +37,7 @@ CAMPOS = {
 TITULOS = {"entrada": "Entrada", "salida": "Salida", "emulsion": "Emulsión", "operacion": "Operación"}
 ANCHO = 5                         # columnas por fila (la fila más larga: la entrada)
 
+cartel_modo_prueba()
 st.title("Carga Scott")
 
 

@@ -3,6 +3,8 @@
 import pandas as pd
 import streamlit as st
 
+from cartel import cartel_modo_prueba
+
 from core.consultas import detalle_planta, filas_equipos, listar_clientes, listar_plantas
 from core.db import crear_motor, crear_sesion
 
@@ -57,6 +59,7 @@ def tabla_equipos(equipos: list[dict]):
 
 
 st.set_page_config(page_title="Planta", layout="wide")
+cartel_modo_prueba()
 st.title("Planta")
 
 clientes = leer(listar_clientes)

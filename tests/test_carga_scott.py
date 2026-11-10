@@ -216,6 +216,31 @@ def test_turno_cerrado_se_evalua_una_sola_vez(sesion):
     assert len(sesion.scalars(select(TurnoEvaluado)).all()) == 1 and len(sesion.scalars(select(Alerta)).all()) == 2
 
 
+def test_inmediata_no_confirmada_al_cierre_del_turno(sesion):
+    planta = _planta(sesion)
+    malo, bueno = {1: 30.0}, {1: 10.0}                                 # eficiencia 70 % y 90 %
+    for hora, salida in ((6, malo), (8, malo), (10, bueno), (12, bueno)):
+        guardar_ronda(sesion, planta, ronda(sesion, datetime(2026, 7, 1, hora, 10), salida_ml=salida), "Ramiro",
+                      ahora=datetime(2026, 7, 1, hora, 20))
+    (alerta,) = sesion.scalars(select(Alerta)).all()                   # inmediata a las 08:10 (promedio 70)
+    assert alerta.inmediata and alerta.confirmada is None
+    evaluar_turnos_cerrados(sesion, planta, datetime(2026, 7, 1, 13, 5), "Ramiro")
+    sesion.refresh(alerta)                                             # turno completo: promedio 80 (no pasa 77)
+    assert (alerta.confirmada, alerta.comentario, alerta.estado) == (False, "no confirmada al cierre del turno",
+                                                                     "abierta")
+    assert len(sesion.scalars(select(Alerta)).all()) == 1              # no se borra ni se crea otra
+
+
+def test_inmediata_confirmada_al_cierre_del_turno(sesion):
+    planta = _planta(sesion)
+    for hora in (6, 8):
+        guardar_ronda(sesion, planta, ronda(sesion, datetime(2026, 7, 1, hora, 10), salida_ml={1: 30.0}), "Ramiro",
+                      ahora=datetime(2026, 7, 1, hora, 20))
+    evaluar_turnos_cerrados(sesion, planta, datetime(2026, 7, 1, 13, 5), "Ramiro")
+    (alerta,) = [a for a in sesion.scalars(select(Alerta)) if a.regla == "1"]
+    assert (alerta.confirmada, alerta.comentario) == (True, None)
+
+
 def test_contexto_ve_lo_ya_cargado(sesion):
     planta = _planta(sesion)
     datos = ronda(sesion, datetime(2026, 7, 1, 6, 10))

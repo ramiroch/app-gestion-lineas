@@ -21,6 +21,8 @@ from dataclasses import replace
 import pandas as pd
 import streamlit as st
 
+from cartel import cartel_modo_prueba
+
 from core.analisis import (ATAJO_PERSONALIZADO, FUENTES, atajos, con_fuente, filtrar, filtros_sin_periodo, opciones, pares_con_emulsion,
                            rango_de_atajo)
 from core.comparaciones import comparar_grupos, frase_resultado
@@ -688,6 +690,7 @@ def pestana_proceso(registro: Descargas) -> None:
 # ---------------------------------------------------------------- página
 
 st.set_page_config(page_title="Análisis", layout="wide")
+cartel_modo_prueba()
 st.title("Análisis de aceite y eficiencia")
 
 datos = barra_filtros()

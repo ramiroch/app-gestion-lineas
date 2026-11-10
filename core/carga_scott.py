@@ -17,7 +17,9 @@ blanco es el de la planta (blanco_ml). Formato de la ronda (diccionario):
 - chequeo_inmediato(): regla 1 más allá de sigma_alerta_inmediata (lado malo) en el turno en curso, si tiene 2
   rondas o más.
 - evaluar_turnos_cerrados(): evaluación completa (reglas_alerta, persistencia, comunes) de los turnos que ya
-  terminaron y no se evaluaron; los marca en TurnoEvaluado.
+  terminaron y no se evaluaron; los marca en TurnoEvaluado. Las alertas inmediatas de ese turno se confirman con el
+  promedio completo (confirmar_inmediatas): si ya no lo violan, quedan con confirmada = no y el comentario
+  NO_CONFIRMADA (no se borran).
 """
 
 from collections import Counter
@@ -56,6 +58,7 @@ MINUTOS_FUTURO = 10                      # una ronda más allá de ahora + 10 mi
 DIAS_TURNOS_CERRADOS = 14                # se buscan turnos sin evaluar en los últimos 14 días
 DIAS_PREVIOS = 10                        # datos anteriores para las reglas que miran hacia atrás (14 turnos)
 RONDAS_INMEDIATO = 2
+NO_CONFIRMADA = "no confirmada al cierre del turno"
 
 # Resultado → nombre, unidad, decimales y rango de RangoReferencia (variable, punto o equipo)
 RESULTADOS = {
@@ -443,18 +446,9 @@ def chequeo_inmediato(sesion: Session, planta: Planta, fecha_hora: datetime, cre
         del_turno = serie[(serie["fecha_produccion"] == dia) & (serie["turno"] == turno) & serie["invalido"].isna()]
         evaluados = []
         for ambito, grupo in subgrupos_por_turno(del_turno).groupby("ambito", sort=False):
-            rondas = del_turno[del_turno["ambito"] == ambito]["fecha_hora"].nunique()
-            equipo_id = None if pd.isna(grupo["equipo_id"].iloc[0]) else int(grupo["equipo_id"].iloc[0])
-            planta_id = None if equipo_id is not None else int(grupo["planta_id"].iloc[0])
-            fruta = grupo["fruta"].iloc[0]
-            limites = limites_vigentes(sesion, variable, fruta, equipo_id, planta_id)
-            if (rondas < RONDAS_INMEDIATO or limites is None or limites.tipo_carta not in POR_TURNO
-                    or limites.sigma_alerta_inmediata is None or 1 not in leer_reglas(limites.reglas_alerta)[0]):
+            if del_turno[del_turno["ambito"] == ambito]["fecha_hora"].nunique() < RONDAS_INMEDIATO:
                 continue
-            violaciones = [v | {"origen": ORIGEN_NELSON, "limites_id": limites.id} for v in violaciones_por_turno(
-                grupo, None, limites.lc, limites.sigma, "1", limites.tipo_carta, limites.sigma_dentro, None,
-                VARIABLES_CONTROL[variable]["lado_alerta"], limites.sigma_alerta_inmediata)
-                if v["alerta"] and v["inmediata"]]
+            equipo_id, planta_id, violaciones = _violaciones_inmediatas(sesion, variable, grupo)
             if violaciones:
                 linea = serie[serie["ambito"] == ambito][["fecha_produccion", "turno", "fecha_hora"]]
                 linea = linea.groupby(["fecha_produccion", "turno"], as_index=False)["fecha_hora"].min()
@@ -464,6 +458,51 @@ def chequeo_inmediato(sesion: Session, planta: Planta, fecha_hora: datetime, cre
             guardar_evaluados(sesion, planta, variable, evaluados, parametros, creado_por=creado_por,
                               comunes=(del_turno["tipo"] == TIPO_EBOE).all(), resumen=resumen)
     return resumen
+
+
+def _violaciones_inmediatas(sesion: Session, variable: str, grupo: pd.DataFrame) -> tuple:
+    """(equipo_id, planta_id, violaciones) de la regla 1 inmediata (más allá de sigma_alerta_inmediata de los límites
+    vigentes, del lado malo) en el subgrupo de un ámbito y un turno. Sin violaciones si no hay límites por turno, no
+    tienen sigma_alerta_inmediata o la regla 1 no alerta en esa variable."""
+    equipo_id = None if pd.isna(grupo["equipo_id"].iloc[0]) else int(grupo["equipo_id"].iloc[0])
+    planta_id = None if equipo_id is not None else int(grupo["planta_id"].iloc[0])
+    limites = limites_vigentes(sesion, variable, grupo["fruta"].iloc[0], equipo_id, planta_id)
+    if (limites is None or limites.tipo_carta not in POR_TURNO or limites.sigma_alerta_inmediata is None
+            or 1 not in leer_reglas(limites.reglas_alerta)[0]):
+        return equipo_id, planta_id, []
+    violaciones = [v | {"origen": ORIGEN_NELSON, "limites_id": limites.id} for v in violaciones_por_turno(
+        grupo, None, limites.lc, limites.sigma, "1", limites.tipo_carta, limites.sigma_dentro, None,
+        VARIABLES_CONTROL[variable]["lado_alerta"], limites.sigma_alerta_inmediata) if v["alerta"] and v["inmediata"]]
+    return equipo_id, planta_id, violaciones
+
+
+def confirmar_inmediatas(sesion: Session, planta: Planta, series: dict, dia, turno: str) -> list[Alerta]:
+    """Revisa con el promedio completo del turno cerrado las alertas inmediatas de ese turno todavía sin revisar
+    (confirmada vacía). Confirmada: el promedio del turno completo sigue más allá de sigma_alerta_inmediata (en una
+    alerta común de planta, en todos los eBOE). Si no, confirmada = no y se agrega el comentario NO_CONFIRMADA; la
+    alerta no se borra. Devuelve las alertas revisadas."""
+    turno_id = next(t.id for t in planta.turnos if t.nombre == turno)
+    alertas = sesion.scalars(select(Alerta).where(
+        Alerta.inmediata.is_(True), Alerta.confirmada.is_(None), Alerta.origen == ORIGEN_NELSON,
+        Alerta.fecha_produccion == dia, Alerta.turno_id == turno_id)).all()
+    for alerta in alertas:
+        serie = series.get(alerta.variable)
+        del_turno = serie[(serie["fecha_produccion"] == pd.Timestamp(dia)) & (serie["turno"] == turno)
+                          & serie["invalido"].isna()] if serie is not None else pd.DataFrame()
+        if del_turno.empty:
+            ambitos = []
+        elif alerta.comun_eboe:
+            ambitos = sorted(set(del_turno.loc[del_turno["tipo"] == TIPO_EBOE, "ambito"]))
+        else:
+            ambitos = [alerta.ambito]
+        sigue = bool(ambitos) and all(
+            _violaciones_inmediatas(sesion, alerta.variable, subgrupos_por_turno(del_turno[del_turno["ambito"] == a]))[2]
+            if (del_turno["ambito"] == a).any() else False for a in ambitos)
+        alerta.confirmada = sigue
+        if not sigue:
+            alerta.comentario = NO_CONFIRMADA if not alerta.comentario else f"{alerta.comentario}; {NO_CONFIRMADA}"
+    sesion.commit()
+    return list(alertas)
 
 
 def turnos_cerrados_sin_evaluar(sesion: Session, planta: Planta, ahora: datetime,
@@ -502,6 +541,7 @@ def evaluar_turnos_cerrados(sesion: Session, planta: Planta, ahora: datetime, ev
                 continue
             previos = serie[serie["fecha_hora"] < nuevos["fecha_hora"].min()]
             evaluar_nuevos(sesion, planta, variable, nuevos, previos, historico=False, creado_por=evaluado_por)
+        confirmar_inmediatas(sesion, planta, series, dia, turno)
         sesion.add(TurnoEvaluado(planta_id=planta.id, fecha_produccion=dia, turno_id=turnos[turno].id,
                                  evaluado_en=ahora, evaluado_por=evaluado_por))
         sesion.commit()

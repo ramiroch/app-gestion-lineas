@@ -2,4 +2,7 @@
 
 import streamlit as st
 
+from cartel import cartel_modo_prueba
+
+cartel_modo_prueba()
 st.title("Hola LEDESMA")

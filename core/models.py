@@ -620,6 +620,9 @@ class Alerta(Base):
     que cruzó. estado: uno de ESTADOS_ALERTA ("histórico" = creada al evaluar datos importados, no se gestiona).
     comun_eboe: la misma regla y variable saltó en los 3 eBOE en el mismo turno (posible causa común).
     inmediata: regla 1 más allá de Planta.sigma_alerta_inmediata σ: se creó sin esperar la persistencia.
+    confirmada: en una inmediata creada con el turno a medias, si al cerrar el turno el promedio completo la sigue
+    violando (sí) o no (no: no se borra, se le agrega el comentario "no confirmada al cierre del turno"). Vacío:
+    todavía no se revisó o no es inmediata.
     Episodio: una alerta junta los turnos seguidos que violan la misma regla (fecha_produccion y turno_id son los del
     primero; fecha_hora = inicio; fin = primera muestra del último turno que la violó; turnos_afectados). El episodio
     se cierra solo (episodio_abierto = False) tras Planta.turnos_fin_episodio turnos sin violarla; una alerta cerrada
@@ -646,6 +649,7 @@ class Alerta(Base):
     estado: Mapped[str] = mapped_column(String(15), default="abierta")
     comun_eboe: Mapped[bool] = mapped_column(Boolean, default=False)
     inmediata: Mapped[bool | None] = mapped_column(Boolean, default=False)
+    confirmada: Mapped[bool | None] = mapped_column(Boolean)
     fin: Mapped[datetime | None] = mapped_column(DateTime)
     turnos_afectados: Mapped[int | None] = mapped_column(default=1)
     episodio_abierto: Mapped[bool | None] = mapped_column(Boolean, default=True)

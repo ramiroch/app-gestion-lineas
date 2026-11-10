@@ -12,6 +12,8 @@ from dataclasses import replace
 import pandas as pd
 import streamlit as st
 
+from cartel import cartel_modo_prueba
+
 from core.analisis import filtrar
 from core.formato import numero
 from core.operacion import (FRACCION_CARGA_BAJA, NOTA_HOROMETRO, NOTA_TON, carga, especie, filtrar_plc, frase_carga,
@@ -174,6 +176,7 @@ def pestana_laboratorio(registro: Descargas) -> None:
 # ---------------------------------------------------------------- página
 
 st.set_page_config(page_title="Operación (PLC)", layout="wide")
+cartel_modo_prueba()
 st.title("Operación (PLC)")
 
 datos = barra_filtros()
