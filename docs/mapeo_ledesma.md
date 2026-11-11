@@ -92,6 +92,7 @@ Tiene tres tablas: **por turno** (Tabla1, A:V), **por día** (Tabla8, X:AR) y **
 - La fruta procesada de la planilla sale de la balanza de camiones.
 - El jugo concentrado (col. M) ya viene a 65 °Bx: es el dato que carga la planta y el que usa para calcular el rendimiento; la app no lo convierte. En la carga se llama "Jugo concentrado 65 °Bx (kg)". El rendimiento de concentrado de la app es kg de concentrado 65 °Bx por MT de fruta (M / I); la planilla lo muestra al revés (kg de fruta por kg de concentrado, col. N).
 - El concentrado se envasa por tanda: el rendimiento de concentrado por turno no es representativo. La app lo calcula por día de producción (Σ concentrado / Σ fruta de los turnos del día; un turno sin concentrado cuenta 0) o por período.
+- Balance aceite–jugo: la relación programa → concentrado no se sostiene por día; en 2026 está confundida con el mes de la temporada (con el mes como control, p = 0,13). Mecanismo según la planta: un programa agresivo en el BOE debilita la cáscara y la fruta se rompe en la copa de la extractora, donde se pierde jugo. Para medirlo hace falta un dato de las extractoras (fruta rota, jugo en cáscara) o una prueba controlada alternando programas.
 - Producción cargada en la app (página Producción, tarea 20): entra como borrador y cuenta en los KPI recién cuando se aprueba. Lo importado de esta hoja entra aprobado (origen "importación"); el importador no pisa lo cargado o corregido en la app.
 
 ## 4. Problemas de calidad de datos (el importador los tiene que reportar)
