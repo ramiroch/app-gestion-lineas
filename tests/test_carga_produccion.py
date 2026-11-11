@@ -8,8 +8,8 @@ import pytest
 from sqlalchemy import select
 
 from core.analisis import Filtros
-from core.carga_produccion import (aprobar, calcular, devolver_a_borrador, editar_registro, guardar_borrador,
-                                   lista_registros, percentiles_rendimientos, promedio_ultimas_semanas,
+from core.carga_produccion import (aprobados_del_dia, aprobar, calcular, devolver_a_borrador, editar_registro,
+                                   guardar_borrador, lista_registros, rendimientos_del_dia, percentiles_rendimientos, promedio_ultimas_semanas,
                                    turno_recien_terminado, validar, valores_por_defecto)
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
@@ -68,9 +68,10 @@ def test_rendimientos():
 def test_errores_y_aviso_de_tipeo(sesion):
     errores, _ = validar(_datos(sesion, fruta=None, aceite=-5.0))
     assert errores == ["Aceite envasado (kg) no puede ser negativo (dice -5.0).", "Falta la fruta procesada."]
-    percentiles = {"rendimiento_aceite": (4.0, 9.0), "rendimiento_concentrado": (40.0, 80.0)}
+    percentiles = {"rendimiento_aceite": (4.0, 9.0), "rendimiento_concentrado_dia": (40.0, 80.0)}
     _, avisos = validar(_datos(sesion, aceite=6500.0), percentiles=percentiles)        # 65 kg/MT: un cero de más
-    assert avisos == ["Rendimiento de aceite 65.00 kg/MT fuera de lo habitual (4.00–9.00): ¿está bien tipeado?"]
+    assert avisos == ["Rendimiento de aceite del turno 65.00 kg/MT fuera de lo habitual (4.00–9.00): ¿está bien "
+                      "tipeado?"]
     assert validar(_datos(sesion), percentiles=percentiles) == ([], [])
 
 
@@ -140,7 +141,53 @@ def test_promedio_de_dos_semanas_y_percentiles(sesion):
     guardar_borrador(sesion, planta, _datos(sesion, dia=DIA - timedelta(days=3), aceite=9000.0), "Ana", AHORA)
     promedio = promedio_ultimas_semanas(sesion, planta.id, DIA)                          # el borrador no cuenta
     assert promedio["rendimiento_aceite"] == pytest.approx(6.75) and promedio["n_rendimiento_aceite"] == 2
-    assert promedio["rendimiento_concentrado"] is None
+    assert promedio["rendimiento_concentrado_dia"] is None and promedio["n_rendimiento_concentrado_dia"] == 0
     assert percentiles_rendimientos(sesion, planta.id, minimo=2)["rendimiento_aceite"] == pytest.approx(
         (6.005, 6.995))
     assert percentiles_rendimientos(sesion, planta.id) == {}                             # menos de 50
+
+
+
+# ---------------------------------------------------------------- concentrado por día (se envasa por tanda)
+
+def _aprobado(sesion, turno, **opciones):
+    registro = guardar_borrador(sesion, _planta(sesion), _datos(sesion, turno=turno, **opciones), "Ana", AHORA)
+    aprobar(sesion, [registro.id], "Ramiro", AHORA)
+    return registro
+
+
+def test_rendimientos_del_dia():
+    del_dia = pd.DataFrame({"fruta_t": [100.0, 300.0], "aceite_envasado_kg": [650.0, None],
+                            "jugo_conc_kg": [None, 24000.0]})
+    dia = rendimientos_del_dia({"fruta_t": 100.0, "aceite_envasado_kg": 700.0, "jugo_conc_kg": None}, del_dia)
+    assert dia["rendimiento_aceite_dia"] == pytest.approx(1350 / 200)               # solo turnos con aceite
+    assert dia["rendimiento_concentrado_dia"] == pytest.approx(24000 / 500)         # sin concentrado cuenta 0
+    assert dia["turnos"] == 3
+    assert rendimientos_del_dia(None, del_dia.assign(jugo_conc_kg=None))["rendimiento_concentrado_dia"] is None
+
+
+def test_aviso_de_concentrado_con_el_dia_completo(sesion):
+    planta = _planta(sesion)
+    percentiles = {"rendimiento_concentrado_dia": (40.0, 80.0)}
+    turno_t = _datos(sesion, turno="T", fruta=100.0, conc=2000.0)                     # el turno solo: 20 kg/MT
+    assert any("concentrado 65 °Bx del día 20.00" in a for a in validar(turno_t, percentiles=percentiles)[1])
+    _aprobado(sesion, "M", fruta=300.0, conc=22000.0)                                  # con el turno M: 60 kg/MT
+    del_dia = aprobados_del_dia(sesion, planta.id, DIA)
+    assert validar(turno_t, percentiles=percentiles, del_dia=del_dia)[1] == []
+
+
+def test_percentiles_y_promedio_de_concentrado_por_dia(sesion):
+    planta = _planta(sesion)
+    for i in range(3):                                                                 # 3 días: M con tanda, T sin
+        dia = DIA - timedelta(days=i + 1)
+        _aprobado(sesion, "M", dia=dia, fruta=100.0, conc=12000.0 + 1000 * i)
+        _aprobado(sesion, "T", dia=dia, fruta=100.0, conc=None)
+    promedio = promedio_ultimas_semanas(sesion, planta.id, DIA)
+    assert promedio["rendimiento_concentrado_dia"] == pytest.approx((12000 + 13000 + 14000) / 600)   # 65
+    assert promedio["n_rendimiento_concentrado_dia"] == 3
+    assert percentiles_rendimientos(sesion, planta.id, minimo=3)["rendimiento_concentrado_dia"] == pytest.approx(
+        (60.05, 69.95))                                                               # días 60, 65 y 70
+    lista = lista_registros(sesion, planta.id).set_index(["fecha_produccion", "turno"])
+    fila = lista.loc[(DIA - timedelta(days=1), "T")]
+    assert (fila["rendimiento_aceite"], fila["rendimiento_concentrado_dia"]) == (6.5, 60.0)
+    assert fila["rendimiento_aceite_dia"] == pytest.approx(6.5)

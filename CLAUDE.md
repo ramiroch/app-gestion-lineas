@@ -36,7 +36,7 @@ Sistema de gestión para las líneas de aceite y jugo de los clientes de Brown. 
 - Paso 4 (centrífugas): las muestras marcadas como copiadas no se usan en las comparaciones entre equipos (hay una opción para incluirlas). En 2025, la fase pesada de la ESE 230 (2) es copia de la (1) en 444 de 498 muestreos.
 - Volumen por descarga: es de cada **equipo** (`Equipo.volumen_descarga_l`, hoja Equipo), igual al espacio de sólidos del tambor. Vacío = "a definir": sin él no se calcula el balance ni la pérdida en descarga; nunca un valor por defecto. Cálculos en `core/centrifugas.py` (versión física corregida; las diferencias con la planilla, en `docs/mapeo_ledesma.md` §10).
 - Objetivos: eficiencia eBOE 80–90 %; rendimiento eBOE 6,6–6,8 kg/MT; aceite en emulsión 0,80–1,10 %; °Brix emulsión ≤ 5; pH 3–7.
-- Producción por turno (página Producción, `core/carga_produccion.py`): fruta procesada MT (balanza de camiones), aceite envasado kg, jugo concentrado 65 °Bx kg (ya viene a 65 °Bx: sin conversión), reproceso kg y comentario. Se carga como "borrador" y solo cuenta en los KPI y en la ponderación por toneladas cuando está "aprobado" (`core.cambios.puede_aprobar`, punto único de permiso); un aprobado se corrige con motivo (Cambio) y sigue aprobado; los borradores se editan sin historial. Lo importado entra aprobado (origen_carga "importación") y el importador no pisa lo cargado en la app.
+- Producción por turno (página Producción, `core/carga_produccion.py`): fruta procesada MT (balanza de camiones), aceite envasado kg, jugo concentrado 65 °Bx kg (ya viene a 65 °Bx: sin conversión), reproceso kg y comentario. Se carga como "borrador" y solo cuenta en los KPI y en la ponderación por toneladas cuando está "aprobado" (`core.cambios.puede_aprobar`, punto único de permiso); un aprobado se corrige con motivo (Cambio) y sigue aprobado; los borradores se editan sin historial. Lo importado entra aprobado (origen_carga "importación") y el importador no pisa lo cargado en la app. El concentrado se envasa por tanda: su rendimiento se mira por DÍA (turnos aprobados del día + el que se carga; un turno sin concentrado cuenta 0) o por período, nunca por turno; el aceite, por turno y con el acumulado del día.
 - Nunca importes los promedios de la hoja Resumen: se recalculan desde la hoja BOE.
 - En la hoja BOE, la columna **Fecha es la fecha de producción**: una muestra de 00:00–04:59 se tomó el día siguiente. `core/importar_ledesma.py` arma la fecha_hora real comparando con la fila anterior del mismo proceso, día y temporada (los procesos se renumeran cada temporada).
 
@@ -109,6 +109,7 @@ CAF = kg de aceite por tonelada de fruta a la salida del BOE (menor es mejor).
 - Los promedios de eficiencia, rendimiento y aceite por día, turno, proceso o temporada se **ponderan por toneladas procesadas** cuando hay dato de producción; si no hay, se usa el promedio simple y se aclara en pantalla.
 - Todo gráfico, tarjeta o tabla muestra el **N** con el que se calculó y avisa cuando **N < 3**.
 - Los outliers se **marcan, nunca se borran**.
+- El período por defecto de la barra termina en el último dato de cualquier tipo (análisis, centrífugas, producción con borradores, PLC): `core.analisis.ultima_fecha_de_datos()`.
 - Todas las páginas de análisis usan la **barra de filtros global** (fechas de producción, eBOE, turno, proceso, programa).
 
 ## Reglas de código

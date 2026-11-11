@@ -6,7 +6,9 @@ período y comparación de dos períodos.
   promedio simple.
 - Totales: eficiencia eBOE global (ponderada), fruta procesada (MT) y aceite envasado (kg) sumados de
   RegistroProduccion; rendimiento de aceite = Σ aceite envasado / Σ fruta procesada (kg/MT), con los
-  turnos que tienen los dos datos; eficiencia del proceso = rendimiento / aceite en fruta de entrada.
+  turnos que tienen los dos datos; eficiencia del proceso = rendimiento / aceite en fruta de entrada;
+  rendimiento de concentrado 65 °Bx = Σ concentrado / Σ fruta de los días con concentrado (por día o período,
+  nunca por turno: se envasa por tanda).
   Se usan totales del período y no promedios de turnos: por turno hay desfase de envasado y salen
   valores mayores a 100 %.
 """
@@ -31,6 +33,7 @@ INDICADORES_TOTALES = [
     ("aceite_envasado_kg", "Aceite envasado", "kg", 0, +1),
     ("rendimiento", "Rendimiento de aceite", "kg/MT", 2, +1),
     ("eficiencia_proceso", "Eficiencia del proceso", "%", 1, +1),
+    ("rendimiento_concentrado", "Rendimiento de concentrado 65 °Bx", "kg/MT", 1, +1),
 ]
 
 
@@ -74,7 +77,8 @@ def resumen_proceso(pares: pd.DataFrame, toneladas: pd.DataFrame, produccion: pd
     Devuelve {"eboes": [dict por eBOE], "totales": dict}. Por eBOE: eboe, n (pares), aceite_entrada,
     aceite_salida, mtph, eficiencia (%) y ponderada (True si la eficiencia se ponderó por t).
     Totales: eficiencia, ponderada, n_pares, aceite_entrada, fruta_t, aceite_envasado_kg, n_turnos (con
-    fruta), rendimiento, n_turnos_rendimiento (con fruta y aceite) y eficiencia_proceso (%).
+    fruta), rendimiento, n_turnos_rendimiento (con fruta y aceite), eficiencia_proceso (%),
+    rendimiento_concentrado (kg/MT, días con concentrado) y n_dias_concentrado.
     """
     eboes = []
     for eboe, sub in pares.groupby("eboe", sort=True):
@@ -92,6 +96,13 @@ def resumen_proceso(pares: pd.DataFrame, toneladas: pd.DataFrame, produccion: pd
     con_fruta = produccion[produccion["fruta_t"] > 0]
     con_ambos = con_fruta.dropna(subset=["aceite_envasado_kg"])
     rendimiento = (con_ambos["aceite_envasado_kg"].sum() / con_ambos["fruta_t"].sum()) if len(con_ambos) else None
+    # Concentrado: se envasa por tanda, así que va por día o período (nunca por turno): Σ concentrado / Σ fruta de
+    # los días con algún concentrado cargado (un turno sin concentrado cuenta 0 dentro de su día).
+    dias_con = con_fruta.groupby("fecha_produccion")["jugo_conc_kg"].transform(lambda s: s.notna().any()) \
+        if "jugo_conc_kg" in con_fruta and len(con_fruta) else pd.Series(False, index=con_fruta.index)
+    con_concentrado = con_fruta[dias_con.astype(bool)]
+    rendimiento_concentrado = (con_concentrado["jugo_conc_kg"].fillna(0).sum() / con_concentrado["fruta_t"].sum()
+                               if len(con_concentrado) else None)
     totales = {
         "eficiencia": eficiencia["valor"], "ponderada": eficiencia["ponderada"], "n_pares": len(pares),
         "aceite_entrada": aceite_entrada,
@@ -101,6 +112,8 @@ def resumen_proceso(pares: pd.DataFrame, toneladas: pd.DataFrame, produccion: pd
         "rendimiento": float(rendimiento) if rendimiento is not None else None,
         "n_turnos_rendimiento": len(con_ambos),
         "eficiencia_proceso": (rendimiento / aceite_entrada * 100) if rendimiento is not None and aceite_entrada else None,
+        "rendimiento_concentrado": float(rendimiento_concentrado) if rendimiento_concentrado is not None else None,
+        "n_dias_concentrado": int(con_concentrado["fecha_produccion"].nunique()),
     }
     return {"eboes": eboes, "totales": totales}
 

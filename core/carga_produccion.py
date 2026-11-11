@@ -4,10 +4,14 @@ Un registro por planta + fecha de producción + turno + proceso (RegistroProducc
 balanza de camiones), aceite envasado (kg), jugo concentrado 65 °Brix (kg, ya viene a 65 °Bx: sin conversión),
 reproceso (kg) y comentario.
 - turno_recien_terminado(), valores_por_defecto(): lo que propone el formulario (el turno que acaba de terminar).
-- calcular(): rendimiento de aceite y de concentrado (kg/MT); promedio_ultimas_semanas(): el de los 14 días
-  anteriores, solo aprobados y ponderado (Σ kg / Σ MT).
-- validar(): errores (valores negativos, falta la fruta procesada, turno ya cargado) y avisos (rendimiento fuera del
-  percentil 0,5–99,5 de los aprobados: "¿está bien tipeado?").
+- calcular(): rendimientos del turno (kg/MT). rendimientos_del_dia(): los del DÍA de producción, sumando los
+  turnos aprobados del día y el que se está cargando. El concentrado se envasa por tanda: su rendimiento por turno no
+  es representativo y solo se usa por día (aviso de tipeo y comparación); el aceite se muestra por turno y con el
+  acumulado del día.
+- promedio_ultimas_semanas(): los 14 días anteriores, solo aprobados y ponderado (Σ kg / Σ MT): aceite por turno,
+  concentrado por día.
+- validar(): errores (valores negativos, falta la fruta procesada, turno ya cargado) y avisos (fuera del percentil
+  0,5–99,5 de los aprobados: aceite del turno, concentrado del día; "¿está bien tipeado?").
 - guardar_borrador(), editar_registro() (un borrador se edita sin motivo ni historial; un aprobado, con motivo en
   Cambio, y sigue aprobado), aprobar(), devolver_a_borrador() (con motivo). Permisos: core.cambios.puede_editar y
   puede_aprobar (puntos únicos).
@@ -36,6 +40,9 @@ N_MINIMO_PERCENTILES = 50
 # Rendimiento → (nombre, kg del numerador)
 RENDIMIENTOS = {"rendimiento_aceite": ("Rendimiento de aceite", "aceite_envasado_kg"),
                 "rendimiento_concentrado": ("Rendimiento de concentrado 65 °Bx", "jugo_conc_kg")}
+ACEITE, ACEITE_DIA, CONCENTRADO_DIA = "rendimiento_aceite", "rendimiento_aceite_dia", "rendimiento_concentrado_dia"
+NOMBRES = {ACEITE: "Rendimiento de aceite del turno", ACEITE_DIA: "Rendimiento de aceite del día",
+           CONCENTRADO_DIA: "Rendimiento de concentrado 65 °Bx del día"}
 
 
 def _hay(valor) -> bool:
@@ -80,6 +87,41 @@ def calcular(datos: dict) -> dict:
     return resultado
 
 
+def rendimientos_del_dia(datos: dict | None, del_dia: pd.DataFrame) -> dict:
+    """Rendimientos (kg/MT) del día de producción: los registros `del_dia` (aprobados, sin el que se carga) más
+    `datos` (el que se carga; None si no hay).
+
+    Aceite del día = Σ aceite envasado / Σ fruta de los registros con los dos datos. Concentrado del día = Σ
+    concentrado 65 °Bx / Σ fruta de todos los registros del día con fruta: un turno sin concentrado cargado cuenta
+    como 0 (se envasa por tanda); None si ningún registro del día tiene concentrado. Devuelve rendimiento_aceite_dia,
+    rendimiento_concentrado_dia y turnos (registros del día con fruta)."""
+    filas = del_dia[["fruta_t", "aceite_envasado_kg", "jugo_conc_kg"]].to_dict("records")
+    if datos is not None:
+        filas.append({c: datos.get(c) for c in ("fruta_t", "aceite_envasado_kg", "jugo_conc_kg")})
+    con_fruta = [f for f in filas if _hay(f["fruta_t"]) and f["fruta_t"] > 0]
+    con_aceite = [f for f in con_fruta if _hay(f["aceite_envasado_kg"])]
+    hay_concentrado = any(_hay(f["jugo_conc_kg"]) for f in con_fruta)
+    fruta = sum(f["fruta_t"] for f in con_fruta)
+    return {ACEITE_DIA: (sum(f["aceite_envasado_kg"] for f in con_aceite) / sum(f["fruta_t"] for f in con_aceite))
+                        if con_aceite else None,
+            CONCENTRADO_DIA: sum(f["jugo_conc_kg"] for f in con_fruta if _hay(f["jugo_conc_kg"])) / fruta
+                             if hay_concentrado else None,
+            "turnos": len(con_fruta)}
+
+
+def aprobados_del_dia(sesion, planta_id: int, dia, excluir_id: int | None = None) -> pd.DataFrame:
+    """Registros aprobados de ese día de producción (sin `excluir_id`: el que se está editando)."""
+    tabla = _aprobados(sesion, planta_id, dia, dia + timedelta(days=1))
+    return tabla[tabla["id"] != excluir_id] if excluir_id is not None else tabla
+
+
+def _por_dia(tabla: pd.DataFrame) -> pd.DataFrame:
+    """Rendimiento de concentrado de cada día (rendimientos_del_dia) de una tabla de registros aprobados."""
+    filas = [{"fecha_produccion": dia, **rendimientos_del_dia(None, sub)} for dia, sub in
+             tabla.groupby("fecha_produccion")]
+    return pd.DataFrame(filas, columns=["fecha_produccion", ACEITE_DIA, CONCENTRADO_DIA, "turnos"])
+
+
 def _aprobados(sesion, planta_id: int, desde=None, hasta=None) -> pd.DataFrame:
     consulta = select(RegistroProduccion).where(RegistroProduccion.planta_id == planta_id,
                                                 RegistroProduccion.estado == APROBADO)
@@ -87,34 +129,47 @@ def _aprobados(sesion, planta_id: int, desde=None, hasta=None) -> pd.DataFrame:
         consulta = consulta.where(RegistroProduccion.fecha_produccion >= desde)
     if hasta is not None:
         consulta = consulta.where(RegistroProduccion.fecha_produccion < hasta)
-    return pd.DataFrame([{"fecha_produccion": r.fecha_produccion, "turno_id": r.turno_id, "fruta_t": r.fruta_t,
-                          "aceite_envasado_kg": r.aceite_envasado_kg, "jugo_conc_kg": r.jugo_conc_kg}
-                         for r in sesion.scalars(consulta)],
-                        columns=["fecha_produccion", "turno_id", "fruta_t", "aceite_envasado_kg", "jugo_conc_kg"])
+    return pd.DataFrame([{"id": r.id, "fecha_produccion": r.fecha_produccion, "turno_id": r.turno_id,
+                          "fruta_t": r.fruta_t, "aceite_envasado_kg": r.aceite_envasado_kg,
+                          "jugo_conc_kg": r.jugo_conc_kg} for r in sesion.scalars(consulta)],
+                        columns=["id", "fecha_produccion", "turno_id", "fruta_t", "aceite_envasado_kg",
+                                 "jugo_conc_kg"])
 
 
 def promedio_ultimas_semanas(sesion, planta_id: int, dia, dias: int = DIAS_PROMEDIO) -> dict:
-    """Rendimientos de los `dias` días de producción anteriores a `dia`, solo con registros aprobados, ponderados:
-    Σ kg / Σ MT de los registros que tienen los dos datos. {rendimiento: valor o None, "n_<rendimiento>": turnos}."""
+    """Rendimientos de los `dias` días de producción anteriores a `dia`, solo con registros aprobados, ponderados
+    (Σ kg / Σ MT). Aceite: registros con fruta y aceite (n = turnos). Concentrado: días con concentrado, con toda la
+    fruta de esos días (rendimientos_del_dia; n = días). {rendimiento: valor o None, "n_<rendimiento>": n}."""
     tabla = _aprobados(sesion, planta_id, dia - timedelta(days=dias), dia)
-    resultado = {}
-    for clave, (_, kg) in RENDIMIENTOS.items():
-        con_dato = tabla.dropna(subset=["fruta_t", kg])
-        con_dato = con_dato[con_dato["fruta_t"] > 0]
-        resultado[clave] = con_dato[kg].sum() / con_dato["fruta_t"].sum() if not con_dato.empty else None
-        resultado[f"n_{clave}"] = len(con_dato.drop_duplicates(["fecha_produccion", "turno_id"]))
+    con_aceite = tabla.dropna(subset=["fruta_t", "aceite_envasado_kg"])
+    con_aceite = con_aceite[con_aceite["fruta_t"] > 0]
+    resultado = {ACEITE: con_aceite["aceite_envasado_kg"].sum() / con_aceite["fruta_t"].sum()
+                 if not con_aceite.empty else None,
+                 f"n_{ACEITE}": len(con_aceite.drop_duplicates(["fecha_produccion", "turno_id"]))}
+    dias_con = [sub for _, sub in tabla.groupby("fecha_produccion")
+                if rendimientos_del_dia(None, sub)[CONCENTRADO_DIA] is not None]
+    if dias_con:
+        juntos = pd.concat(dias_con)
+        con_fruta = juntos[juntos["fruta_t"] > 0]
+        resultado[CONCENTRADO_DIA] = con_fruta["jugo_conc_kg"].fillna(0).sum() / con_fruta["fruta_t"].sum()
+    else:
+        resultado[CONCENTRADO_DIA] = None
+    resultado[f"n_{CONCENTRADO_DIA}"] = len(dias_con)
     return resultado
 
 
 def percentiles_rendimientos(sesion, planta_id: int, minimo: int = N_MINIMO_PERCENTILES) -> dict:
-    """{rendimiento: (p0,5, p99,5)} de los registros aprobados (uno por registro), si hay al menos `minimo`."""
+    """{rendimiento: (p0,5, p99,5)} de los aprobados, si hay al menos `minimo` valores: aceite por registro (turno),
+    concentrado por día de producción (rendimientos_del_dia)."""
     tabla = _aprobados(sesion, planta_id)
     resultado = {}
-    for clave, (_, kg) in RENDIMIENTOS.items():
-        con_dato = tabla.dropna(subset=["fruta_t", kg])
-        valores = (con_dato[kg] / con_dato["fruta_t"])[con_dato["fruta_t"] > 0]
-        if len(valores) >= minimo:
-            resultado[clave] = tuple(np.percentile(valores, PERCENTILES))
+    con_aceite = tabla.dropna(subset=["fruta_t", "aceite_envasado_kg"])
+    aceite = (con_aceite["aceite_envasado_kg"] / con_aceite["fruta_t"])[con_aceite["fruta_t"] > 0]
+    if len(aceite) >= minimo:
+        resultado[ACEITE] = tuple(np.percentile(aceite, PERCENTILES))
+    concentrado = _por_dia(tabla)[CONCENTRADO_DIA].dropna() if not tabla.empty else pd.Series(dtype=float)
+    if len(concentrado) >= minimo:
+        resultado[CONCENTRADO_DIA] = tuple(np.percentile(concentrado, PERCENTILES))
     return resultado
 
 
@@ -131,9 +186,10 @@ def buscar_registro(sesion, planta_id: int, dia, turno_id: int, proceso_id: int 
 
 
 def validar(datos: dict, existente_id: int | None = None, editando_id: int | None = None,
-            percentiles: dict | None = None) -> tuple[list[str], list[str]]:
+            percentiles: dict | None = None, del_dia: pd.DataFrame | None = None) -> tuple[list[str], list[str]]:
     """(errores, avisos) de un registro. existente_id: el registro que ya hay para ese turno y proceso (si hay);
-    editando_id: el que se está editando (no choca consigo mismo)."""
+    editando_id: el que se está editando (no choca consigo mismo). Aviso de tipeo: el aceite del turno y el
+    concentrado del DÍA (del_dia: los otros registros aprobados del día, aprobados_del_dia) contra percentiles."""
     errores, avisos = [], []
     for campo in NUMERICOS:
         if _hay(datos.get(campo)) and datos[campo] < 0:
@@ -144,10 +200,14 @@ def validar(datos: dict, existente_id: int | None = None, editando_id: int | Non
         errores.append("La fruta procesada tiene que ser mayor que 0.")
     if existente_id is not None and existente_id != editando_id:
         errores.append("Ese turno y proceso ya están cargados: editá el registro existente.")
-    for clave, valor in calcular(datos).items():
+    del_dia = del_dia if del_dia is not None else pd.DataFrame(columns=["fruta_t", "aceite_envasado_kg",
+                                                                        "jugo_conc_kg"])
+    valores = {ACEITE: calcular(datos)[ACEITE],
+               CONCENTRADO_DIA: rendimientos_del_dia(datos, del_dia)[CONCENTRADO_DIA]}
+    for clave, valor in valores.items():
         limites = (percentiles or {}).get(clave)
         if valor is not None and limites and not limites[0] <= valor <= limites[1]:
-            avisos.append(f"{RENDIMIENTOS[clave][0]} {valor:.2f} kg/MT fuera de lo habitual ({limites[0]:.2f}–"
+            avisos.append(f"{NOMBRES[clave]} {valor:.2f} kg/MT fuera de lo habitual ({limites[0]:.2f}–"
                           f"{limites[1]:.2f}): ¿está bien tipeado?")
     return errores, avisos
 
@@ -255,8 +315,9 @@ def devolver_a_borrador(sesion, registro_id: int, motivo: str, usuario: str, aho
 # ---------------------------------------------------------------- lista
 
 def lista_registros(sesion, planta_id: int, estados=None, desde=None, hasta=None) -> pd.DataFrame:
-    """Registros de producción de la planta, del más nuevo al más viejo, con sus rendimientos. Filtros: estados y
-    días de producción desde/hasta (incluidos)."""
+    """Registros de producción de la planta, del más nuevo al más viejo, con el rendimiento de aceite del turno y
+    los del día (los aprobados del día más ese registro, rendimientos_del_dia). Filtros: estados y días de
+    producción desde/hasta (incluidos)."""
     consulta = (select(RegistroProduccion, Turno.nombre, Proceso).join(Turno, RegistroProduccion.turno_id == Turno.id)
                 .outerjoin(Proceso, RegistroProduccion.proceso_id == Proceso.id)
                 .where(RegistroProduccion.planta_id == planta_id))
@@ -267,15 +328,22 @@ def lista_registros(sesion, planta_id: int, estados=None, desde=None, hasta=None
     if hasta is not None:
         consulta = consulta.where(RegistroProduccion.fecha_produccion <= hasta)
     planta = sesion.get(Planta, planta_id)
+    aprobados = _aprobados(sesion, planta_id, desde, hasta + timedelta(days=1) if hasta else None)
+    por_dia = dict(list(aprobados.groupby("fecha_produccion")))
+    vacio = aprobados.iloc[0:0]
     filas = []
     for r, turno, proceso in sesion.execute(consulta).all():
+        valores = {c: getattr(r, c) for c in CAMPOS}
+        otros = por_dia.get(r.fecha_produccion, vacio)
+        dia = rendimientos_del_dia(valores, otros[otros["id"] != r.id])
         filas.append({"id": r.id, "fecha_produccion": r.fecha_produccion, "turno": turno,
                       "_inicio": inicio_de_turno(planta, r.fecha_produccion, r.turno),
                       "proceso": f"{proceso.temporada} · {proceso.numero}" if proceso else "",
-                      **{c: getattr(r, c) for c in CAMPOS}, **calcular({c: getattr(r, c) for c in CAMPOS}),
+                      **valores, ACEITE: calcular(valores)[ACEITE], ACEITE_DIA: dia[ACEITE_DIA],
+                      CONCENTRADO_DIA: dia[CONCENTRADO_DIA],
                       "estado": r.estado, "origen_carga": r.origen_carga, "cargado_por": r.cargado_por,
                       "aprobado_por": r.aprobado_por, "aprobado_en": r.aprobado_en})
-    columnas = ["id", "fecha_produccion", "turno", "proceso", *CAMPOS, *RENDIMIENTOS, "estado", "origen_carga",
-                "cargado_por", "aprobado_por", "aprobado_en"]
+    columnas = ["id", "fecha_produccion", "turno", "proceso", *CAMPOS, ACEITE, ACEITE_DIA, CONCENTRADO_DIA, "estado",
+                "origen_carga", "cargado_por", "aprobado_por", "aprobado_en"]
     tabla = pd.DataFrame(filas, columns=columnas + ["_inicio"])
     return tabla.sort_values("_inicio", ascending=False, ignore_index=True)[columnas]

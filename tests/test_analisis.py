@@ -206,3 +206,27 @@ def test_unir_plc_toma_la_lectura_mas_cercana_del_mismo_eboe():
     assert con_fuente(unida.assign(programa="N1"), "Laboratorio")["programa"].eq("N1").all()
     with pytest.raises(ValueError, match="Fuente desconocida"):
         con_fuente(unida, "SCADA")
+
+
+def test_ultima_fecha_de_cualquier_dato_cierra_los_atajos(sesion, planta):
+    from core.analisis import ultima_fecha_de_datos
+    from core.models import LecturaPLC, RegistroProduccion, Turno
+    from sqlalchemy import select
+    assert ultima_fecha_de_datos(sesion, planta.id) == date(2026, 7, 1)          # último análisis
+    turno = sesion.scalars(select(Turno).where(Turno.nombre == "M")).first()
+    sesion.add(RegistroProduccion(planta_id=planta.id, fecha_produccion=date(2026, 7, 3), turno_id=turno.id,
+                                  fruta_t=100.0, estado="borrador", origen_carga="app", cargado_por="prueba"))
+    sesion.commit()
+    assert ultima_fecha_de_datos(sesion, planta.id) == date(2026, 7, 3)          # producción en borrador
+    equipo = sesion.scalars(select(Equipo)).first()
+    sesion.add(LecturaPLC(equipo=equipo, fecha_hora=datetime(2026, 7, 5, 2, 0), elevador=1,   # 02:00 → día 4
+                          cargado_por="prueba"))
+    sesion.commit()
+    ultima = ultima_fecha_de_datos(sesion, planta.id)
+    assert ultima == date(2026, 7, 4)
+
+    op = opciones(tabla_analisis(sesion, planta.id), ultima)
+    assert op["ultima_fecha"] == date(2026, 7, 4) and op["temporadas"][2026] == (date(2026, 7, 1), date(2026, 7, 4))
+    assert op["temporadas"][2025][1] == date(2025, 6, 10)                       # las otras temporadas no cambian
+    assert rango_de_atajo(ATAJO_SEMANA, op) == (date(2026, 6, 28), date(2026, 7, 4))
+    assert opciones(tabla_analisis(sesion, planta.id))["ultima_fecha"] == date(2026, 7, 1)

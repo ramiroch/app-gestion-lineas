@@ -11,11 +11,12 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from core.calculos import aceite_en_emulsion, aceite_en_fruta, eficiencia_eboe
-from core.models import AnalisisScott, Equipo, LecturaOperacion, Linea, Planta, PuntoMuestreo
+from core.models import (AnalisisScott, Equipo, LecturaOperacion, LecturaPLC, Linea, MuestraCentrifuga, Planta,
+                         PuntoMuestreo, RegistroProduccion)
 from core.operacion import lecturas_plc
 from core.programa import numero_programa
 from core.turnos import fecha_produccion, turno_de
@@ -262,12 +263,33 @@ def analisis_filtrados(sesion: Session, planta_id: int, filtros: Filtros) -> pd.
     return filtrar(tabla_analisis(sesion, planta_id), filtros)
 
 
-def opciones(tabla: pd.DataFrame) -> dict:
+def ultima_fecha_de_datos(sesion: Session, planta_id: int) -> date | None:
+    """Último día de producción con algún dato de la planta: análisis Scott, muestras de centrífugas, producción
+    (también los borradores) o lecturas del PLC. None si no hay nada."""
+    planta = sesion.get(Planta, planta_id)
+    equipos = select(Equipo.id).join(Linea).where(Linea.planta_id == planta_id)
+    momentos = [
+        sesion.scalar(select(func.max(AnalisisScott.fecha_hora)).join(AnalisisScott.punto_muestreo)
+                      .where(PuntoMuestreo.equipo_id.in_(equipos))),
+        sesion.scalar(select(func.max(MuestraCentrifuga.fecha_hora)).where(MuestraCentrifuga.equipo_id.in_(equipos))),
+        sesion.scalar(select(func.max(LecturaPLC.fecha_hora)).where(LecturaPLC.equipo_id.in_(equipos))),
+    ]
+    dias = [fecha_produccion(planta, m) for m in momentos if m is not None]
+    produccion = sesion.scalar(select(func.max(RegistroProduccion.fecha_produccion))
+                               .where(RegistroProduccion.planta_id == planta_id))
+    if produccion is not None:
+        dias.append(produccion)
+    return max(dias) if dias else None
+
+
+def opciones(tabla: pd.DataFrame, ultima_fecha: date | None = None) -> dict:
     """Valores posibles de cada filtro según los datos de la tabla.
 
     Devuelve eboes, turnos (en orden M, T, N según aparecen en el día), programas,
     procesos ({"2025 · P07": proceso_id}), temporadas ({2025: (primera, última fecha)})
     y ultima_fecha (último día de producción con datos, o None si la tabla está vacía).
+    ultima_fecha (opcional, de ultima_fecha_de_datos()): el último dato de cualquier tipo; si es posterior al último
+    análisis, cierra ahí los atajos (la temporada más reciente, si es del mismo año, y el último mes y semana).
     """
     fechas = tabla["fecha_produccion"].dt.date
     por_temporada = fechas.groupby(tabla["temporada"])
@@ -275,13 +297,20 @@ def opciones(tabla: pd.DataFrame) -> dict:
     # Orden de los turnos dentro del día de producción: por la hora más temprana de cada uno,
     # contada desde el inicio del día (así N, que cruza la medianoche, queda último).
     turnos = tabla.assign(_hora=(tabla["fecha_hora"] - tabla["fecha_produccion"])).groupby("turno")["_hora"].min()
+    temporadas = {int(t): (f.min(), f.max()) for t, f in por_temporada}
+    ultima = fechas.max() if len(tabla) else None
+    if ultima_fecha is not None and (ultima is None or ultima_fecha > ultima):
+        ultima = ultima_fecha
+        if temporadas and ultima_fecha.year == max(temporadas):
+            inicio, _ = temporadas[max(temporadas)]
+            temporadas[max(temporadas)] = (inicio, ultima_fecha)
     return {
         "eboes": sorted(tabla["eboe"].unique().tolist()),
         "turnos": turnos.sort_values().index.tolist(),
         "programas": sorted(tabla["programa"].dropna().unique().tolist()),
         "procesos": {f"{t} · P{n:02d}": int(i) for t, n, i in procesos.itertuples(index=False)},
-        "temporadas": {int(t): (f.min(), f.max()) for t, f in por_temporada},
-        "ultima_fecha": fechas.max() if len(tabla) else None,
+        "temporadas": temporadas,
+        "ultima_fecha": ultima,
     }
 
 

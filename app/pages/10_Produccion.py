@@ -13,9 +13,10 @@ import pandas as pd
 import streamlit as st
 
 from cartel import cartel_modo_prueba
-from core.carga_produccion import (CAMPOS, RENDIMIENTOS, aprobar, buscar_registro, calcular, devolver_a_borrador,
-                                   editar_registro, guardar_borrador, lista_registros, percentiles_rendimientos,
-                                   promedio_ultimas_semanas, validar, valores_por_defecto)
+from core.carga_produccion import (ACEITE, ACEITE_DIA, CAMPOS, CONCENTRADO_DIA, NOMBRES, aprobados_del_dia, aprobar,
+                                   buscar_registro, calcular, devolver_a_borrador, editar_registro, guardar_borrador,
+                                   lista_registros, percentiles_rendimientos, promedio_ultimas_semanas,
+                                   rendimientos_del_dia, validar, valores_por_defecto)
 from core.db import crear_sesion
 from core.formato import numero
 from core.models import Planta
@@ -87,6 +88,7 @@ with cargar:
         estado = existente.estado if existente else None
         existente_id = existente.id if existente else None
         promedio = promedio_ultimas_semanas(sesion, planta_id, dia)
+        del_dia = aprobados_del_dia(sesion, planta_id, dia, existente_id)
     if existente_id:
         st.info(f"Ese turno y proceso ya están cargados (estado: {estado}). Estás editando ese registro"
                 + (": un aprobado se corrige con motivo y sigue aprobado." if estado == "aprobado" else "."))
@@ -101,17 +103,25 @@ with cargar:
     datos["comentario"] = st.text_input("Comentario", value=actual.get("comentario") or "",
                                         key=f"produccion_comentario_{sufijo}")
 
-    resultados = calcular(datos)
-    izquierda, derecha = st.columns(2)
-    for donde, clave in zip((izquierda, derecha), RENDIMIENTOS):
-        valor, referencia, n = resultados[clave], promedio[clave], promedio[f"n_{clave}"]
-        donde.metric(f"{RENDIMIENTOS[clave][0]} (kg/MT)", "—" if valor is None else numero(valor, 2),
+    # Aceite: del turno y acumulado del día. Concentrado: solo del día (se envasa por tanda: por turno no sirve).
+    dia_actual = rendimientos_del_dia(datos, del_dia)
+    resultados = {ACEITE: calcular(datos)[ACEITE], ACEITE_DIA: dia_actual[ACEITE_DIA],
+                  CONCENTRADO_DIA: dia_actual[CONCENTRADO_DIA]}
+    referencias = {ACEITE: (promedio[ACEITE], promedio[f"n_{ACEITE}"], "turnos"),
+                   ACEITE_DIA: (promedio[ACEITE], promedio[f"n_{ACEITE}"], "turnos"),
+                   CONCENTRADO_DIA: (promedio[CONCENTRADO_DIA], promedio[f"n_{CONCENTRADO_DIA}"], "días")}
+    for donde, clave in zip(st.columns(3), (ACEITE, ACEITE_DIA, CONCENTRADO_DIA)):
+        valor, (referencia, n, unidad_n) = resultados[clave], referencias[clave]
+        donde.metric(f"{NOMBRES[clave]} (kg/MT)", "—" if valor is None else numero(valor, 2),
                      None if valor is None or referencia is None else f"{numero(valor - referencia, 2)} contra 2 semanas")
         donde.caption("Últimas 2 semanas (aprobados): " + ("sin datos" if referencia is None else
-                                                          f"{numero(referencia, 2)} kg/MT, N = {n} turnos")
+                                                          f"{numero(referencia, 2)} kg/MT, N = {n} {unidad_n}")
                       + (" · ⚠ N < 3" if referencia is not None and n < 3 else ""))
+    st.caption(f"Del día: los turnos aprobados del {dia:%d/%m} ({len(del_dia)}) más el que estás cargando. El "
+               "concentrado se envasa por tanda: su rendimiento solo se mira por día (un turno sin concentrado cuenta "
+               "como 0 dentro del día).")
 
-    errores, avisos = validar(datos, existente_id, existente_id, percentiles_planta(planta_id))
+    errores, avisos = validar(datos, existente_id, existente_id, percentiles_planta(planta_id), del_dia)
     for error in errores:
         st.error(error)
     for aviso in avisos:
@@ -144,12 +154,14 @@ with aprobacion:
     percentiles = percentiles_planta(planta_id)
 
     def vista(tabla: pd.DataFrame) -> pd.DataFrame:
-        avisos = [" ".join(validar(fila.to_dict(), percentiles=percentiles)[1]) for _, fila in tabla.iterrows()]
+        with crear_sesion(motor()) as sesion:
+            avisos = [" ".join(validar(fila.to_dict(), percentiles=percentiles, del_dia=aprobados_del_dia(
+                sesion, planta_id, fila["fecha_produccion"], int(fila["id"])))[1]) for _, fila in tabla.iterrows()]
         return pd.DataFrame({
             "Fecha": pd.to_datetime(tabla["fecha_produccion"]).dt.strftime("%d/%m/%Y"), "Turno": tabla["turno"],
             "Proceso": tabla["proceso"], **{ETIQUETAS[c]: tabla[c] for c in ETIQUETAS},
-            "Rend. aceite (kg/MT)": tabla["rendimiento_aceite"],
-            "Rend. conc. 65 °Bx (kg/MT)": tabla["rendimiento_concentrado"], "Comentario": tabla["comentario"],
+            "Rend. aceite turno (kg/MT)": tabla[ACEITE], "Rend. aceite día (kg/MT)": tabla[ACEITE_DIA],
+            "Rend. conc. 65 °Bx día (kg/MT)": tabla[CONCENTRADO_DIA], "Comentario": tabla["comentario"],
             "Cargado por": tabla["cargado_por"], "Avisos": avisos})
 
     st.subheader(f"Borradores ({len(borradores)})")

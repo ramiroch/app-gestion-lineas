@@ -95,3 +95,14 @@ def test_comparar_con_valor_faltante():
 
     fila = comparar_resumenes(a, b).set_index(["seccion", "clave"]).loc[("Totales", "rendimiento")]
     assert pd.isna(fila["diferencia"]) and pd.isna(fila["evaluacion"])       # en el DataFrame, vacío = NaN
+
+
+def test_concentrado_por_periodo_no_por_turno():
+    # 01/07: tanda envasada solo en el turno T (M y N sin concentrado); 02/07: sin concentrado cargado
+    produccion = _produccion().assign(jugo_conc_kg=[None, 30000.0, None, None])
+    totales = resumen_proceso(_pares(), _toneladas(), produccion)["totales"]
+    # toda la fruta del 01/07 (100 + 300 + 100 MT); el 02/07 no entra (ningún turno con concentrado)
+    assert totales["rendimiento_concentrado"] == pytest.approx(30000 / 500)
+    assert totales["n_dias_concentrado"] == 1
+    sin = resumen_proceso(_pares(), _toneladas(), _produccion())["totales"]          # tabla sin la columna
+    assert sin["rendimiento_concentrado"] is None and sin["n_dias_concentrado"] == 0

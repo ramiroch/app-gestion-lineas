@@ -40,7 +40,7 @@ from core.regresion import frase_pendiente, regresiones_por_grupo
 from core.repetidas import sin_entradas_repetidas
 from descargas import Descargas
 from pestana_factores import pestana_factores
-from filtros import (barra_filtros, casilla_repetidas, produccion_con_borradores, filtros_elegidos, planta_elegida, produccion_planta, rango_planta,
+from filtros import (barra_filtros, casilla_repetidas, produccion_con_borradores, ultima_fecha_planta, filtros_elegidos, planta_elegida, produccion_planta, rango_planta,
                      tabla_emulsion_planta, tabla_planta, toneladas_planta)
 from graficos import (PALETA, barras_uso, boxplot, boxplot_mensual, boxplot_temporadas, burbujas, columnas_mensuales,
                       columnas_mensuales_series, combinaciones_de_puntos,
@@ -687,7 +687,7 @@ def pestana_proceso(registro: Descargas) -> None:
             registro.tabla(tabla_resumen(resumen), "Resumen del período")
 
     st.subheader("Comparación de dos períodos")
-    op = opciones(tabla_planta(planta_elegida()))
+    op = opciones(tabla_planta(planta_elegida()), ultima_fecha_planta(planta_elegida()))
     periodos = [a for a in atajos(op) if a != ATAJO_PERSONALIZADO]
     if len(periodos) < 2:
         st.info("Hace falta más de un período con datos para comparar.")

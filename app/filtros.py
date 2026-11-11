@@ -15,7 +15,7 @@ Para probarla sola: streamlit run app/filtros.py
 import streamlit as st
 
 from core.analisis import (ATAJO_PERSONALIZADO, Filtros, atajos, filtrar, opciones, rango_de_atajo, tabla_analisis,
-                           tabla_emulsion)
+                           tabla_emulsion, ultima_fecha_de_datos)
 from core.consultas import listar_clientes, listar_plantas, rango_referencia
 from core.db import crear_motor, crear_sesion
 from core.produccion import tabla_produccion, toneladas_por_turno
@@ -56,6 +56,13 @@ def casilla_repetidas(clave: str) -> bool:
     return st.checkbox("Incluir entradas repetidas", value=False, key=clave,
                        help="Entradas con los mismos g y mL que la de otro eBOE en la misma ronda (posible copia). Por "
                             "defecto quedan afuera de las comparaciones entre eBOE; en los demás cálculos están.")
+
+
+@st.cache_data(ttl=600)
+def ultima_fecha_planta(planta_id: int):
+    """Último día de producción con algún dato (análisis, centrífugas, producción con borradores o PLC)."""
+    with crear_sesion(motor()) as sesion:
+        return ultima_fecha_de_datos(sesion, planta_id)
 
 
 def filtros_elegidos() -> Filtros | None:
@@ -178,6 +185,7 @@ def _recargar() -> None:
     plc_planta.clear()
     produccion_planta.clear()
     produccion_con_borradores.clear()
+    ultima_fecha_planta.clear()
     rango_planta.clear()
     plantas.clear()
     centrifugas_planta.clear()
@@ -228,7 +236,7 @@ def barra_filtros():
     if tabla.empty:
         barra.info("Esta planta todavía no tiene análisis cargados.")
         return tabla
-    op = opciones(tabla)
+    op = opciones(tabla, ultima_fecha_planta(plantas()[planta]))   # cierra en el último dato de cualquier tipo
 
     # Fechas de producción: un atajo o un rango elegido a mano.
     lista_atajos = atajos(op)
