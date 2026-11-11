@@ -34,7 +34,6 @@ from core.analisis import con_fuente
 from core.comparaciones import comparar_grupos
 from core.estadistica import media_ponderada_por_turno
 from core.formato import numero, texto_p
-from core.precios import kg_a_65_brix
 from core.programa import numero_programa
 from core.regresion import regresiones_por_grupo
 
@@ -951,23 +950,26 @@ def frase_planta(resultado: dict | None, precio_usd_kg: float | None = None) -> 
 
 # ---------------------------------------------------------------- balance aceite–jugo
 
-FRUTA_MINIMA_TURNO = 20     # MT: turnos con menos fruta no entran en el balance
+FRUTA_MINIMA_TURNO = 20     # MT: turnos con menos fruta no entran en el balance por turno
+FRUTA_MINIMA_DIA = 60       # MT: días con menos fruta no entran en el balance por día
 # Rangos válidos por turno: fuera de ellos, error de carga o desfase de envasado (columna, mínimo, máximo, nombre)
 RANGOS_BALANCE = [("conc_mt", 40, 130, "kg conc. 65 °Brix/MT"), ("aceite_mt", 1, 15, "aceite envasado/MT"),
                   ("eficiencia", 0, 100, "eficiencia eBOE")]
-NOTA_BALANCE = ("Datos por turno, con ruido: el jugo depende también del °Brix del concentrado, del desfase de envasado "
-                "y de la in-line. Es un indicio para una prueba controlada, no una conclusión.")
+NOTA_BALANCE = ("Datos por día de producción, con ruido: el jugo depende también del °Brix del concentrado, de las "
+                "tandas de envasado y de la in-line. Es un indicio para una prueba controlada, no una conclusión.")
+POR_TONELADAS, POR_PARES = "toneladas", "pares"
 
 
-def turnos_balance(produccion: pd.DataFrame, pares: pd.DataFrame, brix_registrado: float = 65.0) -> pd.DataFrame:
+def turnos_balance(produccion: pd.DataFrame, pares: pd.DataFrame) -> pd.DataFrame:
     """Una fila por turno de producción con lo que hace falta para el balance aceite–jugo.
 
     produccion: core.produccion.tabla_produccion() (se suman los procesos del turno). pares: los de la
     planta (todos los eBOE). programa = promedio de los eBOE en marcha (los que tienen pares en el turno) del
     programa promedio de cada uno (de la lectura de operación de cada muestra); frutos = frutos en 10 kg
     promedio; eficiencia = eficiencia eBOE promedio de los pares (%); removido_mt = aceite removido por los eBOE
-    (entrada − salida, kg/MT) promedio de los pares. conc_mt = kg de concentrado a 65 °Brix
-    (core.precios.kg_a_65_brix) / MT de fruta; aceite_mt = aceite envasado (kg) / MT de fruta.
+    (entrada − salida, kg/MT) promedio de los pares. conc_mt = kg de concentrado 65 °Brix (ya viene a 65 °Bx) / MT
+    de fruta; aceite_mt = aceite envasado (kg) / MT de fruta. Por turno el concentrado no es representativo (se
+    envasa por tanda): el balance se hace por día (dias_balance).
     Columnas: fecha_produccion, turno, temporada, fruta_t, aceite_kg, jugo_kg, conc_mt, aceite_mt, programa,
     grupo_programa, frutos, eficiencia, removido_mt, eboes, n.
     """
@@ -986,11 +988,81 @@ def turnos_balance(produccion: pd.DataFrame, pares: pd.DataFrame, brix_registrad
     turnos = turnos.merge(muestras, on=claves, how="left")
     turnos["temporada"] = turnos["temporada"].fillna(turnos.pop("temporada_pares"))
     fruta = turnos["fruta_t"].where(turnos["fruta_t"] > 0)
-    turnos["conc_mt"] = kg_a_65_brix(turnos["jugo_kg"], brix_registrado) / fruta
+    turnos["conc_mt"] = turnos["jugo_kg"] / fruta
     turnos["aceite_mt"] = turnos["aceite_kg"] / fruta
     turnos["grupo_programa"] = turnos["programa"].round().map(grupo_programa)
     return turnos[["fecha_produccion", "turno", "temporada", "fruta_t", "aceite_kg", "jugo_kg", "conc_mt", "aceite_mt",
                    "programa", "grupo_programa", "frutos", "eficiencia", "removido_mt", "eboes", "n"]]
+
+
+def _ponderado(sub: pd.DataFrame, columna: str, pesos: str) -> float | None:
+    con_dato = sub.dropna(subset=[columna, pesos])
+    con_dato = con_dato[con_dato[pesos] > 0]
+    return float(np.average(con_dato[columna], weights=con_dato[pesos])) if len(con_dato) else None
+
+
+def dias_balance(turnos: pd.DataFrame) -> pd.DataFrame:
+    """Una fila por día de producción con lo que hace falta para el balance aceite–jugo (el concentrado se envasa por
+    tanda: por turno no es representativo).
+
+    turnos: turnos_balance() (con la producción aprobada). fruta_t, aceite_kg y jugo_kg = Σ de los turnos del día;
+    conc_mt = Σ concentrado 65 °Bx / Σ fruta del día (un turno sin concentrado cuenta 0; día sin concentrado: vacío)
+    y aceite_mt = Σ aceite envasado / Σ fruta de los turnos con aceite. programa, frutos, eficiencia y removido_mt:
+    promedio de los turnos ponderado por toneladas (fruta del turno); si ningún turno del día con muestras tiene
+    toneladas, ponderado por pares (n). ponderacion: "toneladas" o "pares". n = pares del día, turnos = turnos.
+    """
+    filas = []
+    for dia, sub in turnos.groupby("fecha_produccion", sort=True):
+        con_fruta = sub[sub["fruta_t"] > 0]
+        fruta = con_fruta["fruta_t"].sum()
+        con_aceite = con_fruta.dropna(subset=["aceite_kg"])
+        hay_jugo = con_fruta["jugo_kg"].notna().any()
+        con_muestras = sub.dropna(subset=["programa"])
+        pesos = POR_TONELADAS if (con_muestras["fruta_t"] > 0).any() else POR_PARES
+        columna_peso = "fruta_t" if pesos == POR_TONELADAS else "n"
+        filas.append({
+            "fecha_produccion": dia, "temporada": sub["temporada"].dropna().iloc[0] if sub["temporada"].notna().any()
+            else None, "fruta_t": fruta if len(con_fruta) else None,
+            "aceite_kg": con_aceite["aceite_kg"].sum() if len(con_aceite) else None,
+            "jugo_kg": con_fruta["jugo_kg"].sum() if hay_jugo else None,
+            "conc_mt": con_fruta["jugo_kg"].fillna(0).sum() / fruta if hay_jugo and fruta > 0 else None,
+            "aceite_mt": con_aceite["aceite_kg"].sum() / con_aceite["fruta_t"].sum() if len(con_aceite) else None,
+            **{c: _ponderado(con_muestras, c, columna_peso) for c in ("programa", "frutos", "eficiencia",
+                                                                       "removido_mt")},
+            "ponderacion": pesos if len(con_muestras) else None, "n": int(sub["n"].fillna(0).sum()),
+            "turnos": len(sub)})
+    dias = pd.DataFrame(filas, columns=["fecha_produccion", "temporada", "fruta_t", "aceite_kg", "jugo_kg", "conc_mt",
+                                        "aceite_mt", "programa", "frutos", "eficiencia", "removido_mt", "ponderacion",
+                                        "n", "turnos"])
+    dias["grupo_programa"] = dias["programa"].round().map(grupo_programa)
+    return dias
+
+
+def separar_dias_balance(dias: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(días válidos, días excluidos con su motivo): menos de FRUTA_MINIMA_DIA MT de fruta, sin concentrado
+    cargado, sin muestras de los eBOE (sin programa) o con algún valor fuera de RANGOS_BALANCE."""
+    motivos = pd.Series("", index=dias.index)
+    motivos[~(dias["fruta_t"] >= FRUTA_MINIMA_DIA)] += f"fruta < {FRUTA_MINIMA_DIA} MT; "
+    motivos[dias["conc_mt"].isna()] += "sin concentrado; "
+    motivos[dias["programa"].isna()] += "sin muestras de los eBOE; "
+    for columna, minimo, maximo, nombre in RANGOS_BALANCE:
+        fuera = dias[columna].notna() & ~dias[columna].between(minimo, maximo)
+        motivos[fuera] += f"{nombre} fuera de {numero(minimo, 0)}–{numero(maximo, 0)}; "
+    excluido = motivos != ""
+    return (dias[~excluido].reset_index(drop=True),
+            dias[excluido].assign(motivo=motivos[excluido].str.rstrip("; ")).reset_index(drop=True))
+
+
+def diferencia_programas(datos: pd.DataFrame, variable: str = "conc_mt", alto: str = "N6–N9",
+                         bajo: str = "N0–N3") -> dict:
+    """Diferencia de `variable` entre los programas altos y los bajos (grupo_programa): media de cada grupo, n y
+    diferencia % = (alto − bajo) / bajo × 100. Vacía si falta un grupo."""
+    medias = {g: datos.loc[datos["grupo_programa"] == g, variable].dropna() for g in (alto, bajo)}
+    resultado = {"alto": None, "bajo": None, "n_alto": len(medias[alto]), "n_bajo": len(medias[bajo]), "pct": None}
+    if len(medias[alto]) and len(medias[bajo]):
+        resultado.update(alto=float(medias[alto].mean()), bajo=float(medias[bajo].mean()))
+        resultado["pct"] = (resultado["alto"] - resultado["bajo"]) / resultado["bajo"] * 100
+    return resultado
 
 
 def separar_turnos_balance(turnos: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -1012,11 +1084,12 @@ def separar_turnos_balance(turnos: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataF
 
 
 def regresion_balance(turnos: pd.DataFrame, variable: str, alfa: float = ALFA) -> dict:
-    """Regresión por turno de `variable` (conc_mt, aceite_mt o removido_mt) con programa, calibre y temporada.
+    """Regresión de `variable` (conc_mt, aceite_mt o removido_mt) con programa, calibre y temporada, con un punto por
+    fila (día de producción, dias_balance; o turno, turnos_balance).
 
     variable = b0 + b·programa + c·frutos + temporada (categoría; sale si hay una sola). efecto = b, lo que
     cambia la variable por +1 nivel de programa con el calibre y la temporada fijos, con IC 1 − alfa y p.
-    Devuelve n, r2, efecto, ic_inf, ic_sup y p (vacíos si hay menos de 10 turnos).
+    Devuelve n, r2, efecto, ic_inf, ic_sup y p (vacíos si hay menos de 10 filas).
     """
     datos = turnos.dropna(subset=[variable, "programa", "frutos", "temporada"]).copy()
     resultado = {"variable": variable, "n": len(datos), "r2": None, "efecto": None, "ic_inf": None, "ic_sup": None,
@@ -1065,14 +1138,15 @@ def frase_balance(valor: dict) -> str:
     return texto
 
 
-def frase_efecto_programa(conc: dict, aceite: dict, alfa: float = ALFA) -> str:
-    """El efecto de +1 nivel de programa por turno, sin precios.
+def frase_efecto_programa(conc: dict, aceite: dict, alfa: float = ALFA, por: str = "día") -> str:
+    """El efecto de +1 nivel de programa, sin precios (por: "día" o "turno", la unidad de la regresión).
 
-    Ejemplo: "Por turno, cada nivel más de programa se asocia con 0,59 kg menos de concentrado 65 °Brix por MT
+    Ejemplo: "Por día, cada nivel más de programa se asocia con 0,59 kg menos de concentrado 65 °Brix por MT
     (IC 95 %: 0,07 a 1,12; p = 0,028) y con 0,02 kg/MT menos de aceite envasado (p = 0,306: sin efecto claro)."
     """
     if conc["efecto"] is None or aceite["efecto"] is None:
-        return "No hay turnos suficientes para estimar el efecto del programa sobre el jugo y el aceite."
+        return (f"No hay {'días' if por == 'día' else 'turnos'} suficientes para estimar el efecto del programa "
+                "sobre el jugo y el aceite.")
 
     def parte(r, que, decimales):
         sentido = "más" if r["efecto"] > 0 else "menos"
@@ -1083,7 +1157,7 @@ def frase_efecto_programa(conc: dict, aceite: dict, alfa: float = ALFA) -> str:
     texto_conc = parte(conc, "kg {} de concentrado 65 °Brix por MT", 2)
     if conc["ic_inf"] * conc["ic_sup"] > 0:          # el IC no cruza el 0
         texto_conc = texto_conc.replace(" (p", f" (IC 95 %: {numero(ic[0], 2)} a {numero(ic[1], 2)}; p", 1)
-    return (f"Por turno, cada nivel más de programa se asocia con {texto_conc} y con "
+    return (f"Por {por}, cada nivel más de programa se asocia con {texto_conc} y con "
             f"{parte(aceite, 'kg/MT {} de aceite envasado', 2)}.")
 
 
@@ -1122,5 +1196,6 @@ def resumen_factores(quintiles: pd.DataFrame, eboe_calibre: pd.DataFrame, descom
     frases.append(frase_planta(planta, precio_aceite))
     if balance:
         frases.append(frase_balance(balance["valor"]) if balance.get("valor") else
-                      frase_efecto_programa(balance["regresiones"]["conc_mt"], balance["regresiones"]["aceite_mt"]))
+                      frase_efecto_programa(balance["regresiones"]["conc_mt"], balance["regresiones"]["aceite_mt"],
+                                            por="día"))
     return frases

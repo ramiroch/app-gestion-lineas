@@ -7,7 +7,8 @@ import pytest
 from core.formato import numero
 from core.programa import numero_programa
 
-from core.factores import (con_fuente_pares, frase_efecto_programa, frase_balance, regresion_balance, separar_turnos_balance, turnos_balance, valor_programa,
+from core.factores import (POR_PARES, POR_TONELADAS, dias_balance, diferencia_programas, separar_dias_balance,
+                           con_fuente_pares, frase_efecto_programa, frase_balance, regresion_balance, separar_turnos_balance, turnos_balance, valor_programa,
                            comparar_modelos, frase_r2_modelos, frase_residuo_eboe, residuos_por_eboe,
                            NOTA_JUSTA, cascada_justa, celdas_justas, comparacion_justa, eboe_peor, frase_justa,
                            grupo_mtph, grupo_programa, preparar_celdas,
@@ -397,10 +398,10 @@ def test_turnos_y_exclusiones_del_balance():
     produccion = pd.concat([produccion, pd.DataFrame([
         {"fecha_produccion": pd.Timestamp("2025-08-01"), "turno": "T", "temporada": 2025, "fruta_t": 10.0,
          "aceite_envasado_kg": 60.0, "jugo_conc_kg": 750.0}])], ignore_index=True)      # poca fruta y sin muestras
-    turnos = turnos_balance(produccion, pares, brix_registrado=66.0)
+    turnos = turnos_balance(produccion, pares)
     fila = turnos.iloc[0]
     assert fila["eboes"] == 2 and fila["n"] == 2 and fila["programa"] == numero_programa(pares["programa"].iloc[0])
-    assert fila["conc_mt"] == pytest.approx(produccion.loc[0, "jugo_conc_kg"] * 66 / 65 / 200)    # pasado a 65 °Brix
+    assert fila["conc_mt"] == pytest.approx(produccion.loc[0, "jugo_conc_kg"] / 200)            # ya viene a 65 °Brix
 
     validos, excluidos = separar_turnos_balance(turnos)
     assert len(validos) == 2 and len(excluidos) == 2
@@ -500,7 +501,7 @@ def test_resumen_factores():
     assert len(completo) == 8
     assert completo[2].startswith("En 2026, a más aceite en emulsión") and completo[3].startswith("Con fruta del mismo")
     assert completo[4].startswith("Sacar el eBOE del modelo") and "(USD 700)" in completo[5]
-    assert completo[7].startswith("Por turno, cada nivel más de programa se asocia con 1,00 kg menos de concentrado")
+    assert completo[7].startswith("Por día, cada nivel más de programa se asocia con 1,00 kg menos de concentrado")
     con_precios = resumen_factores(*base, balance={"regresiones": regresiones,
                                                    "valor": valor_programa(0.1, -1.0, 10.0, 2.0)})
     assert con_precios[-1].startswith("Con estos precios, subir un nivel de programa")
@@ -510,6 +511,45 @@ def test_frase_efecto_programa():
     conc = {"efecto": -0.59, "ic_inf": -1.12, "ic_sup": -0.07, "p": 0.028}
     aceite = {"efecto": -0.02, "ic_inf": -0.05, "ic_sup": 0.02, "p": 0.306}
     assert frase_efecto_programa(conc, aceite) == (
-        "Por turno, cada nivel más de programa se asocia con 0,59 kg menos de concentrado 65 °Brix por MT (IC 95 %: "
+        "Por día, cada nivel más de programa se asocia con 0,59 kg menos de concentrado 65 °Brix por MT (IC 95 %: "
         "0,07 a 1,12; p = 0,028) y con 0,02 kg/MT menos de aceite envasado (p = 0,306: sin efecto claro).")
-    assert "No hay turnos suficientes" in frase_efecto_programa({"efecto": None}, aceite)
+    assert frase_efecto_programa(conc, aceite, por="turno").startswith("Por turno, cada nivel")
+    assert "No hay días suficientes" in frase_efecto_programa({"efecto": None}, aceite)
+
+
+
+def _turnos(filas):
+    columnas = ["fecha_produccion", "turno", "temporada", "fruta_t", "aceite_kg", "jugo_kg", "programa", "frutos",
+                "eficiencia", "removido_mt", "n"]
+    return pd.DataFrame(filas, columns=columnas).assign(fecha_produccion=lambda d: pd.to_datetime(d["fecha_produccion"]))
+
+
+def test_balance_por_dia():
+    turnos = _turnos([
+        ("2025-07-01", "M", 2025, 100.0, 600.0, None, 2.0, 50.0, 80.0, 6.0, 4),      # sin concentrado: cuenta 0
+        ("2025-07-01", "T", 2025, 300.0, 1800.0, 24000.0, 6.0, 40.0, 90.0, 7.0, 2),
+        ("2025-07-02", "M", 2025, 200.0, 1200.0, None, 3.0, 45.0, 85.0, 6.5, 3),     # día sin concentrado
+        ("2025-07-03", "M", 2025, None, None, 9000.0, 4.0, 45.0, 85.0, 6.5, 1),      # programa sin toneladas
+        ("2025-07-03", "T", 2025, None, None, None, 8.0, 45.0, 85.0, 6.5, 3),
+    ])
+    dias = dias_balance(turnos).set_index("fecha_produccion")
+    primero = dias.loc["2025-07-01"]
+    assert (primero["fruta_t"], primero["jugo_kg"], primero["conc_mt"]) == (400.0, 24000.0, 60.0)    # 24000 / 400
+    assert primero["aceite_mt"] == pytest.approx(2400 / 400)
+    assert primero["programa"] == pytest.approx((2 * 100 + 6 * 300) / 400)                          # 5, toneladas
+    assert (primero["ponderacion"], primero["grupo_programa"], primero["n"], primero["turnos"]) == (
+        POR_TONELADAS, "N4–N5", 6, 2)
+    tercero = dias.loc["2025-07-03"]
+    assert tercero["ponderacion"] == POR_PARES and tercero["programa"] == pytest.approx((4 * 1 + 8 * 3) / 4)   # 7
+
+    validos, excluidos = separar_dias_balance(dias_balance(turnos))
+    assert validos["fecha_produccion"].tolist() == [pd.Timestamp("2025-07-01")]
+    assert excluidos["motivo"].tolist() == ["sin concentrado", "fruta < 60 MT; sin concentrado"]
+
+
+def test_diferencia_entre_programas_altos_y_bajos():
+    datos = pd.DataFrame({"grupo_programa": ["N0–N3", "N0–N3", "N6–N9", "N4–N5"], "conc_mt": [80.0, 70.0, 72.0, 99.0]})
+    d = diferencia_programas(datos)
+    assert (d["alto"], d["bajo"], d["n_alto"], d["n_bajo"]) == (72.0, 75.0, 1, 2)
+    assert d["pct"] == pytest.approx(-4.0)                                            # (72 − 75) / 75
+    assert diferencia_programas(datos[datos["grupo_programa"] != "N6–N9"])["pct"] is None

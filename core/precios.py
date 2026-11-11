@@ -2,8 +2,7 @@
 
 Se guardan en data/precios.json (no se sube a GitHub) con la fecha de la última modificación. Cada
 precio se carga en USD/kg o en USD/MT; internamente todo se pasa a USD/kg (USD/MT ÷ 1000).
-El jugo concentrado se valoriza a 65 °Brix: si la planta registra los kg a otro °Brix (hoja Resumen),
-kg a 65 °Brix = kg × °Brix registrado / 65 (los sólidos solubles son los mismos).
+El jugo concentrado ya viene a 65 °Brix (es el dato que carga la planta): se valoriza sin conversión.
 """
 
 import json
@@ -13,7 +12,6 @@ from pathlib import Path
 
 RUTA_PRECIOS = Path(__file__).resolve().parent.parent / "data" / "precios.json"
 UNIDADES = {"USD/kg": 1.0, "USD/MT": 1 / 1000}      # unidad → factor para pasar a USD/kg
-BRIX_REFERENCIA = 65.0
 SIN_PRECIOS = "Cargá los precios para ver los valores en USD."
 
 
@@ -24,7 +22,6 @@ class Precios:
     unidad_aceite: str = "USD/kg"
     jugo: float | None = None
     unidad_jugo: str = "USD/kg"
-    brix_registrado: float = BRIX_REFERENCIA
     modificado: str | None = None          # fecha y hora de la última modificación (texto ISO)
 
     @property
@@ -48,26 +45,18 @@ def a_usd_kg(valor: float | None, unidad: str) -> float | None:
     return None if valor is None else valor * UNIDADES[unidad]
 
 
-def kg_a_65_brix(kg, brix_registrado: float = BRIX_REFERENCIA):
-    """kg de concentrado a 65 °Brix = kg × °Brix registrado / 65 (sirve con números o columnas de pandas)."""
-    if brix_registrado <= 0:
-        raise ValueError(f"El °Brix del concentrado tiene que ser mayor que 0 (dice {brix_registrado}).")
-    return kg * brix_registrado / BRIX_REFERENCIA
-
-
 def validar(precios: Precios) -> None:
-    """Error claro si un precio no es positivo, una unidad no existe o el °Brix no es positivo."""
+    """Error claro si un precio no es positivo o una unidad no existe."""
     for nombre, valor, unidad in (("del aceite", precios.aceite, precios.unidad_aceite),
                                   ("del jugo concentrado", precios.jugo, precios.unidad_jugo)):
         a_usd_kg(valor, unidad)
         if valor is not None and valor <= 0:
             raise ValueError(f"El precio {nombre} tiene que ser mayor que 0 (dice {valor}).")
-    if precios.brix_registrado <= 0:
-        raise ValueError(f"El °Brix del concentrado tiene que ser mayor que 0 (dice {precios.brix_registrado}).")
 
 
 def leer_precios(ruta: Path | None = None) -> Precios:
-    """Los precios guardados (en RUTA_PRECIOS si no se da otra ruta); Precios() vacío si todavía no hay archivo."""
+    """Los precios guardados (en RUTA_PRECIOS si no se da otra ruta); Precios() vacío si todavía no hay archivo.
+    Los campos que ya no existen (como el viejo brix_registrado) se ignoran."""
     ruta = ruta or RUTA_PRECIOS
     if not ruta.exists():
         return Precios()
