@@ -24,10 +24,12 @@ PLANILLA_BASE = {
     "Planta": [
         ["cliente", "nombre", "pais", "blanco_ml", "factor_aceite_fruta",
          "factor_aceite_emulsion", "hora_inicio_dia", "observaciones", "sigla", "blanco_centrifugas_ml",
-         "umbral_paralelo_lh", "turnos_fin_episodio", "turnos_para_alertar", "sigma_alerta_inmediata", "horas_rondas"],
+         "umbral_paralelo_lh", "turnos_fin_episodio", "turnos_para_alertar", "sigma_alerta_inmediata", "horas_rondas",
+         "tolerancia_fp_verde_pct", "tolerancia_fp_amarillo_pct"],
         ["CLIENTE A", "Planta Norte", "Argentina", 0.3, 68.0, 3.4, time(6, 0), "nota", "NOR", 0.1, 17000, 3, 2, 4,
-         "5:10; 07:10"],
-        ["CLIENTE B", "Planta Sur", "Uruguay", None, None, None, None, None, "SUR", None, None, None, None, None, None],
+         "5:10; 07:10", 10, 20],
+        ["CLIENTE B", "Planta Sur", "Uruguay", None, None, None, None, None, "SUR", None, None, None, None, None, None,
+         None, None],
     ],
     "Turno": [
         ["cliente", "planta", "nombre", "hora_inicio", "hora_fin"],
@@ -206,8 +208,8 @@ def test_celdas_vacias_quedan_vacias(sesion, datos, tmp_path):
     sur = sesion.scalars(select(Planta).where(Planta.nombre == "Planta Sur")).one()
     assert (norte.blanco_ml, norte.factor_aceite_fruta, norte.hora_inicio_dia,
             norte.blanco_centrifugas_ml, norte.umbral_paralelo_lh, norte.turnos_fin_episodio,
-            norte.turnos_para_alertar, norte.sigma_alerta_inmediata, norte.horas_rondas) == (
-        0.3, 68.0, time(6, 0), 0.1, 17000, 3, 2, 4, "05:10, 07:10")
+            norte.turnos_para_alertar, norte.sigma_alerta_inmediata, norte.horas_rondas, norte.tolerancia_fp_verde_pct,
+            norte.tolerancia_fp_amarillo_pct) == (0.3, 68.0, time(6, 0), 0.1, 17000, 3, 2, 4, "05:10, 07:10", 10, 20)
     assert (sur.blanco_ml, sur.factor_aceite_fruta, sur.factor_aceite_emulsion,
             sur.hora_inicio_dia, sur.blanco_centrifugas_ml) == (None,) * 5   # vacíos
 

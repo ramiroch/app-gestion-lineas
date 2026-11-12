@@ -29,7 +29,8 @@ def crear_planta(sesion, **parametros) -> int:
 COMPLETOS = {"blanco_ml": 0.2, "factor_aceite_fruta": 68.8416, "factor_aceite_emulsion": 3.45,
              "hora_inicio_dia": time(5, 0), "blanco_centrifugas_ml": 0.1,
              "umbral_paralelo_lh": 17000.0, "turnos_fin_episodio": 3, "turnos_para_alertar": 2,
-             "sigma_alerta_inmediata": 4.0, "horas_rondas": "05:10, 07:10"}
+             "sigma_alerta_inmediata": 4.0, "horas_rondas": "05:10, 07:10", "tolerancia_fp_verde_pct": 10.0,
+             "tolerancia_fp_amarillo_pct": 20.0}
 
 
 def test_devuelve_los_parametros(sesion):
@@ -58,7 +59,8 @@ def test_faltan_todos(sesion):
     assert ("no tiene definidos el blanco (mL), el factor de aceite en fruta, el factor de "
             "aceite en emulsión, la hora de inicio del día de producción, el blanco de centrífugas (mL), el umbral "
             "de primarias en paralelo (L/h), los turnos sin alerta que cierran un episodio, los turnos seguidos que "
-            "crean una alerta, los σ de alerta inmediata y las horas de las rondas de Scott. Completalos"
+            "crean una alerta, los σ de alerta inmediata, las horas de las rondas de Scott, la tolerancia verde del "
+            "caudal de fase pesada (%) y la tolerancia amarilla del caudal de fase pesada (%). Completalos"
             ) in str(error.value)
 
 
@@ -114,3 +116,9 @@ def test_horas_de_las_rondas():
 def test_horas_de_las_rondas_mal_escritas(sesion):
     with pytest.raises(ParametrosIncompletos, match="tiene mal las horas de las rondas"):
         parametros_planta(sesion, crear_planta(sesion, **(COMPLETOS | {"horas_rondas": "cinco y diez"})))
+
+
+
+def test_tolerancias_del_caudal_de_fase_pesada(sesion):
+    with pytest.raises(ParametrosIncompletos, match="verde del caudal de fase pesada mayor o igual que la amarilla"):
+        parametros_planta(sesion, crear_planta(sesion, **(COMPLETOS | {"tolerancia_fp_verde_pct": 25.0})))

@@ -21,6 +21,8 @@ DESCRIPCION_PARAMETROS = {
     "turnos_para_alertar": "los turnos seguidos que crean una alerta",
     "sigma_alerta_inmediata": "los σ de alerta inmediata",
     "horas_rondas": "las horas de las rondas de Scott",
+    "tolerancia_fp_verde_pct": "la tolerancia verde del caudal de fase pesada (%)",
+    "tolerancia_fp_amarillo_pct": "la tolerancia amarilla del caudal de fase pesada (%)",
 }
 
 
@@ -84,11 +86,16 @@ def validar_parametros(planta: Planta, requeridos: list[str] | None = None) -> d
             raise ParametrosIncompletos(f'La planta "{planta.nombre}" tiene {DESCRIPCION_PARAMETROS[blanco]} '
                                         f"negativo ({valores[blanco]} mL).")
     for factor in ("factor_aceite_fruta", "factor_aceite_emulsion", "umbral_paralelo_lh", "turnos_fin_episodio",
-                   "turnos_para_alertar", "sigma_alerta_inmediata"):
+                   "turnos_para_alertar", "sigma_alerta_inmediata", "tolerancia_fp_verde_pct",
+                   "tolerancia_fp_amarillo_pct"):
         if factor in valores and valores[factor] <= 0:
             raise ParametrosIncompletos(f'La planta "{planta.nombre}" tiene '
                                         f"{DESCRIPCION_PARAMETROS[factor]} en {valores[factor]}: "
                                         "tiene que ser mayor que 0.")
+    if {"tolerancia_fp_verde_pct", "tolerancia_fp_amarillo_pct"} <= set(valores) and \
+            valores["tolerancia_fp_verde_pct"] >= valores["tolerancia_fp_amarillo_pct"]:
+        raise ParametrosIncompletos(f'La planta "{planta.nombre}" tiene la tolerancia verde del caudal de fase pesada '
+                                    "mayor o igual que la amarilla.")
     if "horas_rondas" in valores:
         try:
             leer_horas_rondas(valores["horas_rondas"])

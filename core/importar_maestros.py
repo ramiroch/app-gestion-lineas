@@ -38,7 +38,7 @@ COLUMNAS = {
     "Planta": ["cliente", "nombre", "pais", "blanco_ml", "factor_aceite_fruta",
                "factor_aceite_emulsion", "hora_inicio_dia", "blanco_centrifugas_ml",
                "umbral_paralelo_lh", "turnos_fin_episodio", "turnos_para_alertar", "sigma_alerta_inmediata",
-               "horas_rondas"],
+               "horas_rondas", "tolerancia_fp_verde_pct", "tolerancia_fp_amarillo_pct"],
     "Turno": ["cliente", "planta", "nombre", "hora_inicio", "hora_fin"],
     "Linea": ["cliente", "planta", "nombre"],
     "Equipo": ["codigo", "cliente", "planta", "linea", "nombre", "tipo", "numero", "modelo",
@@ -234,6 +234,8 @@ def _fila_planta(sesion: Session, datos: dict):
         "turnos_para_alertar": _entero(datos, "turnos_para_alertar"),
         "sigma_alerta_inmediata": _numero(datos, "sigma_alerta_inmediata"),
         "horas_rondas": _horas_rondas(datos.get("horas_rondas")),
+        "tolerancia_fp_verde_pct": _numero(datos, "tolerancia_fp_verde_pct"),
+        "tolerancia_fp_amarillo_pct": _numero(datos, "tolerancia_fp_amarillo_pct"),
     }
     return _buscar(cliente.plantas, nombre=campos["nombre"]), campos
 

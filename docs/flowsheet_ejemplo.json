@@ -1,17 +1,113 @@
 {
-  "_comentario": "Ejemplo del formato de data/plantas/<planta>/flowsheet.json (core.inicio.cargar_flowsheet). La imagen va en la misma carpeta y no se sube a GitHub. x e y: fracción de la imagen (0–1, origen arriba a la izquierda). etiqueta: dónde va el valor respecto del círculo (derecha, izquierda, arriba, abajo). Tipos: entrada_eboe (aceite en fruta de entrada), eboe (eficiencia), salida_eboe (aceite en fruta de salida) y emulsion_eboe (rebalse del eBOE, laboratorio del BOE), con equipo = código del eBOE; tanque_emulsion (aceite en emulsión de las primarias, planilla de centrífugas), retorno_pesada, primaria y pulidora (equipo = código), secundaria (equipos = códigos de las secundarias; se muestra la que anduvo en el turno). nombre (opcional) reemplaza al del equipo.",
+  "_comentario": "Ejemplo del formato de data/plantas/<planta>/flowsheet.json (core.inicio.cargar_flowsheet). La imagen va en la misma carpeta y no se sube a GitHub. x e y: fracción de la imagen (0–1, origen arriba a la izquierda); para ubicarlos conviene una imagen de calibración con una grilla cada 0,05. etiqueta: dónde va el valor respecto del círculo (derecha, izquierda, arriba, abajo). Tipos por eBOE (equipo = código del eBOE): nombre_eboe (nombre y MTPH, sin círculo), entrada_eboe, eboe (eficiencia), salida_eboe, emulsion_eboe (rebalse) y retorno_fp_eboe (caudal de fase pesada del laboratorio contra el calculado). Por primaria (equipo = código): primaria (estado), primaria_caudal (emulsión), primaria_descarga, primaria_liviana y primaria_pesada. Otros: tanque_emulsion, retorno_pesada (aceite en fase pesada), secundaria (equipos = códigos; se muestra la que anduvo) y pulidora. nombre (opcional) reemplaza al del marcador.",
   "imagen": "flowsheet_planta.jpg",
   "ancho": 1034,
   "alto": 775,
   "marcadores": [
-    {"tipo": "entrada_eboe", "equipo": "XXX-BOE-01", "x": 0.19, "y": 0.05, "etiqueta": "derecha"},
-    {"tipo": "eboe", "equipo": "XXX-BOE-01", "x": 0.19, "y": 0.18, "etiqueta": "derecha"},
-    {"tipo": "salida_eboe", "equipo": "XXX-BOE-01", "x": 0.19, "y": 0.29, "etiqueta": "derecha"},
-    {"tipo": "emulsion_eboe", "equipo": "XXX-BOE-01", "x": 0.14, "y": 0.33, "etiqueta": "izquierda"},
-    {"tipo": "tanque_emulsion", "x": 0.10, "y": 0.78, "etiqueta": "derecha"},
-    {"tipo": "retorno_pesada", "x": 0.85, "y": 0.45, "etiqueta": "izquierda"},
-    {"tipo": "primaria", "equipo": "XXX-CEN-01", "x": 0.39, "y": 0.62, "etiqueta": "izquierda"},
-    {"tipo": "secundaria", "equipos": ["XXX-CSE-01", "XXX-CSE-02"], "x": 0.57, "y": 0.78, "etiqueta": "abajo"},
-    {"tipo": "pulidora", "equipo": "XXX-PUL-01", "x": 0.75, "y": 0.79, "etiqueta": "derecha"}
+    {
+      "tipo": "nombre_eboe",
+      "equipo": "XXX-BOE-01",
+      "x": 0.07,
+      "y": 0.15
+    },
+    {
+      "tipo": "entrada_eboe",
+      "equipo": "XXX-BOE-01",
+      "x": 0.19,
+      "y": 0.05,
+      "etiqueta": "derecha"
+    },
+    {
+      "tipo": "eboe",
+      "equipo": "XXX-BOE-01",
+      "x": 0.19,
+      "y": 0.18,
+      "etiqueta": "arriba"
+    },
+    {
+      "tipo": "salida_eboe",
+      "equipo": "XXX-BOE-01",
+      "x": 0.19,
+      "y": 0.29,
+      "etiqueta": "derecha"
+    },
+    {
+      "tipo": "emulsion_eboe",
+      "equipo": "XXX-BOE-01",
+      "x": 0.14,
+      "y": 0.33,
+      "etiqueta": "izquierda"
+    },
+    {
+      "tipo": "retorno_fp_eboe",
+      "equipo": "XXX-BOE-01",
+      "x": 0.275,
+      "y": 0.4,
+      "etiqueta": "derecha"
+    },
+    {
+      "tipo": "primaria",
+      "equipo": "XXX-CEN-01",
+      "x": 0.39,
+      "y": 0.62,
+      "etiqueta": "izquierda"
+    },
+    {
+      "tipo": "primaria_caudal",
+      "equipo": "XXX-CEN-01",
+      "x": 0.375,
+      "y": 0.545,
+      "etiqueta": "izquierda"
+    },
+    {
+      "tipo": "primaria_descarga",
+      "equipo": "XXX-CEN-01",
+      "x": 0.335,
+      "y": 0.675,
+      "etiqueta": "izquierda"
+    },
+    {
+      "tipo": "primaria_liviana",
+      "equipo": "XXX-CEN-01",
+      "x": 0.45,
+      "y": 0.575,
+      "etiqueta": "arriba"
+    },
+    {
+      "tipo": "primaria_pesada",
+      "equipo": "XXX-CEN-01",
+      "x": 0.33,
+      "y": 0.575,
+      "etiqueta": "izquierda"
+    },
+    {
+      "tipo": "tanque_emulsion",
+      "x": 0.1,
+      "y": 0.78,
+      "etiqueta": "derecha"
+    },
+    {
+      "tipo": "retorno_pesada",
+      "x": 0.85,
+      "y": 0.45,
+      "etiqueta": "izquierda"
+    },
+    {
+      "tipo": "secundaria",
+      "equipos": [
+        "XXX-CSE-01",
+        "XXX-CSE-02"
+      ],
+      "x": 0.52,
+      "y": 0.825,
+      "etiqueta": "abajo"
+    },
+    {
+      "tipo": "pulidora",
+      "equipo": "XXX-PUL-01",
+      "x": 0.75,
+      "y": 0.79,
+      "etiqueta": "derecha"
+    }
   ]
 }

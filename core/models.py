@@ -93,6 +93,9 @@ class Planta(Base):
     - turnos_fin_episodio: turnos seguidos sin violar una regla que cierran un episodio de alerta (core.alertas).
     - turnos_para_alertar: turnos seguidos del mismo ámbito que tienen que violar la misma regla para que se cree
       la alerta (persistencia, core.alertas).
+    - tolerancia_fp_verde_pct y tolerancia_fp_amarillo_pct: diferencia |lab − calculado| / calculado (%) del caudal
+      de fase pesada que entra a cada eBOE (laboratorio del BOE contra agua por eBOE de las centrífugas): hasta el
+      primero, verde; hasta el segundo, amarillo; más, rojo (Inicio, core.inicio).
     - horas_rondas: horas de las rondas de Scott, como texto ("05:10, 07:10, …"; core.parametros.leer_horas_rondas),
       para saber qué rondas faltan en el turno en curso (core.inicio).
     - sigma_alerta_inmediata: valor por defecto de LimitesControl.sigma_alerta_inmediata al congelar límites (en
@@ -115,6 +118,8 @@ class Planta(Base):
     turnos_para_alertar: Mapped[int | None]
     sigma_alerta_inmediata: Mapped[float | None] = mapped_column(Float)
     horas_rondas: Mapped[str | None] = mapped_column(String(200))
+    tolerancia_fp_verde_pct: Mapped[float | None] = mapped_column(Float)
+    tolerancia_fp_amarillo_pct: Mapped[float | None] = mapped_column(Float)
 
     cliente: Mapped["Cliente"] = relationship(back_populates="plantas")
     lineas: Mapped[list["Linea"]] = relationship(back_populates="planta")

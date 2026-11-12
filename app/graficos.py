@@ -1265,12 +1265,15 @@ def boxplot_mensual(cajas: pd.DataFrame, outliers: pd.DataFrame, eje: list[str],
     return figura
 
 
-COLORES_SEMAFORO = {"verde": "#1baf7a", "rojo": "#e34948", "neutro": "#2a78d6", "sin datos": "#b0b4ba"}
-NOMBRES_SEMAFORO = {"verde": "Dentro del rango", "rojo": "Fuera del rango", "neutro": "Sin rango (o en revisión)",
+COLORES_SEMAFORO = {"verde": "#1baf7a", "amarillo": "#eda100", "rojo": "#e34948", "neutro": "#2a78d6",
+                    "en marcha": "#2b2f36", "sin datos": "#b0b4ba"}
+NOMBRES_SEMAFORO = {"verde": "Dentro del rango", "amarillo": "Diferencia intermedia", "rojo": "Fuera del rango",
+                    "neutro": "Sin rango (o en revisión)", "en marcha": "Centrífuga en marcha",
                     "sin datos": "Sin datos en el turno"}
 # Posición de la etiqueta respecto del marcador: (desplazamiento x, desplazamiento y en px, anclaje x, anclaje y)
 LUGAR_ETIQUETA = {"derecha": (16, 0, "left", "middle"), "izquierda": (-16, 0, "right", "middle"),
-                  "arriba": (0, 16, "center", "bottom"), "abajo": (0, -16, "center", "top")}
+                  "arriba": (0, 14, "center", "bottom"), "abajo": (0, -14, "center", "top"),
+                  "centro": (0, 0, "center", "middle")}
 
 
 def flowsheet(config: dict, marcadores: list[dict]) -> go.Figure:
@@ -1289,7 +1292,7 @@ def flowsheet(config: dict, marcadores: list[dict]) -> go.Figure:
             continue
         figura.add_scatter(
             x=[marcadores[i]["x"] for i in indices], y=[1 - marcadores[i]["y"] for i in indices], mode="markers",
-            name=nombre, marker=dict(size=20, color=COLORES_SEMAFORO[color], line=dict(color="white", width=2)),
+            name=nombre, marker=dict(size=16, color=COLORES_SEMAFORO[color], line=dict(color="white", width=2)),
             customdata=[(i, "equipo") for i in indices], text=[marcadores[i]["hover"] for i in indices],
             hovertemplate="%{text}<extra></extra>")
     con_alertas = [i for i, m in enumerate(marcadores) if m["alertas"]]
@@ -1301,10 +1304,13 @@ def flowsheet(config: dict, marcadores: list[dict]) -> go.Figure:
             customdata=[(i, "alerta") for i in con_alertas],
             hovertemplate="%{text} alerta(s) abierta(s) o en análisis: clic para verlas<extra></extra>")
     for m in marcadores:
-        dx, dy, xanchor, yanchor = LUGAR_ETIQUETA.get(m.get("etiqueta"), LUGAR_ETIQUETA["derecha"])
-        figura.add_annotation(x=m["x"], y=1 - m["y"], text=f"<b>{m['texto']}</b>", showarrow=False, xshift=dx, yshift=dy,
-                              xanchor=xanchor, yanchor=yanchor, font=dict(size=12, color=COLOR_DATOS),
-                              bgcolor="rgba(255,255,255,0.82)", borderpad=2)
+        if not m["texto"]:
+            continue                                   # dato de línea de una centrífuga que no anduvo
+        lugar = "centro" if m["color"] is None else m.get("etiqueta")      # sin círculo (nombre): centrado
+        dx, dy, xanchor, yanchor = LUGAR_ETIQUETA.get(lugar, LUGAR_ETIQUETA["derecha"])
+        figura.add_annotation(x=m["x"], y=1 - m["y"], text=m["texto"] if m["color"] is None else f"<b>{m['texto']}</b>",
+                              showarrow=False, xshift=dx, yshift=dy, xanchor=xanchor, yanchor=yanchor, align="center",
+                              font=dict(size=11, color=COLOR_DATOS), bgcolor="rgba(255,255,255,0.82)", borderpad=2)
     figura.update_xaxes(range=[0, 1], visible=False, fixedrange=True)
     figura.update_yaxes(range=[0, 1], visible=False, fixedrange=True)
     figura.update_layout(width=ancho, height=alto + 34, margin=dict(l=0, r=0, t=0, b=34), plot_bgcolor="white",

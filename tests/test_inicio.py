@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import select
 
 from core.carga_scott import guardar_ronda
-from core.inicio import (NEUTRO, ROJO, SIN_DATOS, VERDE, cargar_flowsheet, carpeta_planta, color_de, datos_flowsheet,
+from core.inicio import (AMARILLO, EN_MARCHA, NEUTRO, ROJO, SIN_DATOS, VERDE, _color_fp, cargar_flowsheet, carpeta_planta, color_de, datos_flowsheet,
                          fecha_referencia, objetivo_eficiencia, pendientes, rondas_esperadas, tendencia_semanal, turnos_con_datos)
 from core.models import (Alerta, Equipo, Linea, MuestraCentrifuga, Planta, RangoReferencia, RegistroProduccion,
                          Turno)
@@ -16,6 +16,8 @@ from tests.test_carga_scott import _planta, ronda, sesion  # noqa: F401  (fixtur
 
 DIA = date(2026, 7, 1)
 CONFIG = {"imagen": "flowsheet.jpg", "ancho": 1034, "alto": 775, "marcadores": [
+    {"tipo": "nombre_eboe", "equipo": "N-BOE-01", "x": 0.07, "y": 0.15},
+    {"tipo": "retorno_fp_eboe", "equipo": "N-BOE-01", "x": 0.275, "y": 0.40},
     {"tipo": "entrada_eboe", "equipo": "N-BOE-01", "x": 0.19, "y": 0.05},
     {"tipo": "eboe", "equipo": "N-BOE-01", "x": 0.19, "y": 0.18},
     {"tipo": "eboe", "equipo": "N-BOE-02", "x": 0.42, "y": 0.18},
@@ -23,8 +25,14 @@ CONFIG = {"imagen": "flowsheet.jpg", "ancho": 1034, "alto": 775, "marcadores": [
     {"tipo": "emulsion_eboe", "equipo": "N-BOE-01", "x": 0.14, "y": 0.33},
     {"tipo": "emulsion_eboe", "equipo": "N-BOE-02", "x": 0.36, "y": 0.33},
     {"tipo": "tanque_emulsion", "x": 0.10, "y": 0.78},
+    {"tipo": "retorno_pesada", "x": 0.85, "y": 0.45},
     {"tipo": "primaria", "equipo": "N-CEN-01", "x": 0.39, "y": 0.62},
-    {"tipo": "primaria", "equipo": "N-CEN-02", "x": 0.39, "y": 0.84},
+    {"tipo": "primaria_caudal", "equipo": "N-CEN-01", "x": 0.375, "y": 0.545},
+    {"tipo": "primaria_descarga", "equipo": "N-CEN-01", "x": 0.335, "y": 0.675},
+    {"tipo": "primaria_liviana", "equipo": "N-CEN-01", "x": 0.45, "y": 0.575},
+    {"tipo": "primaria_pesada", "equipo": "N-CEN-01", "x": 0.33, "y": 0.575},
+    {"tipo": "primaria", "equipo": "N-CEN-02", "x": 0.39, "y": 0.83},
+    {"tipo": "primaria_descarga", "equipo": "N-CEN-02", "x": 0.335, "y": 0.885},
     {"tipo": "secundaria", "equipos": ["N-CSE-01", "N-CSE-02"], "x": 0.57, "y": 0.78},
     {"tipo": "pulidora", "equipo": "N-PUL-01", "x": 0.75, "y": 0.79}]}
 
@@ -35,12 +43,13 @@ def planta(sesion):  # noqa: F811
     planta = _planta(sesion)
     planta.horas_rondas = "05:10, 07:10, 09:10, 11:10, 13:10, 15:10, 17:10, 19:10, 21:10, 23:10, 01:10, 03:10"
     planta.umbral_paralelo_lh = 17000
+    planta.tolerancia_fp_verde_pct, planta.tolerancia_fp_amarillo_pct = 10, 20
     linea = sesion.scalars(select(Linea)).one()
     for codigo, nombre, tipo in (("N-CEN-01", "ESE 230 (1)", "Centrífuga primaria"),
                                  ("N-CEN-02", "ESE 230 (2)", "Centrífuga primaria"),
                                  ("N-CSE-01", "ESB 130", "Centrífuga secundaria"),
                                  ("N-CSE-02", "MSD 50", "Centrífuga secundaria"), ("N-PUL-01", "OSD 60", "Pulidora")):
-        sesion.add(Equipo(codigo=codigo, nombre=nombre, tipo=tipo, numero=1, linea=linea))
+        sesion.add(Equipo(codigo=codigo, nombre=nombre, tipo=tipo, numero=1, linea=linea, volumen_descarga_l=16))
     sesion.add_all([
         RangoReferencia(planta=planta, variable="Aceite en descarga", punto_o_equipo="Centrífuga primaria", maximo=0.5),
         RangoReferencia(planta=planta, variable="Aceite en descarga", punto_o_equipo="Centrífuga secundaria",
@@ -76,7 +85,7 @@ def test_cargar_flowsheet(tmp_path):
         cargar_flowsheet("Norte", tmp_path)
     (carpeta / "flowsheet.jpg").write_bytes(b"imagen")
     config = cargar_flowsheet("Norte", tmp_path)
-    assert len(config["marcadores"]) == 11 and config["ruta_imagen"].endswith("flowsheet.jpg")
+    assert len(config["marcadores"]) == len(CONFIG["marcadores"]) and config["ruta_imagen"].endswith("flowsheet.jpg")
     for cambio, error in (({"x": 1.2}, "entre 0 y 1"), ({"tipo": "bomba"}, "no válido"), ({"equipo": None}, "falta")):
         malo = CONFIG | {"marcadores": [CONFIG["marcadores"][1] | cambio]}
         (carpeta / "flowsheet.json").write_text(json.dumps(malo), encoding="utf-8")
@@ -106,8 +115,10 @@ def test_fecha_de_referencia_y_turnos(sesion, planta):  # noqa: F811
 
 def test_marcadores_del_turno(sesion, planta, tmp_path):  # noqa: F811
     _ronda(sesion, datetime(2026, 7, 1, 14, 10), salida_ml={2: 30.0})          # eBOE 2: eficiencia 70 %
-    _muestra(sesion, "N-CEN-01", datetime(2026, 7, 1, 14, 30), "descarga", ml=10.0)          # 0,35 %
+    _muestra(sesion, "N-CEN-01", datetime(2026, 7, 1, 14, 30), "descarga", ml=10.0, t_descarga_s=200.0)   # 0,35 %
     _muestra(sesion, "N-CEN-01", datetime(2026, 7, 1, 14, 30), "emulsion", ml=20.0, caudal_lh=15000.0)  # 0,70 %
+    _muestra(sesion, "N-CEN-01", datetime(2026, 7, 1, 14, 30), "fase_liviana", aceite_pct_medido=70.0)
+    _muestra(sesion, "N-CEN-01", datetime(2026, 7, 1, 14, 30), "fase_pesada", ml=2.0)        # 0,07 %
     _muestra(sesion, "N-CEN-01", datetime(2026, 7, 1, 16, 30), "emulsion", ml=24.0, caudal_lh=16000.0)  # 0,84 %
     _muestra(sesion, "N-CSE-02", datetime(2026, 7, 1, 14, 30), "descarga", ml=40.0)          # MSD 50: 1,40 %
     _muestra(sesion, "N-PUL-01", datetime(2026, 7, 1, 14, 30), "descarga", t_descarga_s=2700.0)   # 45 min
@@ -135,9 +146,25 @@ def test_marcadores_del_turno(sesion, planta, tmp_path):  # noqa: F811
     tanque = marcadores[("tanque_emulsion", "Tanque de emulsión")]               # primarias (centrífugas), mediana
     assert (tanque["texto"], tanque["destino"]) == ("0,77 %", {"pagina": "centrifugas"})
     assert "15.500 L/h" in tanque["hover"] and "N = 2" in tanque["hover"]
-    primaria = marcadores[("primaria", "ESE 230 (1)")]
-    assert (primaria["texto"], primaria["color"]) == ("0,35 %", VERDE) and "15.500 L/h" in primaria["hover"]
-    assert marcadores[("primaria", "ESE 230 (2)")]["color"] == SIN_DATOS          # parada: gris
+    nombre = marcadores[("nombre_eboe", "eBOE 1")]                              # sin círculo: nombre y MTPH
+    assert (nombre["texto"], nombre["color"]) == ("<b>eBOE 1</b><br>11,0 MTPH", None)
+    fase_pesada = marcadores[("retorno_fp_eboe", "Fase pesada a eBOE 1")]
+    assert fase_pesada["texto"].startswith("9,5 m³/h<br>") and "calc." in fase_pesada["texto"]
+    assert "Calculado (agua por eBOE" in fase_pesada["hover"]
+    primaria = marcadores[("primaria", "ESE 230 (1)")]                           # el cuerpo: solo el estado
+    assert (primaria["texto"], primaria["color"]) == ("ESE 230 (1)", EN_MARCHA)
+    assert marcadores[("primaria_caudal", "Caudal ESE 230 (1)")]["texto"] == "15.500 L/h"
+    descarga = marcadores[("primaria_descarga", "Descarga ESE 230 (1)")]
+    assert (descarga["texto"], descarga["color"]) == ("0,35 %", VERDE)
+    liviana = marcadores[("primaria_liviana", "Fase liviana ESE 230 (1)")]
+    assert liviana["texto"].endswith(" · 70 %") and "balance" in liviana["hover"]
+    assert marcadores[("primaria_pesada", "Fase pesada ESE 230 (1)")]["texto"].endswith(" L/h")
+    parada = marcadores[("primaria", "ESE 230 (2)")]
+    assert (parada["texto"], parada["color"]) == ("ESE 230 (2) · sin datos", SIN_DATOS)    # no anduvo: gris
+    linea_parada = marcadores[("primaria_descarga", "ESE 230 (2)")]
+    assert (linea_parada["texto"], linea_parada["color"]) == ("", SIN_DATOS)           # sus datos de línea: vacíos
+    retorno = marcadores[("retorno_pesada", "Retorno de fase pesada")]               # aceite en fase pesada
+    assert retorno["texto"] == "0,07 %" and "Caudal total de fase pesada" in retorno["hover"]
     secundaria = marcadores[("secundaria", "MSD 50")]                            # la que anduvo en el turno
     assert (secundaria["texto"], secundaria["color"]) == ("MSD 50 · 1,40 %", ROJO)
     assert marcadores[("pulidora", "OSD 60")]["texto"] == "45 min"
@@ -186,3 +213,12 @@ def test_tendencia_semanal_ponderada(sesion, planta):  # noqa: F811
 
     objetivo = objetivo_eficiencia(sesion, planta, DIA)                          # fruta "N Val S/R" → naranja
     assert (objetivo["minimo"], objetivo["maximo"], objetivo["lado"]) == (80, 90, "inferior")
+
+
+
+def test_semaforo_del_caudal_de_fase_pesada(planta):
+    # |lab − calc| / calc: 9,5 contra 10 → 5 % verde; contra 8,5 → 11,8 % amarillo; contra 7 → 35,7 % rojo
+    assert _color_fp(planta, 9.5, 10.0)[0] == VERDE
+    assert _color_fp(planta, 9.5, 8.5)[0] == AMARILLO
+    assert _color_fp(planta, 9.5, 7.0) == (ROJO, "diferencia 36 % (verde ≤ 10 %, amarillo ≤ 20 %)")
+    assert _color_fp(planta, 9.5, None)[0] == NEUTRO and _color_fp(planta, None, 10.0)[0] == SIN_DATOS

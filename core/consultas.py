@@ -55,6 +55,8 @@ def detalle_planta(sesion: Session, planta_id: int) -> dict | None:
         "turnos_para_alertar": planta.turnos_para_alertar,
         "sigma_alerta_inmediata": planta.sigma_alerta_inmediata,
         "horas_rondas": planta.horas_rondas,
+        "tolerancia_fp_verde_pct": planta.tolerancia_fp_verde_pct,
+        "tolerancia_fp_amarillo_pct": planta.tolerancia_fp_amarillo_pct,
         "lineas": [
             {"nombre": linea.nombre,
              "equipos": [_equipo(e) for e in sorted(linea.equipos, key=lambda e: e.codigo)]}
