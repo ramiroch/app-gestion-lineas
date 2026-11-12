@@ -1,11 +1,13 @@
 {
-  "_comentario": "Ejemplo del formato de data/plantas/<planta>/flowsheet.json (core.inicio.cargar_flowsheet). La imagen va en la misma carpeta y no se sube a GitHub. x e y: fracción de la imagen (0–1, origen arriba a la izquierda). etiqueta: dónde va el valor respecto del círculo (derecha, izquierda, arriba, abajo). Tipos: entrada_eboe y eboe (equipo = código del eBOE), tanque_emulsion, retorno_pesada, primaria y pulidora (equipo = código), secundaria (equipos = códigos de las secundarias; se muestra la que anduvo en el turno). nombre (opcional) reemplaza al del equipo.",
+  "_comentario": "Ejemplo del formato de data/plantas/<planta>/flowsheet.json (core.inicio.cargar_flowsheet). La imagen va en la misma carpeta y no se sube a GitHub. x e y: fracción de la imagen (0–1, origen arriba a la izquierda). etiqueta: dónde va el valor respecto del círculo (derecha, izquierda, arriba, abajo). Tipos: entrada_eboe (aceite en fruta de entrada), eboe (eficiencia), salida_eboe (aceite en fruta de salida) y emulsion_eboe (rebalse del eBOE, laboratorio del BOE), con equipo = código del eBOE; tanque_emulsion (aceite en emulsión de las primarias, planilla de centrífugas), retorno_pesada, primaria y pulidora (equipo = código), secundaria (equipos = códigos de las secundarias; se muestra la que anduvo en el turno). nombre (opcional) reemplaza al del equipo.",
   "imagen": "flowsheet_planta.jpg",
   "ancho": 1034,
   "alto": 775,
   "marcadores": [
     {"tipo": "entrada_eboe", "equipo": "XXX-BOE-01", "x": 0.19, "y": 0.05, "etiqueta": "derecha"},
     {"tipo": "eboe", "equipo": "XXX-BOE-01", "x": 0.19, "y": 0.18, "etiqueta": "derecha"},
+    {"tipo": "salida_eboe", "equipo": "XXX-BOE-01", "x": 0.19, "y": 0.29, "etiqueta": "derecha"},
+    {"tipo": "emulsion_eboe", "equipo": "XXX-BOE-01", "x": 0.14, "y": 0.33, "etiqueta": "izquierda"},
     {"tipo": "tanque_emulsion", "x": 0.10, "y": 0.78, "etiqueta": "derecha"},
     {"tipo": "retorno_pesada", "x": 0.85, "y": 0.45, "etiqueta": "izquierda"},
     {"tipo": "primaria", "equipo": "XXX-CEN-01", "x": 0.39, "y": 0.62, "etiqueta": "izquierda"},

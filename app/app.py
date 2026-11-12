@@ -77,8 +77,7 @@ if config is not None:
         indice, que = puntos[0]["customdata"]
         marcador = marcadores[int(indice)]
         if que == "alerta":
-            st.session_state["alertas_ambitos"] = [marcador["nombre"] if marcador["tipo"] != "tanque_emulsion"
-                                                   else "Planta"]
+            st.session_state["alertas_ambitos"] = marcador["ambitos"]
             st.switch_page(PAGINAS["alertas"])
         destino = marcador.get("destino") or {}
         if destino.get("pagina") == "analisis":

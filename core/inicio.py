@@ -35,8 +35,13 @@ from core.produccion import toneladas_por_turno
 from core.turnos import fecha_produccion, fin_de_turno, inicio_de_turno, turno_de
 
 CARPETA_PLANTAS = CARPETA_PROYECTO / "data" / "plantas"
-TIPOS = ("entrada_eboe", "eboe", "tanque_emulsion", "retorno_pesada", "primaria", "secundaria", "pulidora")
-CON_EQUIPO = ("entrada_eboe", "eboe", "primaria", "pulidora")
+TIPOS = ("entrada_eboe", "eboe", "salida_eboe", "emulsion_eboe", "tanque_emulsion", "retorno_pesada", "primaria",
+         "secundaria", "pulidora")
+CON_EQUIPO = ("entrada_eboe", "eboe", "salida_eboe", "emulsion_eboe", "primaria", "pulidora")
+DEL_EBOE = ("entrada_eboe", "eboe", "salida_eboe", "emulsion_eboe")
+# Variable de alerta → grupo de marcador donde va la 🔔 (los del eBOE; las de centrífugas van a su equipo)
+GRUPO_ALERTA = {"eficiencia": "eboe", "aceite_salida": "salida_eboe", "aceite_emulsion": "emulsion_eboe",
+                "brix": "emulsion_eboe", "ph": "emulsion_eboe"}
 VERDE, ROJO, NEUTRO, SIN_DATOS = "verde", "rojo", "neutro", "sin datos"
 ABIERTAS = ("abierta", EN_ANALISIS)
 ANTES_RONDA, DESPUES_RONDA = timedelta(minutes=15), timedelta(minutes=60)   # una ronda atrasada sigue contando
@@ -170,8 +175,11 @@ def datos_turno(sesion, planta: Planta, dia: date, turno: str) -> dict:
 
 def datos_flowsheet(sesion, planta: Planta, config: dict, dia: date, turno: str) -> list[dict]:
     """Un dict por marcador de la configuración: tipo, nombre, x, y, etiqueta, valor, texto (lo que se escribe al
-    lado), color (VERDE, ROJO, NEUTRO, SIN_DATOS), hover, alertas (abiertas o en análisis) y destino del clic
-    ({"pagina": "analisis" | "centrifugas" | "alertas", "eboe", "equipo"})."""
+    lado), color (VERDE, ROJO, NEUTRO, SIN_DATOS), hover, alertas (abiertas o en análisis), ambitos (para filtrar
+    Alertas al hacer clic en la 🔔) y destino del clic ({"pagina": "analisis" | "centrifugas", "eboe"}).
+    Por eBOE: entrada (aceite en fruta), eBOE (eficiencia), salida (aceite en fruta de salida) y emulsión (rebalse,
+    laboratorio del BOE). Tanque de emulsión: mediana del aceite en emulsión de las primarias en marcha (planilla de
+    centrífugas)."""
     datos = datos_turno(sesion, planta, dia, turno)
     analisis, emulsion, muestras = datos["analisis"], datos["emulsion"], datos["muestras"]
     fruta = analisis["fruta"].dropna().mode().iloc[0] if analisis["fruta"].notna().any() else None
@@ -184,18 +192,16 @@ def datos_flowsheet(sesion, planta: Planta, config: dict, dia: date, turno: str)
         base["nombre"] = m.get("nombre") or base.get("nombre", m["tipo"])
         if base["color"] == SIN_DATOS:
             base["texto"] = "sin datos"
-        clave = base.pop("clave_alertas", None)
-        if clave and clave[0] == "equipos":           # la secundaria junta varios equipos
-            base["alertas"] = sum(alertas.get(("equipo", i), 0) for i in clave[1])
-        else:
-            base["alertas"] = alertas.get(clave, 0)
+        claves = base.pop("claves_alertas", [])
+        base["alertas"] = sum(alertas.get(clave, {}).get("n", 0) for clave in claves)
+        base["ambitos"] = sorted({a for clave in claves for a in alertas.get(clave, {}).get("ambitos", set())})
         resultado.append(base)
     return resultado
 
 
 def _marcador(sesion, planta, m, equipos, analisis, emulsion, muestras, fruta, dia, turno) -> dict:
     tipo = m["tipo"]
-    if tipo in ("entrada_eboe", "eboe"):
+    if tipo in DEL_EBOE:
         equipo = equipos.get(m["equipo"])
         if equipo is None:
             return {"nombre": m["equipo"], "valor": None, "texto": "equipo inexistente", "color": SIN_DATOS,
@@ -203,6 +209,25 @@ def _marcador(sesion, planta, m, equipos, analisis, emulsion, muestras, fruta, d
         del_eboe = analisis[analisis["eboe"] == equipo.numero]
         entradas, salidas = del_eboe[del_eboe["lugar"] == "Entrada"], del_eboe[del_eboe["lugar"] == "Salida"]
         destino = {"pagina": "analisis", "eboe": equipo.numero}
+        claves = [(equipo.id, tipo)] + ([("planta", tipo)] if tipo == "emulsion_eboe" else [])
+        if tipo == "salida_eboe":
+            valor = _media(salidas["aceite_fruta"])
+            color, nota = color_de(valor, None)
+            return {"nombre": f"Salida {equipo.nombre}", "valor": valor, "color": color, "destino": destino,
+                    "texto": "—" if valor is None else f"{_num(valor)} kg/MT", "claves_alertas": claves,
+                    "hover": f"<b>Salida {equipo.nombre}</b><br>Aceite en fruta de salida: "
+                             f"{'—' if valor is None else _num(valor) + ' kg/MT'}<br>N = {len(salidas)} muestras · {nota}"}
+        if tipo == "emulsion_eboe":
+            de_emulsion = emulsion[emulsion["eboe"] == equipo.numero]
+            valor = _media(de_emulsion["aceite_emulsion"])
+            color, nota = color_de(valor, _rango(sesion, planta.id, "Aceite en emulsión", "Emulsión (licor)", fruta))
+            brix, ph = _media(de_emulsion["brix"]), _media(de_emulsion["ph"])
+            return {"nombre": f"Emulsión {equipo.nombre}", "valor": valor, "color": color, "destino": destino,
+                    "texto": "—" if valor is None else f"{_num(valor)} %", "claves_alertas": claves,
+                    "hover": f"<b>Emulsión {equipo.nombre}</b> (rebalse, laboratorio del BOE)<br>Aceite en emulsión: "
+                             f"{'—' if valor is None else _num(valor) + ' %'} ({nota})<br>°Brix: "
+                             f"{'—' if brix is None else _num(brix, 1)} · pH: {'—' if ph is None else _num(ph)}<br>"
+                             f"N = {de_emulsion['aceite_emulsion'].notna().sum()}"}
         if tipo == "entrada_eboe":
             valor = _media(entradas["aceite_fruta"])
             frutos = _media(entradas["n_frutos"] * 10 / entradas["peso_fruta_kg"].where(entradas["peso_fruta_kg"] > 0))
@@ -212,30 +237,31 @@ def _marcador(sesion, planta, m, equipos, analisis, emulsion, muestras, fruta, d
                     "hover": f"<b>Entrada {equipo.nombre}</b><br>Aceite en fruta: "
                              f"{'—' if valor is None else _num(valor) + ' kg/MT'}<br>Frutos en 10 kg: "
                              f"{'—' if frutos is None else _num(frutos, 0)}<br>N = {len(entradas)} muestras · {nota}",
-                    "clave_alertas": None}
+                    "claves_alertas": []}
         eficiencia = _media(entradas["eficiencia_par"] * 100)
-        salida = _media(salidas["aceite_fruta"])
         color, nota = color_de(eficiencia, _rango(sesion, planta.id, "Eficiencia eBOE", "BOE (todos)", fruta))
         programas = entradas["programa"].dropna()
         return {"nombre": equipo.nombre, "valor": eficiencia, "color": color, "destino": destino,
-                "texto": "—" if eficiencia is None else
-                f"ef. {_num(eficiencia, 1)} % · sal. {'—' if salida is None else _num(salida)}",
+                "texto": "—" if eficiencia is None else f"ef. {_num(eficiencia, 1)} %", "claves_alertas": claves,
                 "hover": f"<b>{equipo.nombre}</b><br>Eficiencia: {'—' if eficiencia is None else _num(eficiencia, 1) + ' %'}"
-                         f" ({nota})<br>Aceite en salida: {'—' if salida is None else _num(salida) + ' kg/MT'}<br>"
-                         f"Programa: {programas.mode().iloc[0] if len(programas) else '—'} · MTPH: "
+                         f" ({nota})<br>Programa: {programas.mode().iloc[0] if len(programas) else '—'} · MTPH: "
                          f"{'—' if _media(entradas['tph']) is None else _num(_media(entradas['tph']), 1)}<br>"
-                         f"N = {entradas['eficiencia_par'].notna().sum()} pares",
-                "clave_alertas": ("equipo", equipo.id)}
+                         f"N = {entradas['eficiencia_par'].notna().sum()} pares"}
     if tipo == "tanque_emulsion":
-        valor = _media(emulsion["aceite_emulsion"])
-        color, nota = color_de(valor, _rango(sesion, planta.id, "Aceite en emulsión", "Emulsión (licor)", fruta))
-        brix, ph = _media(emulsion["brix"]), _media(emulsion["ph"])
-        return {"nombre": "Tanque de emulsión", "valor": valor, "color": color, "destino": {"pagina": "analisis"},
-                "texto": "—" if valor is None else f"{_num(valor)} %",
-                "hover": f"<b>Tanque de emulsión</b><br>Aceite en emulsión: {'—' if valor is None else _num(valor) + ' %'}"
-                         f" (promedio de los eBOE; {nota})<br>°Brix: {'—' if brix is None else _num(brix, 1)} · pH: "
-                         f"{'—' if ph is None else _num(ph)}<br>N = {emulsion['aceite_emulsion'].notna().sum()}",
-                "clave_alertas": ("planta", "ph")}
+        primarias = muestras[(muestras["tipo"] == PRIMARIA) & (muestras["fase"] == "emulsion")]
+        aceite = pd.to_numeric(primarias["aceite_pct"], errors="coerce").dropna()
+        valor = float(aceite.median()) if len(aceite) else None
+        color, nota = color_de(valor, _rango(sesion, planta.id, "Aceite en emulsión", PRIMARIA, fruta))
+        caudal = pd.to_numeric(primarias["caudal_lh"], errors="coerce").dropna()
+        solidos = pd.to_numeric(primarias["solidos_pct"], errors="coerce").dropna()
+        en_marcha = ", ".join(sorted(primarias.loc[primarias["aceite_pct"].notna(), "equipo"].unique())) or "—"
+        return {"nombre": "Tanque de emulsión", "valor": valor, "color": color, "destino": {"pagina": "centrifugas"},
+                "texto": "—" if valor is None else f"{_num(valor)} %", "claves_alertas": [],
+                "hover": f"<b>Tanque de emulsión</b> (alimentación a las primarias)<br>Aceite en emulsión: "
+                         f"{'—' if valor is None else _num(valor) + ' %'} (mediana del turno; {nota})<br>Primarias: "
+                         f"{en_marcha}<br>Caudal de emulsión: {'—' if caudal.empty else _num(caudal.median(), 0) + ' L/h'}"
+                         f" · Sólidos: {'—' if solidos.empty else _num(solidos.median(), 1) + ' %'}<br>"
+                         f"N = {len(aceite)} muestras"}
     if tipo == "retorno_pesada":
         agua, lab = _agua(planta, analisis, muestras)
         color, nota = color_de(agua, None)
@@ -243,7 +269,7 @@ def _marcador(sesion, planta, m, equipos, analisis, emulsion, muestras, fruta, d
                 "destino": {"pagina": "centrifugas"}, "texto": "—" if agua is None else f"{_num(agua, 1)} m³/h por eBOE",
                 "hover": f"<b>Tanque de retorno de fase pesada</b><br>Agua por eBOE (centrífugas): "
                          f"{'—' if agua is None else _num(agua, 1) + ' m³/h'}<br>Caudal del laboratorio: "
-                         f"{'—' if lab is None else _num(lab, 1) + ' m³/h'} · {nota}", "clave_alertas": None}
+                         f"{'—' if lab is None else _num(lab, 1) + ' m³/h'} · {nota}", "claves_alertas": []}
     # centrífugas
     codigos = m.get("equipos") or [m["equipo"]]
     con_datos = muestras[muestras["codigo"].isin(codigos)]
@@ -257,11 +283,11 @@ def _marcador(sesion, planta, m, equipos, analisis, emulsion, muestras, fruta, d
     tipo_equipo = equipo.tipo if equipo else {"secundaria": "Centrífuga secundaria", "primaria": "Centrífuga primaria",
                                               "pulidora": "Pulidora"}[tipo]
     destino = {"pagina": "centrifugas"}
-    clave = ("equipos", tuple(e.id for c, e in equipos.items() if c in codigos))
+    claves = [(e.id, "centrifuga") for c, e in equipos.items() if c in codigos]
     if tipo == "pulidora":
         valor = _media(con_datos.loc[con_datos["fase"] == "descarga", "t_descarga_s"] / 60)
         color, nota = color_de(valor, _rango(sesion, planta.id, "Intervalo de descarga", tipo_equipo, fruta))
-        return {"nombre": nombre, "valor": valor, "color": color, "destino": destino, "clave_alertas": clave,
+        return {"nombre": nombre, "valor": valor, "color": color, "destino": destino, "claves_alertas": claves,
                 "texto": "—" if valor is None else f"{_num(valor, 0)} min",
                 "hover": f"<b>{nombre}</b><br>Intervalo de descarga: {'—' if valor is None else _num(valor, 0) + ' min'} "
                          f"({nota})<br>N = {len(con_datos)} muestras"}
@@ -277,7 +303,7 @@ def _marcador(sesion, planta, m, equipos, analisis, emulsion, muestras, fruta, d
         hover += (f"<br>Caudal: {'—' if caudal is None else _num(caudal, 0) + ' L/h'} · Sólidos: "
                   f"{'—' if solidos is None else _num(solidos, 1) + ' %'} · CP pesada: "
                   f"{'—' if cp is None else _num(cp, 1) + ' bar'}")
-    return {"nombre": nombre, "valor": valor, "color": color, "destino": destino, "clave_alertas": clave,
+    return {"nombre": nombre, "valor": valor, "color": color, "destino": destino, "claves_alertas": claves,
             "texto": "—" if valor is None else f"{nombre} · {_num(valor)} %" if tipo == "secundaria" else f"{_num(valor)} %",
             "hover": hover}
 
@@ -294,20 +320,28 @@ def _agua(planta: Planta, analisis: pd.DataFrame, muestras: pd.DataFrame) -> tup
 
 
 def _alertas_por_marcador(sesion, planta_id: int, equipos: dict) -> dict:
-    """Alertas abiertas o en análisis por clave: ("equipo", id) (las comunes de planta cuentan en los tres eBOE) y
-    ("planta", "ph") para el tanque de emulsión."""
-    ids_planta = {e.id for e in equipos.values()}
+    """Alertas abiertas o en análisis por clave de marcador: {clave: {"n", "ambitos"}}. Claves: (equipo_id, grupo)
+    con el grupo de GRUPO_ALERTA (eboe, salida_eboe, emulsion_eboe) o "centrifuga"; ("planta", "emulsion_eboe") para
+    el pH, que es de la planta. Las comunes a los eBOE (ámbito planta) cuentan en los tres. ambitos: lo que se filtra
+    en Alertas (el nombre del equipo, o "Planta")."""
+    por_id = {e.id: e for e in equipos.values()}
+    eboes = [e for e in equipos.values() if e.tipo == "BOE"]
     resultado = {}
-    eboes = [e.id for e in equipos.values() if e.tipo == "BOE"]
     for a in sesion.scalars(select(Alerta).where(Alerta.estado.in_(ABIERTAS))):
-        if a.equipo_id is not None and a.equipo_id not in ids_planta or (a.equipo_id is None and a.planta_id != planta_id):
+        if (a.equipo_id is not None and a.equipo_id not in por_id) or (a.equipo_id is None and a.planta_id != planta_id):
             continue
-        if a.equipo_id is None:
-            claves = [("planta", "ph")] if a.variable == "ph" else [("equipo", e) for e in eboes]
+        grupo = GRUPO_ALERTA.get(a.variable, "centrifuga")
+        if a.equipo_id is not None:
+            claves = [(a.equipo_id, grupo)]
+        elif a.variable == "ph":
+            claves = [("planta", grupo)]
         else:
-            claves = [("equipo", a.equipo_id)]
+            claves = [(e.id, grupo) for e in eboes]
         for clave in claves:
-            resultado[clave] = resultado.get(clave, 0) + 1
+            entrada = resultado.setdefault(clave, {"n": 0, "ambitos": set()})
+            entrada["n"] += 1
+            entrada["ambitos"].add(por_id[a.equipo_id].nombre if a.equipo_id is not None
+                                   else "Planta (común eBOE)" if a.comun_eboe else "Planta")   # como en Alertas
     return resultado
 
 

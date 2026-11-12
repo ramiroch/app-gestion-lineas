@@ -19,6 +19,9 @@ CONFIG = {"imagen": "flowsheet.jpg", "ancho": 1034, "alto": 775, "marcadores": [
     {"tipo": "entrada_eboe", "equipo": "N-BOE-01", "x": 0.19, "y": 0.05},
     {"tipo": "eboe", "equipo": "N-BOE-01", "x": 0.19, "y": 0.18},
     {"tipo": "eboe", "equipo": "N-BOE-02", "x": 0.42, "y": 0.18},
+    {"tipo": "salida_eboe", "equipo": "N-BOE-01", "x": 0.19, "y": 0.29},
+    {"tipo": "emulsion_eboe", "equipo": "N-BOE-01", "x": 0.14, "y": 0.33},
+    {"tipo": "emulsion_eboe", "equipo": "N-BOE-02", "x": 0.36, "y": 0.33},
     {"tipo": "tanque_emulsion", "x": 0.10, "y": 0.78},
     {"tipo": "primaria", "equipo": "N-CEN-01", "x": 0.39, "y": 0.62},
     {"tipo": "primaria", "equipo": "N-CEN-02", "x": 0.39, "y": 0.84},
@@ -73,7 +76,7 @@ def test_cargar_flowsheet(tmp_path):
         cargar_flowsheet("Norte", tmp_path)
     (carpeta / "flowsheet.jpg").write_bytes(b"imagen")
     config = cargar_flowsheet("Norte", tmp_path)
-    assert len(config["marcadores"]) == 8 and config["ruta_imagen"].endswith("flowsheet.jpg")
+    assert len(config["marcadores"]) == 11 and config["ruta_imagen"].endswith("flowsheet.jpg")
     for cambio, error in (({"x": 1.2}, "entre 0 y 1"), ({"tipo": "bomba"}, "no válido"), ({"equipo": None}, "falta")):
         malo = CONFIG | {"marcadores": [CONFIG["marcadores"][1] | cambio]}
         (carpeta / "flowsheet.json").write_text(json.dumps(malo), encoding="utf-8")
@@ -104,25 +107,36 @@ def test_fecha_de_referencia_y_turnos(sesion, planta):  # noqa: F811
 def test_marcadores_del_turno(sesion, planta, tmp_path):  # noqa: F811
     _ronda(sesion, datetime(2026, 7, 1, 14, 10), salida_ml={2: 30.0})          # eBOE 2: eficiencia 70 %
     _muestra(sesion, "N-CEN-01", datetime(2026, 7, 1, 14, 30), "descarga", ml=10.0)          # 0,35 %
-    _muestra(sesion, "N-CEN-01", datetime(2026, 7, 1, 14, 30), "emulsion", caudal_lh=15000.0)
+    _muestra(sesion, "N-CEN-01", datetime(2026, 7, 1, 14, 30), "emulsion", ml=20.0, caudal_lh=15000.0)  # 0,70 %
+    _muestra(sesion, "N-CEN-01", datetime(2026, 7, 1, 16, 30), "emulsion", ml=24.0, caudal_lh=16000.0)  # 0,84 %
     _muestra(sesion, "N-CSE-02", datetime(2026, 7, 1, 14, 30), "descarga", ml=40.0)          # MSD 50: 1,40 %
     _muestra(sesion, "N-PUL-01", datetime(2026, 7, 1, 14, 30), "descarga", t_descarga_s=2700.0)   # 45 min
     sesion.add(Alerta(origen="nelson", regla="1", variable="eficiencia", ambito="equipo:2",
                       equipo_id=sesion.scalars(select(Equipo).where(Equipo.codigo == "N-BOE-02")).one().id,
                       fecha_produccion=DIA, turno_id=sesion.scalars(select(Turno).where(Turno.nombre == "T")).one().id,
                       fecha_hora=datetime(2026, 7, 1, 14, 10), valor=70.0, estado="abierta", creada_por="prueba"))
+    sesion.add(Alerta(origen="rango", regla="rango", variable="ph", ambito=f"planta:{planta.id}", planta_id=planta.id,
+                      fecha_produccion=DIA, turno_id=sesion.scalars(select(Turno).where(Turno.nombre == "T")).one().id,
+                      fecha_hora=datetime(2026, 7, 1, 14, 10), valor=7.5, estado="en análisis", creada_por="prueba"))
     sesion.commit()
     marcadores = {(m["tipo"], m["nombre"]): m for m in datos_flowsheet(sesion, planta, CONFIG, DIA, "T")}
 
     entrada = marcadores[("entrada_eboe", "Entrada eBOE 1")]
     assert (entrada["texto"], entrada["color"]) == ("7,00 kg/MT", NEUTRO) and "Frutos en 10 kg: 50" in entrada["hover"]
     eboe1, eboe2 = marcadores[("eboe", "eBOE 1")], marcadores[("eboe", "eBOE 2")]
-    assert (eboe1["texto"], eboe1["color"], eboe1["alertas"]) == ("ef. 90,0 % · sal. 0,70", VERDE, 0)
-    assert (eboe2["color"], eboe2["alertas"], eboe2["destino"]) == (ROJO, 1, {"pagina": "analisis", "eboe": 2})
-    tanque = marcadores[("tanque_emulsion", "Tanque de emulsión")]
-    assert tanque["color"] == NEUTRO and "rango en revisión" in tanque["hover"]
+    assert (eboe1["texto"], eboe1["color"], eboe1["alertas"]) == ("ef. 90,0 %", VERDE, 0)       # solo la eficiencia
+    assert (eboe2["color"], eboe2["alertas"], eboe2["ambitos"], eboe2["destino"]) == (
+        ROJO, 1, ["eBOE 2"], {"pagina": "analisis", "eboe": 2})
+    salida = marcadores[("salida_eboe", "Salida eBOE 1")]
+    assert (salida["texto"], salida["color"], salida["alertas"]) == ("0,70 kg/MT", NEUTRO, 0) and "N = 1" in salida["hover"]
+    emulsion = marcadores[("emulsion_eboe", "Emulsión eBOE 1")]                  # rebalse del eBOE (laboratorio)
+    assert (emulsion["texto"], emulsion["color"]) == ("0,88 %", NEUTRO) and "rango en revisión" in emulsion["hover"]
+    assert (emulsion["alertas"], emulsion["ambitos"]) == (1, ["Planta"])        # el pH es de la planta
+    tanque = marcadores[("tanque_emulsion", "Tanque de emulsión")]               # primarias (centrífugas), mediana
+    assert (tanque["texto"], tanque["destino"]) == ("0,77 %", {"pagina": "centrifugas"})
+    assert "15.500 L/h" in tanque["hover"] and "N = 2" in tanque["hover"]
     primaria = marcadores[("primaria", "ESE 230 (1)")]
-    assert (primaria["texto"], primaria["color"]) == ("0,35 %", VERDE) and "15.000 L/h" in primaria["hover"]
+    assert (primaria["texto"], primaria["color"]) == ("0,35 %", VERDE) and "15.500 L/h" in primaria["hover"]
     assert marcadores[("primaria", "ESE 230 (2)")]["color"] == SIN_DATOS          # parada: gris
     secundaria = marcadores[("secundaria", "MSD 50")]                            # la que anduvo en el turno
     assert (secundaria["texto"], secundaria["color"]) == ("MSD 50 · 1,40 %", ROJO)
