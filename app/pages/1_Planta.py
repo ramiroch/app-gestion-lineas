@@ -91,14 +91,16 @@ mostrar_parametro(c2, "Factor aceite en fruta", None if fruta is None else numer
 mostrar_parametro(c3, "Factor aceite en emulsión", None if emulsion is None else numero_es(emulsion, 4))
 mostrar_parametro(c4, "Inicio del día de producción", None if hora is None else hora.strftime("%H:%M"))
 mostrar_parametro(c5, "Blanco de centrífugas", None if blanco_cen is None else f"{numero_es(blanco_cen, 2)} mL")
-c6, c7, c8, c9, _ = st.columns(5)
+c6, c7, c8, c9, c10 = st.columns(5)
 mostrar_parametro(c6, "Umbral de primarias en paralelo",
                   None if umbral is None else f"{umbral:,.0f} L/h".replace(",", "."))
 mostrar_parametro(c7, "Turnos que cierran un episodio", fin_episodio)
 mostrar_parametro(c8, "Turnos seguidos para alertar", para_alertar)
 mostrar_parametro(c9, "Alerta inmediata (regla 1)",
                   None if sigma_inmediata is None else f"± {numero_es(sigma_inmediata, 1)} σ")
-if None in (blanco, fruta, emulsion, hora, blanco_cen, umbral, fin_episodio, para_alertar, sigma_inmediata):
+mostrar_parametro(c10, "Horas de las rondas", planta["horas_rondas"])
+if None in (blanco, fruta, emulsion, hora, blanco_cen, umbral, fin_episodio, para_alertar, sigma_inmediata,
+            planta["horas_rondas"]):
     st.caption("Los parámetros «a definir» se completan en la hoja Planta de "
                "data/maestros_clientes.xlsx. Sin ellos no se pueden calcular análisis de esta planta.")
 

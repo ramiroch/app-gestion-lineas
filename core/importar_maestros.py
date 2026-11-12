@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
+from core.parametros import leer_horas_rondas
 from core.models import (DESTINOS_FASE_PESADA, ESTADOS_EQUIPO, LADOS_CAPACIDAD, Cliente, Equipo, Linea, Planta, PuntoMuestreo,
                          RangoReferencia, Turno)
 
@@ -36,7 +37,8 @@ COLUMNAS = {
     "Cliente": ["nombre", "pais_casa_matriz"],
     "Planta": ["cliente", "nombre", "pais", "blanco_ml", "factor_aceite_fruta",
                "factor_aceite_emulsion", "hora_inicio_dia", "blanco_centrifugas_ml",
-               "umbral_paralelo_lh", "turnos_fin_episodio", "turnos_para_alertar", "sigma_alerta_inmediata"],
+               "umbral_paralelo_lh", "turnos_fin_episodio", "turnos_para_alertar", "sigma_alerta_inmediata",
+               "horas_rondas"],
     "Turno": ["cliente", "planta", "nombre", "hora_inicio", "hora_fin"],
     "Linea": ["cliente", "planta", "nombre"],
     "Equipo": ["codigo", "cliente", "planta", "linea", "nombre", "tipo", "numero", "modelo",
@@ -153,6 +155,14 @@ def _entero(datos: dict, columna: str) -> int | None:
     raise ErrorFila(f'"{columna}" tiene que ser un número entero (dice "{valor}").')
 
 
+def _horas_rondas(valor) -> str | None:
+    """Horas de las rondas como texto normalizado ("05:10, 07:10"); vacío queda vacío. Error claro si alguna no es
+    una hora."""
+    if valor is None or not str(valor).strip():
+        return None
+    return ", ".join(f"{h:%H:%M}" for h in leer_horas_rondas(str(valor)))
+
+
 def _hora(datos: dict, columna: str) -> time | None:
     """Convierte a hora. Acepta una hora de Excel o un texto como "05:00"."""
     valor = datos.get(columna)
@@ -223,6 +233,7 @@ def _fila_planta(sesion: Session, datos: dict):
         "turnos_fin_episodio": _entero(datos, "turnos_fin_episodio"),
         "turnos_para_alertar": _entero(datos, "turnos_para_alertar"),
         "sigma_alerta_inmediata": _numero(datos, "sigma_alerta_inmediata"),
+        "horas_rondas": _horas_rondas(datos.get("horas_rondas")),
     }
     return _buscar(cliente.plantas, nombre=campos["nombre"]), campos
 

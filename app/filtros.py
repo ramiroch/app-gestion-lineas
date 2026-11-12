@@ -65,6 +65,16 @@ def ultima_fecha_planta(planta_id: int):
         return ultima_fecha_de_datos(sesion, planta_id)
 
 
+def fijar_filtros(planta_id: int, eboes: list[int], desde, hasta) -> None:
+    """Deja elegidos en la barra la planta, los eBOE y el período (atajo personalizado), por ejemplo antes de ir a
+    Análisis desde el Inicio. Los demás filtros quedan como estaban."""
+    etiqueta = next(e for e, i in plantas().items() if i == planta_id)
+    valores = {"planta": etiqueta, "atajo": ATAJO_PERSONALIZADO, "fechas": (desde, hasta), "eboes": eboes}
+    _guardado().update(valores)
+    for campo, valor in valores.items():
+        st.session_state[f"_filtro_{campo}"] = valor
+
+
 def filtros_elegidos() -> Filtros | None:
     """Filtros elegidos en la barra (llamar después de barra_filtros()); None si no hay datos."""
     return st.session_state.get(CLAVE_ACTUALES)

@@ -4,6 +4,8 @@ Los cálculos los piden con parametros_planta(): si falta alguno, se corta con u
 error claro en lugar de calcular con un valor inventado.
 """
 
+from datetime import time
+
 from sqlalchemy.orm import Session
 
 from core.models import Planta
@@ -18,7 +20,25 @@ DESCRIPCION_PARAMETROS = {
     "turnos_fin_episodio": "los turnos sin alerta que cierran un episodio",
     "turnos_para_alertar": "los turnos seguidos que crean una alerta",
     "sigma_alerta_inmediata": "los σ de alerta inmediata",
+    "horas_rondas": "las horas de las rondas de Scott",
 }
+
+
+def leer_horas_rondas(texto: str) -> list[time]:
+    """"05:10, 07:10, 09:10" → [05:10, 07:10, 09:10] (separadas por coma o punto y coma, en el orden del día de
+    producción). Error claro si alguna no es una hora o si está vacío."""
+    partes = [p.strip() for p in str(texto or "").replace(";", ",").split(",") if p.strip()]
+    if not partes:
+        raise ValueError("Las horas de las rondas están vacías.")
+    horas = []
+    for parte in partes:
+        try:
+            horas.append(time.fromisoformat(parte if len(parte) > 4 else f"0{parte}"))
+        except ValueError:
+            raise ValueError(f'"{parte}" no es una hora (usá HH:MM, por ejemplo 05:10).') from None
+    if len(set(horas)) != len(horas):
+        raise ValueError("Las horas de las rondas tienen una repetida.")
+    return horas
 
 
 class ParametrosIncompletos(ValueError):
@@ -69,6 +89,12 @@ def validar_parametros(planta: Planta, requeridos: list[str] | None = None) -> d
             raise ParametrosIncompletos(f'La planta "{planta.nombre}" tiene '
                                         f"{DESCRIPCION_PARAMETROS[factor]} en {valores[factor]}: "
                                         "tiene que ser mayor que 0.")
+    if "horas_rondas" in valores:
+        try:
+            leer_horas_rondas(valores["horas_rondas"])
+        except ValueError as error:
+            raise ParametrosIncompletos(f'La planta "{planta.nombre}" tiene mal {DESCRIPCION_PARAMETROS["horas_rondas"]}: '
+                                        f"{error}") from None
     return valores
 
 

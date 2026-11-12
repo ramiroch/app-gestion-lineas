@@ -1263,3 +1263,75 @@ def boxplot_mensual(cajas: pd.DataFrame, outliers: pd.DataFrame, eje: list[str],
     estilo(figura, ALTURA_BOXPLOT_MENSUAL)
     figura.update_layout(boxmode="overlay", hovermode="closest")     # una caja por mes en cada panel: centrada
     return figura
+
+
+COLORES_SEMAFORO = {"verde": "#1baf7a", "rojo": "#e34948", "neutro": "#2a78d6", "sin datos": "#b0b4ba"}
+NOMBRES_SEMAFORO = {"verde": "Dentro del rango", "rojo": "Fuera del rango", "neutro": "Sin rango (o en revisión)",
+                    "sin datos": "Sin datos en el turno"}
+# Posición de la etiqueta respecto del marcador: (desplazamiento x, desplazamiento y en px, anclaje x, anclaje y)
+LUGAR_ETIQUETA = {"derecha": (16, 0, "left", "middle"), "izquierda": (-16, 0, "right", "middle"),
+                  "arriba": (0, 16, "center", "bottom"), "abajo": (0, -16, "center", "top")}
+
+
+def flowsheet(config: dict, marcadores: list[dict]) -> go.Figure:
+    """Flowsheet de la planta: la imagen de fondo (config de core.inicio.cargar_flowsheet) y, encima de cada equipo,
+    un círculo con el color del semáforo, el valor escrito al lado (con fondo blanco semitransparente para no tapar
+    el dibujo) y una 🔔 con la cantidad de alertas abiertas o en análisis. x e y en fracción de la imagen (origen
+    arriba a la izquierda). customdata de cada punto: (índice del marcador, "equipo" o "alerta") para el clic."""
+    from PIL import Image
+    ancho, alto = config["ancho"], config["alto"]
+    figura = go.Figure()
+    figura.add_layout_image(source=Image.open(config["ruta_imagen"]), xref="x", yref="y", x=0, y=1, sizex=1, sizey=1,
+                            xanchor="left", yanchor="top", sizing="stretch", layer="below")
+    for color, nombre in NOMBRES_SEMAFORO.items():
+        indices = [i for i, m in enumerate(marcadores) if m["color"] == color]
+        if not indices:
+            continue
+        figura.add_scatter(
+            x=[marcadores[i]["x"] for i in indices], y=[1 - marcadores[i]["y"] for i in indices], mode="markers",
+            name=nombre, marker=dict(size=20, color=COLORES_SEMAFORO[color], line=dict(color="white", width=2)),
+            customdata=[(i, "equipo") for i in indices], text=[marcadores[i]["hover"] for i in indices],
+            hovertemplate="%{text}<extra></extra>")
+    con_alertas = [i for i, m in enumerate(marcadores) if m["alertas"]]
+    if con_alertas:
+        figura.add_scatter(
+            x=[marcadores[i]["x"] + 0.022 for i in con_alertas], y=[1 - marcadores[i]["y"] + 0.035 for i in con_alertas],
+            mode="markers+text", name="Alertas abiertas", text=[f"🔔{marcadores[i]['alertas']}" for i in con_alertas],
+            textfont=dict(size=15), marker=dict(size=24, color="rgba(255,255,255,0.01)"),
+            customdata=[(i, "alerta") for i in con_alertas],
+            hovertemplate="%{text} alerta(s) abierta(s) o en análisis: clic para verlas<extra></extra>")
+    for m in marcadores:
+        dx, dy, xanchor, yanchor = LUGAR_ETIQUETA.get(m.get("etiqueta"), LUGAR_ETIQUETA["derecha"])
+        figura.add_annotation(x=m["x"], y=1 - m["y"], text=f"<b>{m['texto']}</b>", showarrow=False, xshift=dx, yshift=dy,
+                              xanchor=xanchor, yanchor=yanchor, font=dict(size=12, color=COLOR_DATOS),
+                              bgcolor="rgba(255,255,255,0.82)", borderpad=2)
+    figura.update_xaxes(range=[0, 1], visible=False, fixedrange=True)
+    figura.update_yaxes(range=[0, 1], visible=False, fixedrange=True)
+    figura.update_layout(width=ancho, height=alto + 34, margin=dict(l=0, r=0, t=0, b=34), plot_bgcolor="white",
+                         paper_bgcolor="white", hovermode="closest", clickmode="event+select",
+                         legend=dict(orientation="h", x=0, xanchor="left", y=0, yanchor="top", font=dict(size=11)))
+    return figura
+
+
+def tendencia_semanal(tabla: pd.DataFrame, variable: str, titulo_y: str, unidad: str, decimales: int,
+                      objetivo: dict | None = None) -> go.Figure:
+    """Una línea por eBOE con el valor semanal (core.inicio.tendencia_semanal), N en el tooltip, semanas con N < 3
+    tenues y la banda objetivo (mínimo–máximo) en gris."""
+    figura = go.Figure()
+    datos = tabla[tabla["variable"] == variable].sort_values("semana", ascending=False)
+    eje = list(dict.fromkeys(datos["etiqueta"]))
+    if objetivo and objetivo.get("minimo") is not None and objetivo.get("maximo") is not None:
+        figura.add_hrect(y0=objetivo["minimo"], y1=objetivo["maximo"], fillcolor=GRIS, opacity=0.12, line_width=0,
+                         layer="below")
+    for eboe, sub in datos.groupby("eboe"):
+        chicos = (sub["n"] < 3).tolist()
+        figura.add_scatter(
+            x=sub["etiqueta"], y=sub["valor"], mode="lines+markers", name=f"eBOE {eboe}",
+            line=dict(color=PALETA[(int(eboe) - 1) % len(PALETA)], width=2),
+            marker=dict(size=7, opacity=[0.3 if c else 1 for c in chicos]),
+            customdata=list(zip(sub["n"], sub["valor"].map(lambda v: numero(v, decimales)),
+                                ["<br>⚠ N < 3" if c else "" for c in chicos])),
+            hovertemplate=f"<b>eBOE {eboe} · %{{x}}</b><br>%{{customdata[1]}} {unidad}<br>N %{{customdata[0]}}"
+                          "%{customdata[2]}<extra></extra>")
+    figura.update_layout(yaxis_title=titulo_y, xaxis=dict(type="category", categoryorder="array", categoryarray=eje))
+    return estilo(figura, ALTURA_CHICA)

@@ -76,12 +76,13 @@ NOMBRES_FASE = {"emulsion": "Emulsión", "fase_liviana": "Fase liviana", "fase_p
 
 # ---------------------------------------------------------------- lectura
 
-def tabla_muestras(sesion: Session, planta_id: int) -> pd.DataFrame:
+def tabla_muestras(sesion: Session, planta_id: int, desde=None, hasta=None) -> pd.DataFrame:
     """Una fila por muestra de centrífuga de la planta (COLUMNAS_MUESTRAS + fecha_produccion y turno).
 
     aceite_pct (%): (mL − blanco) × N × factor_aceite_emulsion / g si la muestra se tituló (titulada=True);
     si no, el % anotado (aceite_pct_medido: fase liviana o valor pegado). copiada: revisar dice "copiada de la
-    otra primaria". fecha_produccion y turno, con core.turnos (no se guardan).
+    otra primaria". fecha_produccion y turno, con core.turnos (no se guardan). desde y hasta: solo las muestras con
+    desde ≤ fecha_hora < hasta (None: sin límite).
     """
     planta = sesion.get(Planta, planta_id)
     factor = validar_parametros(planta, ["factor_aceite_emulsion"])["factor_aceite_emulsion"]
@@ -89,7 +90,9 @@ def tabla_muestras(sesion: Session, planta_id: int) -> pd.DataFrame:
         select(MuestraCentrifuga, Equipo, Proceso.temporada, Proceso.numero)
         .join(Equipo, MuestraCentrifuga.equipo_id == Equipo.id).join(Linea, Equipo.linea_id == Linea.id)
         .outerjoin(Proceso, MuestraCentrifuga.proceso_id == Proceso.id)
-        .where(Linea.planta_id == planta_id)).all()
+        .where(Linea.planta_id == planta_id,
+               *([MuestraCentrifuga.fecha_hora >= desde] if desde is not None else []),
+               *([MuestraCentrifuga.fecha_hora < hasta] if hasta is not None else []))).all()
     registros = []
     for m, e, temporada, proceso in filas:
         titulada = None not in (m.gramos, m.ml, m.normalidad, m.blanco_ml)

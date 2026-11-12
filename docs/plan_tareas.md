@@ -101,9 +101,10 @@ Fuente: `Plan diario - Primera planta LEDESMA.xlsx` (App_Gestion). Bloques de 2 
 - **Listo cuando:** Un registro aprobado entra en los KPIs; uno en borrador no.
 - **Notas:** 10/11: core/carga_produccion.py + página Producción (cargar con el turno que acaba de terminar, rendimientos en vivo contra las últimas 2 semanas, aviso de tipeo por percentiles; aprobar y devolver a borrador con motivo; un aprobado se corrige con motivo y sigue aprobado). Permiso de aprobación en un único punto (core.cambios.puede_aprobar). KPI y ponderación por toneladas solo con aprobados; aviso de turnos sin aprobar en Proceso. El importador no pisa lo cargado en la app.
 
-## Tarea 21 · Día colchón (23/11) — Pendiente
+## Tarea 21 · Día colchón (23/11) — Hecha
 - **Qué hacer:** Ponerse al día. (Verificar si es feriado.) Inicio con semáforo por equipo y alertas abiertas (checklist 12 y 13).
 - **Listo cuando:** Nada atrasado.
+- **Notas:** 11/11: página Inicio con flowsheet (semáforo por equipo del último turno, valor al lado, 🔔 de alertas, clic a la página del equipo), alertas abiertas, pendientes (rondas del turno en curso con el parámetro horas_rondas, turnos sin producción, borradores) y tendencia semanal por eBOE. Configuración del flowsheet por planta en data/plantas/ (formato en docs/flowsheet_ejemplo.json).
 
 ## Tarea 22 · Usuarios y roles básicos (24/11) — Pendiente
 - **Qué hacer:** Login simple; roles laboratorio, procesos e ingeniero.

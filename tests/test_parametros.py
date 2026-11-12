@@ -29,7 +29,7 @@ def crear_planta(sesion, **parametros) -> int:
 COMPLETOS = {"blanco_ml": 0.2, "factor_aceite_fruta": 68.8416, "factor_aceite_emulsion": 3.45,
              "hora_inicio_dia": time(5, 0), "blanco_centrifugas_ml": 0.1,
              "umbral_paralelo_lh": 17000.0, "turnos_fin_episodio": 3, "turnos_para_alertar": 2,
-             "sigma_alerta_inmediata": 4.0}
+             "sigma_alerta_inmediata": 4.0, "horas_rondas": "05:10, 07:10"}
 
 
 def test_devuelve_los_parametros(sesion):
@@ -58,7 +58,7 @@ def test_faltan_todos(sesion):
     assert ("no tiene definidos el blanco (mL), el factor de aceite en fruta, el factor de "
             "aceite en emulsión, la hora de inicio del día de producción, el blanco de centrífugas (mL), el umbral "
             "de primarias en paralelo (L/h), los turnos sin alerta que cierran un episodio, los turnos seguidos que "
-            "crean una alerta y los σ de alerta inmediata. Completalos"
+            "crean una alerta, los σ de alerta inmediata y las horas de las rondas de Scott. Completalos"
             ) in str(error.value)
 
 
@@ -99,3 +99,18 @@ def test_validar_parametros_con_la_planta_en_memoria():
     assert validar_parametros(planta, ["factor_aceite_emulsion"]) == {"factor_aceite_emulsion": 3.45}
     with pytest.raises(ValueError, match="desconocido"):
         validar_parametros(planta, ["factor_inventado"])
+
+
+
+def test_horas_de_las_rondas():
+    from datetime import time as hora
+    from core.parametros import leer_horas_rondas
+    assert leer_horas_rondas("05:10, 7:10; 09:10") == [hora(5, 10), hora(7, 10), hora(9, 10)]
+    for texto, error in (("", "vacías"), ("05:10, 25:00", "no es una hora"), ("05:10, 05:10", "repetida")):
+        with pytest.raises(ValueError, match=error):
+            leer_horas_rondas(texto)
+
+
+def test_horas_de_las_rondas_mal_escritas(sesion):
+    with pytest.raises(ParametrosIncompletos, match="tiene mal las horas de las rondas"):
+        parametros_planta(sesion, crear_planta(sesion, **(COMPLETOS | {"horas_rondas": "cinco y diez"})))
