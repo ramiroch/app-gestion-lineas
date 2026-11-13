@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from core.carga_scott import guardar_ronda
 from core.gestion_alertas import listar_alertas
+from core.importar_centrifugas import REVISAR_EXTREMO
 from core.inicio import (AMARILLO, EN_MARCHA, NEUTRO, ROJO, SIN_DATOS, VERDE, _color_fp, cargar_flowsheet,
                          carpeta_planta, color_de, datos_flowsheet, fecha_referencia, objetivo_eficiencia, pendientes,
                          rondas_esperadas, tendencia_semanal, turnos_con_datos, turnos_del_periodo)
@@ -233,6 +234,15 @@ def test_rango_con_un_solo_tipo_de_turno(sesion, planta, periodo):  # noqa: F811
     assert marcadores[("secundaria", "ESB 130")]["texto"] == "ESB 130 · 0,35 %"
     solo_t = _por_tipo(sesion, planta, desde, hasta, "T")
     assert solo_t[("primaria", "ESE 230 (2)")]["color"] == SIN_DATOS            # no anduvo en ningún T
+
+
+def test_descarga_con_mediana_y_valores_extremos(sesion, planta, periodo):  # noqa: F811
+    _muestra(sesion, "N-CSE-02", datetime(2026, 7, 1, 18, 30), "descarga", ml=600.0,          # 21 %: muestra extrema
+             revisar=REVISAR_EXTREMO)
+    secundaria = _por_tipo(sesion, planta, *periodo, "T")[("secundaria", "MSD 50")]
+    assert secundaria["texto"] == "MSD 50 · 0,70 %"           # mediana de 0,70 / 0,70 / 21 (la media daría 7,47)
+    assert "N muestras con valor extremo: 1" in secundaria["hover"]
+    assert "valor extremo" not in _por_tipo(sesion, planta, *periodo, "M")[("secundaria", "ESB 130")]["hover"]
 
 
 def test_sin_toneladas_aprobadas_promedio_simple(sesion, planta, periodo):  # noqa: F811

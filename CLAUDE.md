@@ -6,6 +6,7 @@
 - Trabajá en **pasos chicos**: un archivo o una función por vez. Después de cada paso, decime cómo probarlo.
 - Antes de instalar paquetes, borrar o renombrar archivos, preguntame.
 - Respondé siempre en español.
+- Los PNG y archivos que generes para que yo los revise van a `data\capturas\` (no se sube a GitHub), con nombre claro y fecha: `AAAA-MM-DD_tema.png` (por ejemplo `2026-11-13_flowsheet_periodo_2026-09-21_al_2026-10-01_todos.png`). Nunca en la carpeta temporal.
 
 ## Qué es el proyecto
 Sistema de gestión para las líneas de aceite y jugo de los clientes de Brown. Reemplaza los Excel, PDF y fotos que cada planta manda en su propio formato por **un formato único** con cálculos y estadística automáticos.

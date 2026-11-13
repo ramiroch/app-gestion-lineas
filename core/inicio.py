@@ -31,6 +31,7 @@ from core.carga_scott import semaforo
 from core.db import CARPETA_PROYECTO
 from core.estadistica import media_ponderada_por_turno
 from core.gestion_alertas import EN_ANALISIS, episodio_se_superpone, listar_alertas
+from core.importar_centrifugas import REVISAR_EXTREMO
 from core.limites import VARIABLES_CONTROL
 from core.models import (Alerta, AnalisisScott, Equipo, Linea, MuestraCentrifuga, Planta, PuntoMuestreo,
                          RangoReferencia, RegistroProduccion)
@@ -258,8 +259,8 @@ def datos_flowsheet(sesion, planta: Planta, config: dict, desde: date, hasta: da
     muestras), alertas (cantidad cuyo episodio toca el período, en cualquier estado), hover_alertas, ambitos (para
     filtrar Alertas al hacer clic en la 🔔) y destino del clic ({"pagina": "analisis" | "centrifugas", "eboe"}).
 
-    Cálculo: cada turno se resume como en un turno solo (media del turno; mediana en caudales, MTPH y % de fases) y
-    el período es la mediana de los turnos. La eficiencia y el aceite en salida, ponderados por las toneladas
+    Cálculo: cada turno se resume como en un turno solo (media del turno; mediana en caudales, MTPH, % de fases y aceite en descarga) y
+    el período es la mediana de los turnos (el aceite en descarga, mediana también dentro del turno, por las muestras extremas). La eficiencia y el aceite en salida, ponderados por las toneladas
     aprobadas de cada turno (promedio simple si no hay, aclarado en el hover). Con un día y un turno, el valor del
     turno.
     Por eBOE: nombre con el MTPH (sin círculo: color None), entrada (aceite en fruta), eBOE (eficiencia), salida
@@ -353,11 +354,12 @@ def _marcador(sesion, planta: Planta, m: dict, ctx: dict) -> dict:
                 "hover": f"<b>{nombre}</b><br>Intervalo de descarga: {_texto(valor, ' min', 0)} ({nota})<br>"
                          f"{_n(n, n_turnos)}"}
     descarga = con_datos[con_datos["fase"] == "descarga"]
-    valor, n_turnos, n = _de_turnos(descarga, "aceite_pct")
+    valor, n_turnos, n = _de_turnos(descarga, "aceite_pct", _mediana)       # mediana: hay muestras extremas
     color, nota = color_de(valor, _rango(sesion, planta.id, "Aceite en descarga", tipo_equipo, fruta))
     return {"nombre": nombre, "valor": valor, "color": color, "destino": destino, "claves_alertas": claves,
             "texto": "—" if valor is None else f"{nombre} · {_num(valor)} %",
-            "hover": f"<b>{nombre}</b><br>Aceite en descarga: {_texto(valor, ' %')} ({nota})<br>{_n(n, n_turnos)}"}
+            "hover": f"<b>{nombre}</b><br>Aceite en descarga: {_texto(valor, ' %')} (mediana; {nota})<br>"
+                     f"{_n(n, n_turnos)}{_extremos(descarga)}"}
 
 
 def _del_eboe(sesion, planta: Planta, m: dict, ctx: dict) -> dict:
@@ -453,14 +455,14 @@ def _primaria(sesion, planta: Planta, m: dict, ctx: dict) -> dict:
                          f"{_n(n, n_turnos)}"}
     if tipo == "primaria_descarga":
         descarga = muestras[muestras["fase"] == "descarga"]
-        valor, n_turnos, n = _de_turnos(descarga, "aceite_pct")
+        valor, n_turnos, n = _de_turnos(descarga, "aceite_pct", _mediana)   # mediana: hay muestras extremas
         color, nota = color_de(valor, _rango(sesion, planta.id, "Aceite en descarga", PRIMARIA, fruta))
         return {"nombre": f"Descarga {nombre}", "valor": valor, "color": color, "destino": destino,
                 "claves_alertas": claves, "texto": _texto(valor, " %"),
-                "hover": f"<b>{nombre}: aceite en descarga</b><br>{_texto(valor, ' %')} ({nota})<br>Sólidos: "
+                "hover": f"<b>{nombre}: aceite en descarga</b><br>{_texto(valor, ' %')} (mediana; {nota})<br>Sólidos: "
                          f"{_texto(_de_turnos(muestras, 'solidos_pct', _mediana)[0], ' %', 1)} · CP pesada: "
                          f"{_texto(_de_turnos(muestras, 'cp_pesada_bar', _mediana)[0], ' bar', 1)}<br>"
-                         f"{_n(n, n_turnos)}"}
+                         f"{_n(n, n_turnos)}{_extremos(descarga)}"}
     if tipo == "primaria_liviana":
         caudal, _, n_balance = _de_turnos(balance, "caudal_liviana", _mediana) if not balance.empty else (None, 0, 0)
         aceite, n_turnos, n = _de_turnos(muestras[muestras["fase"] == "fase_liviana"], "aceite_pct", _mediana)
@@ -475,6 +477,13 @@ def _primaria(sesion, planta: Planta, m: dict, ctx: dict) -> dict:
             "claves_alertas": [], "texto": _texto(caudal, " L/h", 0),
             "hover": f"<b>{nombre}: fase pesada</b><br>Caudal: {_texto(caudal, ' L/h', 0)} (balance; {nota})<br>"
                      f"{_n(n, n_turnos, 'muestreo', 'muestreos')}"}
+
+
+def _extremos(descarga: pd.DataFrame) -> str:
+    """Texto del hover: cuántas muestras de descarga del período tienen la marca de valor extremo (muestra muy chica
+    o titulación fuera de rango; core.importar_centrifugas.REVISAR_EXTREMO). Vacío si no hay ninguna."""
+    n = int(descarga["revisar"].fillna("").str.contains(REVISAR_EXTREMO, regex=False).sum()) if len(descarga) else 0
+    return f"<br>N muestras con valor extremo: {n}" if n else ""
 
 
 def _en_paralelo(nombre: str, primarias_turno: pd.DataFrame | None) -> str:
