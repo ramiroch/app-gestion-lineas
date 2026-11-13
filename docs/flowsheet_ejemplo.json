@@ -1,5 +1,5 @@
 {
-  "_comentario": "Ejemplo del formato de data/plantas/<planta>/flowsheet.json (core.inicio.cargar_flowsheet). La imagen va en la misma carpeta y no se sube a GitHub. x e y: fracción de la imagen (0–1, origen arriba a la izquierda); para ubicarlos conviene una imagen de calibración con una grilla cada 0,05. etiqueta: dónde va el valor respecto del círculo (derecha, izquierda, arriba, abajo). Tipos por eBOE (equipo = código del eBOE): nombre_eboe (nombre y MTPH, sin círculo), entrada_eboe, eboe (eficiencia), salida_eboe, emulsion_eboe (rebalse) y retorno_fp_eboe (caudal de fase pesada del laboratorio contra el calculado). Por primaria (equipo = código): primaria (estado), primaria_caudal (emulsión), primaria_descarga, primaria_liviana y primaria_pesada. Otros: tanque_emulsion, retorno_pesada (aceite en fase pesada), secundaria (equipos = códigos; se muestra la que anduvo) y pulidora. nombre (opcional) reemplaza al del marcador.",
+  "_comentario": "Ejemplo del formato de data/plantas/<planta>/flowsheet.json (core.inicio.cargar_flowsheet). La imagen va en la misma carpeta y no se sube a GitHub. x e y: fracción de la imagen (0–1, origen arriba a la izquierda); para ubicarlos conviene una imagen de calibración con una grilla cada 0,05. etiqueta: dónde va el valor respecto del círculo (derecha, izquierda, arriba, abajo). campana (opcional): dónde va la 🔔 (arriba, abajo, derecha; por defecto arriba a la derecha, o a la derecha de la etiqueta si la etiqueta va arriba). Tipos por eBOE (equipo = código del eBOE): nombre_eboe (nombre y MTPH, sin círculo), entrada_eboe, eboe (eficiencia), salida_eboe, emulsion_eboe (rebalse) y retorno_fp_eboe (caudal de fase pesada del laboratorio contra el calculado). Por primaria (equipo = código): primaria (estado), primaria_caudal (emulsión), primaria_descarga, primaria_liviana y primaria_pesada. Otros: tanque_emulsion, retorno_pesada (aceite en fase pesada), secundaria (equipos = códigos; se muestra la que anduvo) y pulidora. nombre (opcional) reemplaza al del marcador.",
   "imagen": "flowsheet_planta.jpg",
   "ancho": 1034,
   "alto": 775,
@@ -64,7 +64,8 @@
       "equipo": "XXX-CEN-01",
       "x": 0.335,
       "y": 0.675,
-      "etiqueta": "izquierda"
+      "etiqueta": "izquierda",
+      "campana": "abajo"
     },
     {
       "tipo": "primaria_liviana",

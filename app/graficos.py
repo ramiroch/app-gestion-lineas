@@ -1269,18 +1269,28 @@ COLORES_SEMAFORO = {"verde": "#1baf7a", "amarillo": "#eda100", "rojo": "#e34948"
                     "en marcha": "#2b2f36", "sin datos": "#b0b4ba"}
 NOMBRES_SEMAFORO = {"verde": "Dentro del rango", "amarillo": "Diferencia intermedia", "rojo": "Fuera del rango",
                     "neutro": "Sin rango (o en revisión)", "en marcha": "Centrífuga en marcha",
-                    "sin datos": "Sin datos en el turno"}
+                    "sin datos": "Sin datos en el período"}
 # Posición de la etiqueta respecto del marcador: (desplazamiento x, desplazamiento y en px, anclaje x, anclaje y)
 LUGAR_ETIQUETA = {"derecha": (16, 0, "left", "middle"), "izquierda": (-16, 0, "right", "middle"),
                   "arriba": (0, 14, "center", "bottom"), "abajo": (0, -14, "center", "top"),
                   "centro": (0, 0, "center", "middle")}
+# Posición de la 🔔 respecto del marcador (fracción de la imagen; y hacia arriba). Por defecto arriba a la derecha; si la
+# etiqueta va arriba, a la derecha de la etiqueta para no quedar tapada. El marcador puede pedir otra ("campana").
+LUGAR_CAMPANA = {"arriba": (0.022, 0.035), "abajo": (0.022, -0.035), "derecha": (0.048, 0.032)}
+
+
+def _campana(m: dict) -> tuple[float, float]:
+    """(x, y) de la 🔔 de un marcador, en las coordenadas del gráfico."""
+    lugar = m.get("campana") or ("derecha" if m.get("etiqueta") == "arriba" else "arriba")
+    dx, dy = LUGAR_CAMPANA[lugar]
+    return m["x"] + dx, 1 - m["y"] + dy
 
 
 def flowsheet(config: dict, marcadores: list[dict]) -> go.Figure:
     """Flowsheet de la planta: la imagen de fondo (config de core.inicio.cargar_flowsheet) y, encima de cada equipo,
     un círculo con el color del semáforo, el valor escrito al lado (con fondo blanco semitransparente para no tapar
-    el dibujo) y una 🔔 con la cantidad de alertas abiertas o en análisis. x e y en fracción de la imagen (origen
-    arriba a la izquierda). customdata de cada punto: (índice del marcador, "equipo" o "alerta") para el clic."""
+    el dibujo) y una 🔔 con la cantidad de alertas cuyo episodio toca el período (hover: estados y tipos). x e y en
+    fracción de la imagen (origen arriba a la izquierda). customdata de cada punto: (índice del marcador, "equipo" o "alerta") para el clic."""
     from PIL import Image
     ancho, alto = config["ancho"], config["alto"]
     figura = go.Figure()
@@ -1298,11 +1308,11 @@ def flowsheet(config: dict, marcadores: list[dict]) -> go.Figure:
     con_alertas = [i for i, m in enumerate(marcadores) if m["alertas"]]
     if con_alertas:
         figura.add_scatter(
-            x=[marcadores[i]["x"] + 0.022 for i in con_alertas], y=[1 - marcadores[i]["y"] + 0.035 for i in con_alertas],
-            mode="markers+text", name="Alertas abiertas", text=[f"🔔{marcadores[i]['alertas']}" for i in con_alertas],
+            x=[_campana(marcadores[i])[0] for i in con_alertas], y=[_campana(marcadores[i])[1] for i in con_alertas],
+            mode="markers+text", name="Alertas del período", text=[f"🔔{marcadores[i]['alertas']}" for i in con_alertas],
             textfont=dict(size=15), marker=dict(size=24, color="rgba(255,255,255,0.01)"),
             customdata=[(i, "alerta") for i in con_alertas],
-            hovertemplate="%{text} alerta(s) abierta(s) o en análisis: clic para verlas<extra></extra>")
+            hovertext=[marcadores[i]["hover_alertas"] for i in con_alertas], hovertemplate="%{hovertext}<extra></extra>")
     for m in marcadores:
         if not m["texto"]:
             continue                                   # dato de línea de una centrífuga que no anduvo

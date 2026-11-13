@@ -1,5 +1,6 @@
-"""Pruebas de core/inicio.py: configuración del flowsheet, fecha de referencia, turnos, marcadores (valor, semáforo,
-gris sin datos, secundaria con su nombre, alertas), pendientes y tendencia semanal."""
+"""Pruebas de core/inicio.py: configuración del flowsheet, fecha de referencia, turnos del período, marcadores (valor,
+semáforo, gris sin datos, secundaria con su nombre, alertas; un turno, un rango con todos los turnos o con un solo
+tipo, ponderación por toneladas), pendientes y tendencia semanal."""
 
 import json
 from datetime import date, datetime, time, timedelta
@@ -8,8 +9,10 @@ import pytest
 from sqlalchemy import select
 
 from core.carga_scott import guardar_ronda
-from core.inicio import (AMARILLO, EN_MARCHA, NEUTRO, ROJO, SIN_DATOS, VERDE, _color_fp, cargar_flowsheet, carpeta_planta, color_de, datos_flowsheet,
-                         fecha_referencia, objetivo_eficiencia, pendientes, rondas_esperadas, tendencia_semanal, turnos_con_datos)
+from core.gestion_alertas import listar_alertas
+from core.inicio import (AMARILLO, EN_MARCHA, NEUTRO, ROJO, SIN_DATOS, VERDE, _color_fp, cargar_flowsheet,
+                         carpeta_planta, color_de, datos_flowsheet, fecha_referencia, objetivo_eficiencia, pendientes,
+                         rondas_esperadas, tendencia_semanal, turnos_con_datos, turnos_del_periodo)
 from core.models import (Alerta, Equipo, Linea, MuestraCentrifuga, Planta, RangoReferencia, RegistroProduccion,
                          Turno)
 from tests.test_carga_scott import _planta, ronda, sesion  # noqa: F401  (fixture)
@@ -86,7 +89,8 @@ def test_cargar_flowsheet(tmp_path):
     (carpeta / "flowsheet.jpg").write_bytes(b"imagen")
     config = cargar_flowsheet("Norte", tmp_path)
     assert len(config["marcadores"]) == len(CONFIG["marcadores"]) and config["ruta_imagen"].endswith("flowsheet.jpg")
-    for cambio, error in (({"x": 1.2}, "entre 0 y 1"), ({"tipo": "bomba"}, "no válido"), ({"equipo": None}, "falta")):
+    for cambio, error in (({"x": 1.2}, "entre 0 y 1"), ({"tipo": "bomba"}, "no válido"), ({"equipo": None}, "falta"),
+                           ({"campana": "lejos"}, "campana")):
         malo = CONFIG | {"marcadores": [CONFIG["marcadores"][1] | cambio]}
         (carpeta / "flowsheet.json").write_text(json.dumps(malo), encoding="utf-8")
         with pytest.raises(ValueError, match=error):
@@ -130,7 +134,8 @@ def test_marcadores_del_turno(sesion, planta, tmp_path):  # noqa: F811
                       fecha_produccion=DIA, turno_id=sesion.scalars(select(Turno).where(Turno.nombre == "T")).one().id,
                       fecha_hora=datetime(2026, 7, 1, 14, 10), valor=7.5, estado="en análisis", creada_por="prueba"))
     sesion.commit()
-    marcadores = {(m["tipo"], m["nombre"]): m for m in datos_flowsheet(sesion, planta, CONFIG, DIA, "T")}
+    # un día y un turno: lo mismo que el flowsheet de un turno
+    marcadores = {(m["tipo"], m["nombre"]): m for m in datos_flowsheet(sesion, planta, CONFIG, DIA, DIA, "T")}
 
     entrada = marcadores[("entrada_eboe", "Entrada eBOE 1")]
     assert (entrada["texto"], entrada["color"]) == ("7,00 kg/MT", NEUTRO) and "Frutos en 10 kg: 50" in entrada["hover"]
@@ -139,13 +144,14 @@ def test_marcadores_del_turno(sesion, planta, tmp_path):  # noqa: F811
     assert (eboe2["color"], eboe2["alertas"], eboe2["ambitos"], eboe2["destino"]) == (
         ROJO, 1, ["eBOE 2"], {"pagina": "analisis", "eboe": 2})
     salida = marcadores[("salida_eboe", "Salida eBOE 1")]
-    assert (salida["texto"], salida["color"], salida["alertas"]) == ("0,70 kg/MT", NEUTRO, 0) and "N = 1" in salida["hover"]
+    assert (salida["texto"], salida["color"], salida["alertas"]) == ("0,70 kg/MT", NEUTRO, 0)
+    assert "N = 1 muestra en 1 turno" in salida["hover"] and "promedio simple" in salida["hover"]
     emulsion = marcadores[("emulsion_eboe", "Emulsión eBOE 1")]                  # rebalse del eBOE (laboratorio)
     assert (emulsion["texto"], emulsion["color"]) == ("0,88 %", NEUTRO) and "rango en revisión" in emulsion["hover"]
     assert (emulsion["alertas"], emulsion["ambitos"]) == (1, ["Planta"])        # el pH es de la planta
     tanque = marcadores[("tanque_emulsion", "Tanque de emulsión")]               # primarias (centrífugas), mediana
     assert (tanque["texto"], tanque["destino"]) == ("0,77 %", {"pagina": "centrifugas"})
-    assert "15.500 L/h" in tanque["hover"] and "N = 2" in tanque["hover"]
+    assert "15.500 L/h" in tanque["hover"] and "N = 2 muestras en 1 turno" in tanque["hover"]
     nombre = marcadores[("nombre_eboe", "eBOE 1")]                              # sin círculo: nombre y MTPH
     assert (nombre["texto"], nombre["color"]) == ("<b>eBOE 1</b><br>11,0 MTPH", None)
     fase_pesada = marcadores[("retorno_fp_eboe", "Fase pesada a eBOE 1")]
@@ -168,6 +174,102 @@ def test_marcadores_del_turno(sesion, planta, tmp_path):  # noqa: F811
     secundaria = marcadores[("secundaria", "MSD 50")]                            # la que anduvo en el turno
     assert (secundaria["texto"], secundaria["color"]) == ("MSD 50 · 1,40 %", ROJO)
     assert marcadores[("pulidora", "OSD 60")]["texto"] == "45 min"
+
+
+def _turno(sesion, nombre):  # noqa: F811
+    return sesion.scalars(select(Turno).where(Turno.nombre == nombre)).one()
+
+
+@pytest.fixture
+def periodo(sesion, planta):  # noqa: F811
+    """Dos días: M y T del 01/07 y M del 02/07. eBOE 1: eficiencia 90, 70 y 80 % (salida 0,70, 2,10 y 1,40 kg/MT) con
+    100, 300 y 100 t aprobadas. Tanque de emulsión (mediana de cada turno): 0,70 / 0,91 / 1,40 %. ESE 230 (2) solo
+    anduvo el 02/07 M. Secundarias: ESB 130 el M (0,35 %) y MSD 50 el T (dos muestras, 0,70 %)."""
+    siguiente = DIA + timedelta(days=1)
+    for momento, salida in ((datetime(2026, 7, 1, 6, 10), 10.0), (datetime(2026, 7, 1, 14, 10), 30.0),
+                            (datetime(2026, 7, 2, 6, 10), 20.0)):
+        _ronda(sesion, momento, salida_ml={1: salida})
+    for dia, turno, toneladas in ((DIA, "M", 100.0), (DIA, "T", 300.0), (siguiente, "M", 100.0)):
+        sesion.add(RegistroProduccion(planta_id=planta.id, fecha_produccion=dia, turno_id=_turno(sesion, turno).id,
+                                      fruta_t=toneladas, estado="aprobado", origen_carga="app", cargado_por="Ana"))
+    sesion.commit()
+    for codigo, momento, ml in (("N-CEN-01", datetime(2026, 7, 1, 6, 30), 20.0),      # 0,70 %
+                                ("N-CEN-01", datetime(2026, 7, 1, 14, 30), 24.0),     # 0,84 %
+                                ("N-CEN-01", datetime(2026, 7, 1, 16, 30), 28.0),     # 0,98 %
+                                ("N-CEN-02", datetime(2026, 7, 2, 6, 30), 40.0)):     # 1,40 %
+        _muestra(sesion, codigo, momento, "emulsion", ml=ml, caudal_lh=15000.0)
+    _muestra(sesion, "N-CSE-01", datetime(2026, 7, 1, 6, 30), "descarga", ml=10.0)
+    _muestra(sesion, "N-CSE-02", datetime(2026, 7, 1, 14, 30), "descarga", ml=20.0)
+    _muestra(sesion, "N-CSE-02", datetime(2026, 7, 1, 16, 30), "descarga", ml=20.0)
+    return DIA, siguiente
+
+
+def _por_tipo(sesion, planta, desde, hasta, turno=None):  # noqa: F811
+    return {(m["tipo"], m["nombre"]): m for m in datos_flowsheet(sesion, planta, CONFIG, desde, hasta, turno)}
+
+
+def test_rango_con_todos_los_turnos(sesion, planta, periodo):  # noqa: F811
+    desde, hasta = periodo
+    assert turnos_del_periodo(sesion, planta, desde, hasta) == [(DIA, "M"), (DIA, "T"), (hasta, "M")]
+    marcadores = _por_tipo(sesion, planta, desde, hasta)
+    eboe = marcadores[("eboe", "eBOE 1")]                    # (90 × 100 + 70 × 300 + 80 × 100) / 500 = 76,0
+    assert eboe["texto"] == "ef. 76,0 %" and "ponderado por toneladas aprobadas" in eboe["hover"]
+    assert "N = 3 pares en 3 turnos" in eboe["hover"]
+    salida = marcadores[("salida_eboe", "Salida eBOE 1")]    # (0,70 × 100 + 2,10 × 300 + 1,40 × 100) / 500 = 1,68
+    assert salida["texto"] == "1,68 kg/MT"
+    tanque = marcadores[("tanque_emulsion", "Tanque de emulsión")]
+    assert tanque["texto"] == "0,91 %" and "N = 4 muestras en 3 turnos" in tanque["hover"]   # mediana de 0,70/0,91/1,40
+    assert marcadores[("primaria", "ESE 230 (2)")]["color"] == EN_MARCHA        # anduvo en algún turno del período
+    assert "En paralelo: 0 % de los turnos (0 de 2)" in marcadores[("primaria", "ESE 230 (1)")]["hover"]
+    assert marcadores[("secundaria", "MSD 50 / ESB 130")]["texto"].startswith("MSD 50 / ESB 130 · ")  # las dos
+
+
+def test_rango_con_un_solo_tipo_de_turno(sesion, planta, periodo):  # noqa: F811
+    desde, hasta = periodo
+    assert turnos_del_periodo(sesion, planta, desde, hasta, "M") == [(DIA, "M"), (hasta, "M")]
+    marcadores = _por_tipo(sesion, planta, desde, hasta, "M")
+    assert marcadores[("eboe", "eBOE 1")]["texto"] == "ef. 85,0 %"             # (90 × 100 + 80 × 100) / 200
+    assert marcadores[("tanque_emulsion", "Tanque de emulsión")]["texto"] == "1,05 %"   # mediana de 0,70 y 1,40
+    assert marcadores[("secundaria", "ESB 130")]["texto"] == "ESB 130 · 0,35 %"
+    solo_t = _por_tipo(sesion, planta, desde, hasta, "T")
+    assert solo_t[("primaria", "ESE 230 (2)")]["color"] == SIN_DATOS            # no anduvo en ningún T
+
+
+def test_sin_toneladas_aprobadas_promedio_simple(sesion, planta, periodo):  # noqa: F811
+    for registro in sesion.scalars(select(RegistroProduccion)):
+        registro.estado = "borrador"                                            # los borradores no ponderan
+    sesion.commit()
+    eboe = _por_tipo(sesion, planta, *periodo)[("eboe", "eBOE 1")]
+    assert eboe["texto"] == "ef. 80,0 %" and "promedio simple: sin toneladas aprobadas" in eboe["hover"]
+
+
+def test_alertas_superpuestas_con_el_periodo(sesion, planta):  # noqa: F811
+    eboe2 = sesion.scalars(select(Equipo).where(Equipo.codigo == "N-BOE-02")).one()
+    turno_m = _turno(sesion, "M")
+    desde, hasta = DIA, DIA + timedelta(days=1)
+    casos = {   # nombre: (estado, regla, inicio, fin)
+        "empezó antes y sigue": ("histórico", "1", datetime(2026, 6, 28, 6, 10), datetime(2026, 7, 1, 6, 10)),
+        "terminó antes": ("cerrada", "2", datetime(2026, 6, 26, 6, 10), datetime(2026, 6, 27, 6, 10)),
+        "terminó en la madrugada del 30/06": ("cerrada", "3", datetime(2026, 6, 29, 6, 10), datetime(2026, 7, 1, 2)),
+        "empezó después": ("abierta", "1", datetime(2026, 7, 3, 6, 10), None),
+        "dentro": ("cerrada", "rango", datetime(2026, 7, 1, 6, 10), None)}
+    ids = {}
+    for nombre, (estado, regla, inicio, fin) in casos.items():
+        alerta = Alerta(origen="rango" if regla == "rango" else "nelson", regla=regla, variable="eficiencia",
+                        ambito=f"equipo:{eboe2.id}", equipo_id=eboe2.id, fecha_produccion=inicio.date(),
+                        turno_id=turno_m.id, fecha_hora=inicio, fin=fin, valor=70.0, estado=estado, creada_por="prueba")
+        sesion.add(alerta)
+        sesion.flush()
+        ids[nombre] = alerta.id
+    sesion.commit()
+    eboe = _por_tipo(sesion, planta, desde, hasta)[("eboe", "eBOE 2")]
+    assert (eboe["alertas"], eboe["ambitos"]) == (2, ["eBOE 2"])
+    for texto in ("2 alertas en el período", "1 histórico", "1 cerrada", "Eficiencia eBOE · regla 1: 1",
+                  "Eficiencia eBOE · rango: 1"):
+        assert texto in eboe["hover_alertas"]
+    superpuestas = listar_alertas(sesion, planta.id, None, desde, hasta, superpuestas=True)
+    assert set(superpuestas["id"]) == {ids["empezó antes y sigue"], ids["dentro"]}
+    assert set(listar_alertas(sesion, planta.id, None, desde, hasta)["id"]) == {ids["dentro"]}   # por el inicio
 
 
 # ---------------------------------------------------------------- pendientes y tendencia

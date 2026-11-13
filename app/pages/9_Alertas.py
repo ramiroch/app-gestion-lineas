@@ -51,20 +51,24 @@ variables = dos.multiselect("Variable", list(VARIABLES_CONTROL), format_func=lam
                             key="alertas_variables")
 reglas = tres.multiselect("Regla", ["1", "2", "3", "rango"], key="alertas_reglas")
 causa = cuatro.radio("Causa", ["todas", "con causa", "sin causa"], horizontal=True, key="alertas_causa")
-cinco, seis, _ = st.columns([1, 1, 2])
+cinco, seis, siete, _ = st.columns([1, 1, 1.4, 0.6])
 solo_inmediatas = cinco.checkbox("Solo inmediatas", key="alertas_inmediatas")
 solo_comunes = seis.checkbox("Solo comunes a los eBOE", key="alertas_comunes")
+superpuestas = siete.checkbox("Incluir las que empezaron antes del período", key="alertas_superpuestas",
+                              help="También las alertas cuyo episodio empezó antes y siguió en el período (así llega "
+                                   "desde la 🔔 del Inicio).")
 
 desde, hasta = (filtros.desde, filtros.hasta) if filtros else (None, None)
 with crear_sesion(motor()) as sesion:
     lista = listar_alertas(sesion, planta_id, estados, desde, hasta, variables or None, None, reglas or None,
-                           solo_inmediatas, solo_comunes, {"todas": None, "con causa": True, "sin causa": False}[causa])
+                           solo_inmediatas, solo_comunes, {"todas": None, "con causa": True, "sin causa": False}[causa],
+                           superpuestas)
 ambitos = st.multiselect("Ámbito", sorted(lista["ambito"].unique()), key="alertas_ambitos")
 if ambitos:
     lista = lista[lista["ambito"].isin(ambitos)].reset_index(drop=True)
 
-st.caption(f"{numero(len(lista), 0)} alertas · fechas de producción de la barra (inicio de la alerta). Elegí una "
-           "para ver el detalle.")
+st.caption(f"{numero(len(lista), 0)} alertas · fechas de producción de la barra ("
+           f"{'algún turno del episodio' if superpuestas else 'inicio de la alerta'}). Elegí una para ver el detalle.")
 marcas = [" ".join(m for m, si in (("⚡ inmediata", i), ("✖ no confirmada", c is False), ("🏭 común", co)) if si)
           for i, c, co in zip(lista["inmediata"], lista["confirmada"], lista["comun"])]
 vista = pd.DataFrame({"Inicio": lista["inicio"].dt.strftime("%d/%m/%Y %H:%M"),

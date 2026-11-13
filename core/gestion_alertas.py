@@ -19,7 +19,7 @@ from core.limites import VARIABLES_BOE, VARIABLES_CONTROL, limites_vigentes, ser
 from core.models import (Alerta, AnalisisScott, Equipo, LimitesControl, Linea, MuestraCentrifuga, Planta,
                          RangoReferencia)
 from core.spc import limites_xbar_s_para
-from core.turnos import turno_de
+from core.turnos import fecha_produccion, turno_de
 
 EN_ANALISIS = "en análisis"
 SIGUIENTES = {"abierta": (EN_ANALISIS, CERRADA), EN_ANALISIS: (CERRADA,), CERRADA: (), "histórico": ()}
@@ -35,12 +35,22 @@ def _de_planta(planta_id: int):
     return or_(Alerta.equipo_id.in_(equipos), Alerta.planta_id == planta_id)
 
 
+def episodio_se_superpone(planta: Planta, alerta: Alerta, desde=None, hasta=None) -> bool:
+    """¿El episodio de la alerta (del día de producción de su inicio al de su fin) toca el período desde–hasta (días
+    de producción, inclusive; None: sin límite)? Sin fin, el episodio es su primer turno."""
+    ultimo = max(alerta.fecha_produccion, fecha_produccion(planta, alerta.fin)) if alerta.fin else alerta.fecha_produccion
+    return (hasta is None or alerta.fecha_produccion <= hasta) and (desde is None or ultimo >= desde)
+
+
 def listar_alertas(sesion, planta_id: int, estados=("abierta", EN_ANALISIS), desde=None, hasta=None,
                    variables=None, ambitos=None, reglas=None, solo_inmediatas: bool = False,
-                   solo_comunes: bool = False, con_causa: bool | None = None) -> pd.DataFrame:
+                   solo_comunes: bool = False, con_causa: bool | None = None,
+                   superpuestas: bool = False) -> pd.DataFrame:
     """Alertas de la planta, de la más nueva a la más vieja. Filtros: estados, días de producción del inicio
-    (desde/hasta), variables (claves), ámbitos (texto como se muestra: "BOE Nº 1", "Planta"…), reglas, solo
-    inmediatas, solo comunes y con_causa (True: con causa cargada; False: sin causa; None: todas)."""
+    (desde/hasta; con superpuestas=True, las que tienen algún turno del episodio en el período aunque hayan empezado
+    antes: episodio_se_superpone), variables (claves), ámbitos (texto como se muestra: "BOE Nº 1", "Planta"…),
+    reglas, solo inmediatas, solo comunes y con_causa (True: con causa cargada; False: sin causa; None: todas)."""
+    planta = sesion.get(Planta, planta_id)
     consulta = select(Alerta).where(_de_planta(planta_id)).order_by(Alerta.fecha_hora.desc())
     if estados:
         consulta = consulta.where(Alerta.estado.in_(list(estados)))
@@ -48,8 +58,9 @@ def listar_alertas(sesion, planta_id: int, estados=("abierta", EN_ANALISIS), des
     for a in sesion.scalars(consulta):
         ambito = a.equipo.nombre if a.equipo else ("Planta (común eBOE)" if a.comun_eboe else "Planta")
         tiene_causa = bool((a.causa or "").strip())
-        if ((desde and a.fecha_produccion < desde) or (hasta and a.fecha_produccion > hasta)
-                or (variables and a.variable not in variables) or (ambitos and ambito not in ambitos)
+        en_periodo = (episodio_se_superpone(planta, a, desde, hasta) if superpuestas
+                      else not ((desde and a.fecha_produccion < desde) or (hasta and a.fecha_produccion > hasta)))
+        if (not en_periodo or (variables and a.variable not in variables) or (ambitos and ambito not in ambitos)
                 or (reglas and a.regla not in reglas) or (solo_inmediatas and not a.inmediata)
                 or (solo_comunes and not a.comun_eboe) or (con_causa is not None and tiene_causa != con_causa)):
             continue
