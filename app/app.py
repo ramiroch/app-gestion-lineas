@@ -11,6 +11,7 @@ import pandas as pd
 import streamlit as st
 
 from cartel import cartel_modo_prueba
+from core.cartas_periodo import parametros_control
 from core.db import crear_sesion
 from core.inicio import (cargar_flowsheet, datos_flowsheet, fecha_referencia, objetivo_eficiencia, pendientes,
                          resumen_alertas, tendencia_semanal, turnos_del_periodo)
@@ -24,7 +25,7 @@ cartel_modo_prueba()
 st.title("Inicio")
 
 PAGINAS = {"analisis": "pages/2_Analisis.py", "centrifugas": "pages/6_Centrifugas.py",
-           "alertas": "pages/9_Alertas.py"}
+           "alertas": "pages/9_Alertas.py", "control": "pages/3_Control.py"}
 
 etiquetas = list(plantas())
 if not etiquetas:
@@ -80,8 +81,8 @@ if config is not None:
     st.caption("Valores del período: eficiencia y aceite en salida ponderados por las toneladas aprobadas; el resto, "
                "mediana de los turnos. Círculo: semáforo contra el rango de referencia (gris: sin datos; azul: sin "
                "rango o rango en revisión). 🔔: alertas cuyo episodio toca el período, en cualquier estado. Pasá el "
-               "mouse para ver el detalle y el N; clic en un equipo para ir a su página, o en la 🔔 para ver sus "
-               "alertas.")
+               "mouse para ver el detalle y el N; clic en un valor para abrir su carta de control con este período, en el "
+               "nombre de un eBOE para ir a Análisis, o en la 🔔 para ver sus alertas.")
     puntos = (evento or {}).get("selection", {}).get("points", [])     # clic en un punto del flowsheet
     if puntos and puntos[0].get("customdata"):
         indice, que = puntos[0]["customdata"]
@@ -93,6 +94,9 @@ if config is not None:
             st.session_state.update({"alertas_ambitos": marcador["ambitos"], "alertas_historico": True,
                                      "alertas_cerradas": True, "alertas_superpuestas": True})
             st.switch_page(PAGINAS["alertas"])
+        if destino.get("pagina") == "control":         # Control › Cartas de control con la variable y el período
+            st.switch_page(PAGINAS["control"], query_params=parametros_control(
+                destino["variable"], destino["equipo"], desde, hasta, elegido, planta_id))
         if destino.get("pagina") == "analisis":
             fijar_filtros(planta_id, eboes, desde, hasta, [] if elegido is None else [elegido])
             st.switch_page(PAGINAS["analisis"])

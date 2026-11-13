@@ -143,7 +143,7 @@ def test_marcadores_del_turno(sesion, planta, tmp_path):  # noqa: F811
     eboe1, eboe2 = marcadores[("eboe", "eBOE 1")], marcadores[("eboe", "eBOE 2")]
     assert (eboe1["texto"], eboe1["color"], eboe1["alertas"]) == ("ef. 90,0 %", VERDE, 0)       # solo la eficiencia
     assert (eboe2["color"], eboe2["alertas"], eboe2["ambitos"], eboe2["destino"]) == (
-        ROJO, 1, ["eBOE 2"], {"pagina": "analisis", "eboe": 2})
+        ROJO, 1, ["eBOE 2"], {"pagina": "control", "variable": "eficiencia", "equipo": "N-BOE-02", "eboe": 2})
     salida = marcadores[("salida_eboe", "Salida eBOE 1")]
     assert (salida["texto"], salida["color"], salida["alertas"]) == ("0,70 kg/MT", NEUTRO, 0)
     assert "N = 1 muestra en 1 turno" in salida["hover"] and "promedio simple" in salida["hover"]
@@ -151,7 +151,7 @@ def test_marcadores_del_turno(sesion, planta, tmp_path):  # noqa: F811
     assert (emulsion["texto"], emulsion["color"]) == ("0,88 %", NEUTRO) and "rango en revisión" in emulsion["hover"]
     assert (emulsion["alertas"], emulsion["ambitos"]) == (1, ["Planta"])        # el pH es de la planta
     tanque = marcadores[("tanque_emulsion", "Tanque de emulsión")]               # primarias (centrífugas), mediana
-    assert (tanque["texto"], tanque["destino"]) == ("0,77 %", {"pagina": "centrifugas"})
+    assert (tanque["texto"], tanque["destino"]["variable"]) == ("0,77 %", "aceite_emulsion_primaria")
     assert "15.500 L/h" in tanque["hover"] and "N = 2 muestras en 1 turno" in tanque["hover"]
     nombre = marcadores[("nombre_eboe", "eBOE 1")]                              # sin círculo: nombre y MTPH
     assert (nombre["texto"], nombre["color"]) == ("<b>eBOE 1</b><br>11,0 MTPH", None)
@@ -223,6 +223,26 @@ def test_rango_con_todos_los_turnos(sesion, planta, periodo):  # noqa: F811
     assert marcadores[("primaria", "ESE 230 (2)")]["color"] == EN_MARCHA        # anduvo en algún turno del período
     assert "En paralelo: 0 % de los turnos (0 de 2)" in marcadores[("primaria", "ESE 230 (1)")]["hover"]
     assert marcadores[("secundaria", "MSD 50 / ESB 130")]["texto"].startswith("MSD 50 / ESB 130 · ")  # las dos
+
+
+def test_destino_del_clic_de_cada_marcador(sesion, planta, periodo):  # noqa: F811
+    destinos = {(m["tipo"], m.get("nombre")): m["destino"] for m in datos_flowsheet(sesion, planta, CONFIG, *periodo)}
+    control = lambda variable, equipo, eboe=None: {"pagina": "control", "variable": variable, "equipo": equipo,  # noqa: E731
+                                                   "eboe": eboe}
+    assert destinos[("nombre_eboe", "eBOE 1")] == {"pagina": "analisis", "eboe": 1}       # el nombre: Análisis
+    assert destinos[("entrada_eboe", "Entrada eBOE 1")] == control("aceite_entrada", "N-BOE-01", 1)
+    assert destinos[("eboe", "eBOE 2")] == control("eficiencia", "N-BOE-02", 2)
+    assert destinos[("salida_eboe", "Salida eBOE 1")] == control("aceite_salida", "N-BOE-01", 1)
+    assert destinos[("emulsion_eboe", "Emulsión eBOE 1")] == control("aceite_emulsion", "N-BOE-01", 1)
+    assert destinos[("retorno_fp_eboe", "Fase pesada a eBOE 1")] == control("caudal_fp_lab", "N-BOE-01", 1)
+    assert destinos[("tanque_emulsion", "Tanque de emulsión")] == control("aceite_emulsion_primaria", None)
+    assert destinos[("retorno_pesada", "Retorno de fase pesada")] == control("aceite_pesada", None)
+    assert destinos[("primaria_descarga", "Descarga ESE 230 (1)")] == control("aceite_descarga", "N-CEN-01")
+    assert destinos[("primaria_liviana", "Fase liviana ESE 230 (1)")] == control("aceite_liviana", "N-CEN-01")
+    assert destinos[("primaria_pesada", "Fase pesada ESE 230 (1)")] == control("caudal_pesada", "N-CEN-01")
+    assert destinos[("secundaria", "MSD 50 / ESB 130")] == control("aceite_descarga", "N-CSE-02")  # la más muestreada
+    assert destinos[("primaria", "ESE 230 (1)")] == {"pagina": "centrifugas"}                 # el cuerpo: Centrífugas
+    assert destinos[("pulidora", "OSD 60")] == {"pagina": "centrifugas"}
 
 
 def test_rango_con_un_solo_tipo_de_turno(sesion, planta, periodo):  # noqa: F811

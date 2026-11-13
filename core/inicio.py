@@ -8,7 +8,7 @@
 - datos_flowsheet(): un marcador por equipo con su valor del período, el semáforo contra RangoReferencia (respetando
   el lado; azul neutro sin rango o con un rango sin alerta, "en revisión"; gris si el equipo no tuvo datos en el
   período), el texto del hover (con N turnos y N muestras), las alertas cuyo episodio toca el período y a qué
-  página lleva el clic. Cada turno se resume como siempre y el período es la mediana de los turnos; la eficiencia y
+  página lleva el clic (los valores, a Control › Cartas de control: DESTINO_CONTROL). Cada turno se resume como siempre y el período es la mediana de los turnos; la eficiencia y
   el aceite en salida, ponderados por toneladas aprobadas. Con un día y un turno, el valor de ese turno.
 - resumen_alertas(), pendientes() (rondas que faltan en el turno en curso, turnos sin producción cargada,
   borradores) y tendencia_semanal() (eficiencia y aceite en salida por eBOE, ponderados por toneladas aprobadas).
@@ -56,6 +56,13 @@ DIAS_PRODUCCION = 7
 SEMANAS = 8
 SIN_EMULSION = pd.DataFrame(columns=["eboe", "fecha_hora", "aceite_emulsion"])
 TURNO = ["fecha_produccion", "turno"]
+# Marcador → variable de Control › Cartas de control que abre el clic (core.cartas_periodo.VARIABLES_PERIODO), con
+# el equipo del marcador (los tanques: las primarias juntas). Los demás van a Análisis (nombre del eBOE) o Centrífugas.
+DESTINO_CONTROL = {"entrada_eboe": "aceite_entrada", "eboe": "eficiencia", "salida_eboe": "aceite_salida",
+                   "emulsion_eboe": "aceite_emulsion", "retorno_fp_eboe": "caudal_fp_lab",
+                   "tanque_emulsion": "aceite_emulsion_primaria", "primaria_descarga": "aceite_descarga",
+                   "secundaria": "aceite_descarga", "primaria_liviana": "aceite_liviana",
+                   "primaria_pesada": "caudal_pesada", "retorno_pesada": "aceite_pesada"}
 CAMPANAS = ("arriba", "abajo", "derecha")   # dónde va la 🔔 del marcador (opcional; app/graficos.LUGAR_CAMPANA)
 
 
@@ -257,7 +264,8 @@ def datos_flowsheet(sesion, planta: Planta, config: dict, desde: date, hasta: da
     turno: solo los turnos de ese tipo, None: todos): tipo, nombre, x, y, etiqueta, valor, texto (lo que se
     escribe al lado), color (VERDE, AMARILLO, ROJO, NEUTRO, SIN_DATOS, EN_MARCHA o None), hover (con N turnos y N
     muestras), alertas (cantidad cuyo episodio toca el período, en cualquier estado), hover_alertas, ambitos (para
-    filtrar Alertas al hacer clic en la 🔔) y destino del clic ({"pagina": "analisis" | "centrifugas", "eboe"}).
+    filtrar Alertas al hacer clic en la 🔔) y destino del clic ({"pagina": "analisis" | "centrifugas", "eboe"}, o
+    {"pagina": "control", "variable", "equipo" (código; None = las primarias juntas), "eboe"} según DESTINO_CONTROL).
 
     Cálculo: cada turno se resume como en un turno solo (media del turno; mediana en caudales, MTPH, % de fases y aceite en descarga) y
     el período es la mediana de los turnos (el aceite en descarga, mediana también dentro del turno, por las muestras extremas). La eficiencia y el aceite en salida, ponderados por las toneladas
@@ -287,9 +295,14 @@ def datos_flowsheet(sesion, planta: Planta, config: dict, desde: date, hasta: da
                 "campana": m.get("campana")}
         base |= _marcador(sesion, planta, m, ctx)
         base["nombre"] = m.get("nombre") or base.get("nombre", m["tipo"])
-        if base["color"] == SIN_DATOS and not base.pop("vacio", False) and m["tipo"] != "nombre_eboe":
+        vacio = base.pop("vacio", False)
+        if base["color"] == SIN_DATOS and not vacio and m["tipo"] != "nombre_eboe":
             base["texto"] = "sin datos"
-        base.pop("vacio", None)
+        codigo = base.pop("codigo", None) if m["tipo"] == "secundaria" else m.get("equipo")
+        variable = DESTINO_CONTROL.get(m["tipo"])
+        if variable and not vacio and base.get("destino") is not None and (m["tipo"] != "secundaria" or codigo):
+            base["destino"] = {"pagina": "control", "variable": variable, "equipo": codigo,
+                               "eboe": base["destino"].get("eboe")}
         claves = base.pop("claves_alertas", [])
         de_marcador = [alertas[clave] for clave in claves if clave in alertas]
         base["alertas"] = sum(a["n"] for a in de_marcador)
@@ -337,7 +350,8 @@ def _marcador(sesion, planta: Planta, m: dict, ctx: dict) -> dict:
     if tipo == "secundaria":
         nombres = con_datos["equipo"].value_counts()
         nombre = " / ".join(nombres.index) if len(nombres) else "Secundaria"      # las que anduvieron en el período
-        equipo = equipos.get(con_datos["codigo"].mode().iloc[0]) if len(con_datos) else None
+        codigo = con_datos["codigo"].value_counts().index[0] if len(con_datos) else None   # la más muestreada
+        equipo = equipos.get(codigo)
     else:
         equipo = equipos.get(codigos[0])
         nombre = equipo.nombre if equipo else codigos[0]
@@ -357,7 +371,7 @@ def _marcador(sesion, planta: Planta, m: dict, ctx: dict) -> dict:
     valor, n_turnos, n = _de_turnos(descarga, "aceite_pct", _mediana)       # mediana: hay muestras extremas
     color, nota = color_de(valor, _rango(sesion, planta.id, "Aceite en descarga", tipo_equipo, fruta))
     return {"nombre": nombre, "valor": valor, "color": color, "destino": destino, "claves_alertas": claves,
-            "texto": "—" if valor is None else f"{nombre} · {_num(valor)} %",
+            "codigo": equipo.codigo if equipo else None, "texto": "—" if valor is None else f"{nombre} · {_num(valor)} %",
             "hover": f"<b>{nombre}</b><br>Aceite en descarga: {_texto(valor, ' %')} (mediana; {nota})<br>"
                      f"{_n(n, n_turnos)}{_extremos(descarga)}"}
 
@@ -383,8 +397,8 @@ def _del_eboe(sesion, planta: Planta, m: dict, ctx: dict) -> dict:
         lab, n_turnos, n = _de_turnos(entradas, "caudal_fase_pesada", _mediana)
         calc, n_calc = ctx["agua"]
         color, nota = _color_fp(planta, lab, calc)
-        return {"nombre": f"Fase pesada a {corto}", "valor": lab, "color": color,
-                "destino": {"pagina": "centrifugas"}, "claves_alertas": [],
+        return {"nombre": f"Fase pesada a {corto}", "valor": lab, "color": color, "destino": destino,
+                "claves_alertas": [],
                 "texto": f"{_texto(lab, ' m³/h', 1)}<br><span style='font-size:10px'>calc. {_texto(calc, '', 1)}</span>",
                 "hover": f"<b>Fase pesada que entra al {corto}</b><br>Laboratorio del BOE: {_texto(lab, ' m³/h', 1)} "
                          f"(mediana; {_n(n, n_turnos)})<br>Calculado (agua por eBOE, centrífugas): "

@@ -1170,6 +1170,71 @@ def carta_alerta(carta: dict) -> go.Figure:
     return figura
 
 
+def carta_periodo(carta: dict) -> go.Figure:
+    """Carta de control de un período (core.cartas_periodo.carta_periodo), en dos paneles.
+
+    Por turno: promedio del turno arriba (LC continua, LCS y LCI punteadas en gris; un LCI negativo no se dibuja:
+    "sin límite inferior") y desvío del turno (S) abajo con su LCS, que depende del n del turno. Por muestra (I-MR):
+    el valor arriba y el rango móvil abajo. Puntos fuera de control: cuadrado rojo (regla 1; abajo, fuera de su
+    LCS) y rombo naranja (otras reglas). Tooltip con fecha, turno, valor, N y reglas. Eje X: turno o muestra."""
+    tabla, unidad, decimales = carta["tabla"], carta["unidad"], carta["decimales"]
+    por_turno = carta["por"] == "turno"
+    valor, disp, disp_lcs = ("media", "desvio", "s_lcs") if por_turno else ("valor", "mr", "mr_lcs")
+    if por_turno:
+        x = [f"{f:%d/%m} {t}" for f, t in zip(tabla["fecha_produccion"], tabla["turno"])]
+        textos = [f"{f:%d/%m/%Y} turno {t}<br>Promedio: {numero(m, decimales)} {unidad} (N {n})"
+                  + ("" if pd.isna(d) else f"<br>Desvío: {numero(d, decimales)}")
+                  + (f"<br>Reglas: {', '.join(map(str, r))}" if r else "") + ("<br>S fuera de límites" if s else "")
+                  for f, t, m, n, d, r, s in zip(tabla["fecha_produccion"], tabla["turno"], tabla["media"], tabla["n"],
+                                                 tabla["desvio"], tabla["reglas"], tabla["fuera_s"])]
+        fuera_abajo = tabla["fuera_s"].astype(bool)
+    else:
+        x = list(range(1, len(tabla) + 1))
+        textos = [f"{h:%d/%m/%Y %H:%M} · turno {t}<br>{numero(v, decimales)} {unidad}" + (" (valor extremo)" if e else "")
+                  + (f"<br>Reglas: {', '.join(map(str, r))}" if r else "")
+                  for h, t, v, e, r in zip(tabla["fecha_hora"], tabla["turno"], tabla["valor"], tabla["extremo"],
+                                           tabla["reglas"])]
+        fuera_abajo = tabla["fuera_mr"].astype(bool)
+    figura = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.65, 0.35])
+    figura.add_scatter(x=x, y=tabla[valor], mode="lines+markers", name="Promedio del turno" if por_turno else "Valor",
+                       line=dict(color=COLOR_DATOS, width=1), marker=dict(color=COLOR_DATOS, size=5),
+                       text=textos, hovertemplate="%{text}<extra></extra>", row=1, col=1)
+    lci = tabla["lci"].astype(float)
+    limites = [("lc", "LC", "solid", 1, tabla["lc"]), ("lcs", "LCS", "dash", 1, tabla["lcs"]),
+               ("lci", "LCI", "dash", 1, lci.where(lci >= 0)), (disp_lcs, "LCS abajo", "dash", 2, tabla[disp_lcs])]
+    for _, nombre, trazo, fila, serie in limites:
+        if serie.notna().any():
+            figura.add_scatter(x=x, y=serie, mode="lines", name=nombre, showlegend=False,
+                               line=dict(color=GRIS, width=1, dash=trazo, shape="hv"), hoverinfo="skip", row=fila, col=1)
+    regla_1 = tabla["reglas"].map(lambda r: 1 in r).to_numpy(dtype=bool)
+    otras = tabla["reglas"].map(bool).to_numpy(dtype=bool) & ~regla_1
+    for seleccion, nombre, color, forma, fila, columna in (
+            (regla_1, "Regla 1 (fuera de límites)", COLOR_REGLA_1, "square", 1, valor),
+            (otras, "Otras reglas de Nelson", COLOR_OTRAS_REGLAS, "diamond", 1, valor),
+            (fuera_abajo.to_numpy(), "Fuera de límites (abajo)", COLOR_REGLA_1, "square", 2, disp)):
+        if seleccion.any():
+            figura.add_scatter(x=[v for v, s in zip(x, seleccion) if s], y=tabla.loc[seleccion, columna], mode="markers",
+                               name=nombre, marker=dict(color=color, symbol=forma, size=9, line=dict(color="white", width=1)),
+                               text=[t for t, s in zip(textos, seleccion) if s], hovertemplate="%{text}<extra></extra>",
+                               row=fila, col=1)
+    figura.add_scatter(x=x, y=tabla[disp], mode="lines+markers", name="S" if por_turno else "MR", showlegend=False,
+                       line=dict(color=COLOR_DATOS, width=1), marker=dict(color=COLOR_DATOS, size=4),
+                       text=textos, hovertemplate="%{text}<extra></extra>", connectgaps=False, row=2, col=1)
+    ultimo = len(tabla) - 1
+    for columna, nombre in (("lc", "LC"), ("lcs", "LCS"), ("lci", "LCI")):
+        v = float(tabla[columna].iloc[ultimo])
+        texto = f"{nombre} {numero(v, decimales)}" if not (columna == "lci" and v < 0) else "sin límite inferior"
+        figura.add_annotation(x=x[ultimo], y=max(v, 0) if columna == "lci" else v, xref="x", yref="y", text=texto,
+                              showarrow=False, xanchor="left", xshift=8, font=dict(size=10, color=GRIS))
+    figura.update_yaxes(title_text=f"{'Promedio' if por_turno else 'Valor'} ({unidad})", row=1, col=1)
+    figura.update_yaxes(title_text=f"{'S' if por_turno else 'MR'} ({unidad})", rangemode="tozero", row=2, col=1)
+    figura.update_xaxes(title_text="Turno" if por_turno else "Muestra (número)", type="category" if por_turno else None,
+                        row=2, col=1)
+    estilo(figura, ALTURA_CARTA)
+    figura.update_layout(title=carta["titulo"], margin=dict(t=70, b=10, l=10, r=125), hovermode="closest")
+    return figura
+
+
 def columnas_mensuales_series(series: list[tuple], eje: list[str], titulo_y: str, rango_y: list | None = None
                               ) -> go.Figure:
     """Columnas por mes de producción, una al lado de la otra por serie, en el mismo eje Y y con leyenda.

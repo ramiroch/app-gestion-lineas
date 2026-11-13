@@ -1,7 +1,11 @@
 """Página Gráficos de control: cartas de control y capacidad de proceso, en dos pestañas.
 
 Usa la barra de filtros global.
-- Cartas de control: X̄-R / X̄-S por turno o I-MR por muestra, con reglas de Nelson. Con "Fase I / fase II" los
+- Cartas de control, por defecto "por turno con límites congelados": la carta entre/dentro de las alertas, de
+  cualquier variable de core.cartas_periodo (eBOE, centrífugas y tanques), con los límites congelados vigentes o,
+  si no hay, los del propio período; o la I-MR por muestra. El Inicio la abre con query params (variable, equipo,
+  período, turno y planta): la barra y los selectores quedan elegidos y arriba dice "Abierto desde el Inicio".
+- Cartas de control, "análisis de un eBOE": X̄-R / X̄-S por turno o I-MR por muestra, con reglas de Nelson. Con "Fase I / fase II" los
   límites se calculan con la temporada base y se aplican a la nueva: se usan las dos temporadas completas (se
   ignoran las fechas y el proceso de la barra; se respetan turno y programa, como en la pestaña Temporadas de
   Análisis). Con "período filtrado", los límites salen de los datos filtrados.
@@ -13,23 +17,34 @@ core/capacidad.py, y los gráficos en app/graficos.py.
 
 import pandas as pd
 import streamlit as st
+from sqlalchemy import select
 
 from cartel import cartel_modo_prueba
 
 from core.analisis import filtrar, filtros_sin_periodo
 from core.capacidad import NO_APLICA, VARIABLES_CAPACIDAD, comparar_equipos, datos_capacidad, evaluar_capacidad
+from core.cartas_periodo import (ALTERNATIVAS, POR_MUESTRA as POR_MUESTRA_PERIODO, POR_TURNO as POR_TURNO_PERIODO,
+                                 VARIABLES_PERIODO, carta_periodo, equipos_de_variable, leer_parametros_control,
+                                 serie_periodo)
 from core.control import POR_MUESTRA, POR_TURNO, VARIABLES, carta_de_control, frase_control, muestras_de
+from core.db import crear_sesion
 from core.formato import numero
 from core.laboratorio import texto_p_ad
+from core.limites import texto_lci
+from core.models import Equipo, Planta
 from core.operacion import especie
+from core.parametros import ParametrosIncompletos
 from core.repetidas import sin_entradas_repetidas
 from core.spc import DESCRIPCION_REGLAS, REGLAS, resumen_reglas
 from descargas import Descargas
-from filtros import (barra_filtros, casilla_repetidas, filtros_elegidos, limites_capacidad_planta, planta_elegida,
-                     tabla_emulsion_planta, tabla_planta)
-from graficos import carta_control, histograma_capacidad
+from filtros import (barra_filtros, casilla_repetidas, fijar_filtros, filtros_elegidos, limites_capacidad_planta,
+                     motor, planta_elegida, tabla_emulsion_planta, tabla_planta)
+from graficos import carta_control, carta_periodo as carta_periodo_grafico, histograma_capacidad
 
 TIPOS = {POR_TURNO: "X̄-R / X̄-S por turno", POR_MUESTRA: "I-MR por muestra"}
+MODO_PERIODO, MODO_ANALISIS = "periodo", "analisis"
+MODOS = {MODO_PERIODO: "Por turno con límites congelados (como las alertas)",
+         MODO_ANALISIS: "Análisis de un eBOE (X̄-R / X̄-S, I-MR y fases)"}
 PERIODO_FILTRADO = "periodo"
 SUBGRUPOS_RECOMENDADOS = 20     # Montgomery: la fase I necesita al menos 20–25 subgrupos
 DECIMALES_CAPACIDAD = {"eficiencia": 1, "rendimiento": 2, "aceite_emulsion": 2, "brix": 1, "ph": 2}
@@ -269,9 +284,108 @@ def pestana_capacidad(registro: Descargas) -> None:
                        f"Capacidad por eBOE {nombre}")
 
 
+# ---------------------------------------------------------------- carta por turno del período (como las alertas)
+
+def aplicar_parametros_del_inicio() -> dict | None:
+    """Lee los query params con los que el Inicio abre la página (core.cartas_periodo.leer_parametros_control) y,
+    la primera vez, deja elegidos la barra (planta, período, eBOE y turno) y los selectores de la carta. Devuelve
+    los parámetros (para el cartel), o None si la página se abrió sola."""
+    try:
+        parametros = leer_parametros_control(st.query_params.to_dict())
+    except ValueError as error:
+        st.error(f"No se pudo abrir la carta desde el Inicio: {error}")
+        return None
+    if parametros is None:
+        return None
+    firma = tuple(sorted((k, str(v)) for k, v in parametros.items()))
+    if st.session_state.get("_control_inicio") != firma:            # solo la primera vez: después elige el usuario
+        st.session_state["_control_inicio"] = firma
+        with crear_sesion(motor()) as sesion:
+            equipo = (sesion.scalars(select(Equipo).where(Equipo.codigo == parametros["equipo"])).first()
+                      if parametros["equipo"] else None)
+            planta_id = parametros["planta"] or (equipo.linea.planta_id if equipo else None)
+            eboes = [equipo.numero] if equipo is not None and equipo.tipo == "BOE" else []
+        if planta_id is not None:
+            fijar_filtros(planta_id, eboes, parametros["desde"], parametros["hasta"],
+                          [parametros["turno"]] if parametros["turno"] else [])
+        fuente = VARIABLES_PERIODO[parametros["variable"]]["fuente"]
+        st.session_state.update({"control_modo": MODO_PERIODO, "control_periodo_variable": parametros["variable"],
+                                 f"control_periodo_equipo_{fuente}": parametros["equipo"],
+                                 "control_periodo_por": POR_TURNO_PERIODO})
+    return parametros
+
+
+def carta_del_periodo(registro: Descargas) -> None:
+    """Carta por turno entre/dentro (la de las alertas) con los límites congelados vigentes, o la I-MR por muestra,
+    de cualquier variable de core.cartas_periodo, con el período y los turnos de la barra."""
+    uno, dos, tres = st.columns([1.6, 1, 1])
+    variable = uno.selectbox("Variable", list(VARIABLES_PERIODO), key="control_periodo_variable",
+                             format_func=lambda v: f"{VARIABLES_PERIODO[v]['nombre']} ({VARIABLES_PERIODO[v]['unidad']})")
+    fuente = VARIABLES_PERIODO[variable]["fuente"]
+    with crear_sesion(motor()) as sesion:
+        equipos = dict(equipos_de_variable(sesion, planta_id, variable))
+    if not equipos:
+        st.info("La planta no tiene equipos para esta variable.")
+        return
+    equipo = dos.selectbox("Equipo", list(equipos), format_func=equipos.get, key=f"control_periodo_equipo_{fuente}")
+    por = tres.radio("Tipo de carta", [POR_TURNO_PERIODO, POR_MUESTRA_PERIODO], key="control_periodo_por",
+                     format_func={POR_TURNO_PERIODO: "Por turno (entre/dentro)",
+                                  POR_MUESTRA_PERIODO: "I-MR por muestra"}.get,
+                     help="Por turno: la carta de las alertas (promedio del turno con la variación entre turnos y "
+                          "carta S con la de dentro). I-MR: un punto por muestra, con límites del propio período.")
+    elegida = variable
+    if variable in ALTERNATIVAS:                       # fase liviana: % de aceite o caudal
+        pares = sorted([variable, ALTERNATIVAS[variable]])
+        variable = st.segmented_control("Mostrar", pares, default=variable, key=f"control_periodo_ver_{variable}",
+                                        format_func=lambda v: VARIABLES_PERIODO[v]["nombre"]) or variable
+
+    inicio = st.session_state.get("_control_parametros")
+    if inicio and (inicio["variable"], inicio["equipo"]) == (elegida, equipo):
+        st.info(f"Abierto desde el Inicio: {VARIABLES_PERIODO[elegida]['nombre']} · {equipos[equipo]} · "
+                f"{inicio['desde']:%d/%m/%Y} al {inicio['hasta']:%d/%m/%Y} · turnos: {inicio['turno'] or 'todos'}")
+    desde, hasta = filtros.desde, filtros.hasta
+    st.caption(f"Período de la barra: {desde:%d/%m/%Y} al {hasta:%d/%m/%Y} · turnos: "
+               f"{', '.join(filtros.turnos) if filtros.turnos else 'todos'} (los demás filtros de la barra no se usan "
+               "en esta carta). Copiadas y demás datos inválidos no entran en las variables de g y mL; los valores "
+               "extremos se marcan, no se excluyen.")
+    with crear_sesion(motor()) as sesion:
+        planta = sesion.get(Planta, planta_id)
+        try:
+            serie = serie_periodo(sesion, planta, variable, equipo, desde, hasta, filtros.turnos)
+            carta = carta_periodo(sesion, serie, variable, por)
+        except (ValueError, ParametrosIncompletos) as error:
+            st.warning(str(error))
+            return
+    for aviso in carta["avisos"]:
+        st.warning(aviso)
+    limites, decimales, unidad = carta["limites"], carta["decimales"], carta["unidad"]
+    origen = "congelados (de referencia)" if carta["origen"] == "congelados" else "del propio período"
+    st.caption(f"Límites {origen}: {limites['base']}. LC {numero(limites['lc'], decimales)}, LCS "
+               f"{numero(limites['lcs'], decimales)}, LCI {texto_lci(limites['lci'], decimales, unidad)}. "
+               f"Reglas: {carta['reglas']}. N = {numero(carta['n_muestras'], 0)} muestras en "
+               f"{numero(carta['n_turnos'], 0)} turnos"
+               + (f" · {carta['n_invalidos']} inválidas afuera" if carta["n_invalidos"] else "")
+               + (f" · {carta['n_extremos']} con valor extremo" if carta["n_extremos"] else "") + ".")
+    if VARIABLES_PERIODO[variable]["control"] is None:
+        st.caption("Esta variable no tiene límites de control congelados: no genera alertas.")
+    registro.grafico(carta_periodo_grafico(carta), f"Carta {carta['titulo']}")
+    tabla = carta["tabla"]
+    fuera = int(tabla["reglas"].map(bool).sum())
+    st.markdown(f"**{fuera} de {len(tabla)} {'turnos' if por == POR_TURNO_PERIODO else 'muestras'} violan alguna "
+                "regla de Nelson.**")
+    with st.expander("Datos de la carta"):
+        vista = tabla.drop(columns=[c for c in ("datos", "ambito", "equipo_id", "planta_id", "tipo") if c in tabla])
+        vista = vista.assign(reglas=vista["reglas"].map(lambda r: ", ".join(map(str, r))))
+        registro.tabla(vista.style.format(precision=decimales, decimal=",", na_rep="—"), "Datos de la carta")
+
+
 # ---------------------------------------------------------------- cartas de control
 
 def pestana_cartas(registro: Descargas) -> None:
+    modo = st.radio("Carta", list(MODOS), format_func=MODOS.get, key="control_modo", horizontal=True)
+    if modo == MODO_PERIODO:
+        carta_del_periodo(registro)
+        return
     opciones = elegir_opciones(tabla_planta(planta_id), filtros)
     fases = opciones["fases"]
     if fases:
@@ -319,6 +433,7 @@ st.set_page_config(page_title="Gráficos de control", layout="wide")
 cartel_modo_prueba()
 st.title("Gráficos de control")
 
+st.session_state["_control_parametros"] = aplicar_parametros_del_inicio()   # antes de la barra: la deja elegida
 datos = barra_filtros()
 filtros = filtros_elegidos()
 if filtros is None:      # la planta no tiene análisis: la barra ya lo avisó
