@@ -63,6 +63,25 @@ def turnos_sin_aprobar(produccion: pd.DataFrame, filtros: Filtros) -> int:
     return len(borradores.drop_duplicates(["fecha_produccion", "turno"]))
 
 
+def medias_periodo(datos: pd.DataFrame, toneladas: pd.DataFrame) -> dict:
+    """Tarjetas de Análisis › Período (y las de Proceso del Inicio): aceite en fruta de entrada y de salida (kg/MT,
+    todas las Entradas y todas las Salidas) y eficiencia eBOE (fracción, los pares entrada/salida), de los eBOE
+    juntos, ponderados por las toneladas aprobadas del turno (core.estadistica.media_ponderada_por_turno; promedio
+    simple si ningún turno tiene).
+
+    datos: core.analisis.tabla_analisis() ya filtrada. toneladas: core.produccion.toneladas_por_turno().
+    Devuelve {"entrada", "salida", "eficiencia"}: cada uno el dict de media_ponderada_por_turno (valor, ponderada,
+    media_simple, n, n_ponderados), más n_pares, n_entradas y n_salidas.
+    """
+    entradas = datos[datos["lugar"] == "Entrada"]
+    salidas = datos[datos["lugar"] == "Salida"]
+    pares = entradas.dropna(subset=["eficiencia_par"])
+    return {"entrada": media_ponderada_por_turno(entradas, "aceite_fruta", toneladas),
+            "salida": media_ponderada_por_turno(salidas, "aceite_fruta", toneladas),
+            "eficiencia": media_ponderada_por_turno(pares, "eficiencia_par", toneladas),
+            "n_pares": len(pares), "n_entradas": len(entradas), "n_salidas": len(salidas)}
+
+
 def _media_simple(serie: pd.Series) -> float | None:
     serie = serie.dropna()
     return float(serie.mean()) if len(serie) else None

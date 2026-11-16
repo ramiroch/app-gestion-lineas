@@ -115,7 +115,7 @@ def test_fuera_de_rango_fisico_se_marca_y_muestreo_incompleto():
     assert balance.loc["CEN-2", "estado_descarga"] == SIN_DATOS
 
 
-# ---------------------------------------------------------------- primarias en marcha y agua por eBOE
+# ---------------------------------------------------------------- primarias en marcha y retorno de FP a eBOE
 
 def _turnos():
     return tabla(

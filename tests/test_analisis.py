@@ -170,6 +170,10 @@ def test_pares_con_emulsion(sesion, planta):
     assert pd.isna(pares["aceite_emulsion"].iloc[1])
     assert pares["caudal_fase_pesada"].iloc[0] == 9.5
 
+    sin_emulsion = pd.DataFrame(columns=["eboe", "fecha_hora", "aceite_emulsion"])     # período sin muestras
+    vacio = pares_con_emulsion(tabla_analisis(sesion, planta.id).iloc[:0], sin_emulsion)
+    assert vacio.empty and {"aceite_salida", "aceite_emulsion", "eficiencia_pct"} <= set(vacio.columns)
+
 
 def test_filtros_sin_periodo_saca_fechas_y_procesos():
     filtros = Filtros(desde=date(2026, 7, 1), hasta=date(2026, 10, 26), eboes=[1], turnos=["N"],

@@ -3,18 +3,21 @@
 - cargar_flowsheet(): la configuración del flowsheet de la planta (data/plantas/<planta>/flowsheet.json: imagen y
   marcadores, con x e y en fracción de la imagen, origen arriba a la izquierda). None si la planta no tiene.
   logo_planta(): el logo de la planta (data/plantas/<planta>/logo.png), o None (se muestra el nombre).
-- tarjetas_periodo(): las tarjetas de arriba del flowsheet (eficiencia y aceite en salida de la planta, agua por
-  eBOE y alertas abiertas), con las mismas funciones que los marcadores.
+- tarjetas_periodo(): las tarjetas de arriba del flowsheet (proceso: fruta, aceite en entrada, eficiencia y aceite en
+  salida; producción: rendimientos de aceite y de jugo concentrado, alertas abiertas), con las mismas funciones que
+  Análisis › Período y Análisis › Proceso.
 - fecha_referencia(): hoy si hay análisis Scott o muestras de centrífugas; si no (fuera de temporada), el último día
-  con alguno (el período por defecto es ese día). turnos_del_periodo(): los turnos del período con datos, todos o
-  los de un tipo (por ejemplo, todos los N de la semana).
+  con alguno. periodo_por_defecto(): la última semana con datos (los 7 días que terminan en ese día).
+  temporadas_con_datos(): primer y último día con datos de cada temporada (botones de temporada).
+  turnos_del_periodo(): los turnos del período con datos, todos o los de un tipo (por ejemplo, todos los N de la
+  semana).
 - datos_flowsheet(): un marcador por equipo con su valor del período, el semáforo contra RangoReferencia (respetando
   el lado; azul neutro sin rango o con un rango sin alerta, "en revisión"; gris si el equipo no tuvo datos en el
   período), el texto del hover (con N turnos y N muestras), las alertas cuyo episodio toca el período y a qué
   página lleva el clic (los valores, a Control › Cartas de control: DESTINO_CONTROL). Cada turno se resume como siempre y el período es la mediana de los turnos; la eficiencia y
   el aceite en salida, ponderados por toneladas aprobadas. Con un día y un turno, el valor de ese turno.
-- resumen_alertas(), pendientes() (rondas que faltan en el turno en curso, turnos sin producción cargada,
-  borradores) y tendencia_semanal() (eficiencia y aceite en salida por eBOE, ponderados por toneladas aprobadas).
+- resumen_alertas(), pendientes() (rondas que faltan en el turno en curso y turnos sin producción cargada, solo con la
+  temporada en marcha; borradores) y tendencia_semanal() (eficiencia y aceite en salida por eBOE, ponderados por toneladas aprobadas).
 """
 
 import json
@@ -27,7 +30,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import func, select
 
-from core.analisis import pares_con_emulsion, tabla_analisis, tabla_emulsion
+from core.analisis import Filtros, filtrar, pares_con_emulsion, tabla_analisis, tabla_emulsion
 from core.analisis_centrifugas import (PARALELO, PRIMARIA, agua_por_eboe, balance_por_muestreo, por_muestreo,
                                        primarias_por_turno, tabla_muestras)
 from core.carga_scott import semaforo
@@ -36,11 +39,12 @@ from core.estadistica import media_ponderada_por_turno
 from core.gestion_alertas import EN_ANALISIS, episodio_se_superpone, listar_alertas
 from core.importar_centrifugas import REVISAR_EXTREMO
 from core.limites import VARIABLES_CONTROL
-from core.models import (Alerta, AnalisisScott, Equipo, Linea, MuestraCentrifuga, Planta, PuntoMuestreo,
+from core.models import (Alerta, AnalisisScott, Equipo, Linea, MuestraCentrifuga, Planta, Proceso, PuntoMuestreo,
                          RangoReferencia, RegistroProduccion)
 from core.operacion import especie
 from core.parametros import leer_horas_rondas
-from core.produccion import toneladas_por_turno
+from core.proceso import filtrar_produccion, medias_periodo, resumen_proceso, turnos_sin_aprobar
+from core.produccion import tabla_produccion, toneladas_por_turno
 from core.turnos import fecha_produccion, fin_de_turno, inicio_de_turno, turno_de
 
 CARPETA_PLANTAS = CARPETA_PROYECTO / "data" / "plantas"
@@ -56,6 +60,9 @@ EN_MARCHA = "en marcha"            # estado de una primaria que anduvo en el per
 ABIERTAS = ("abierta", EN_ANALISIS)
 ANTES_RONDA, DESPUES_RONDA = timedelta(minutes=15), timedelta(minutes=60)   # una ronda atrasada sigue contando
 DIAS_PRODUCCION = 7
+DIAS_POR_DEFECTO = 7                 # período por defecto del Inicio: la última semana con datos
+HORAS_EN_TEMPORADA = 24              # con una ronda de Scott en las últimas 24 h, la temporada está en marcha
+TEMPORADAS_BRIX_SIN_VERIFICAR = (2024,)   # concentrado 65 °Bx sin verificar (planillas 2024 armadas a mano)
 SEMANAS = 8
 SIN_EMULSION = pd.DataFrame(columns=["eboe", "fecha_hora", "aceite_emulsion"])
 TURNO = ["fecha_produccion", "turno"]
@@ -131,6 +138,45 @@ def fecha_referencia(sesion, planta: Planta, hoy: date) -> date | None:
                     MuestraCentrifuga.equipo_id.in_(equipos), MuestraCentrifuga.fecha_hora < hasta))]
     dias = [fecha_produccion(planta, m) for m in momentos if m is not None]
     return max(dias) if dias else None
+
+
+def periodo_por_defecto(sesion, planta: Planta, hoy: date) -> tuple[date, date] | None:
+    """Período por defecto del Inicio: los DIAS_POR_DEFECTO días que terminan en el último día con análisis Scott o
+    muestras de centrífugas (fecha_referencia). None si la planta no tiene ninguno."""
+    ultimo = fecha_referencia(sesion, planta, hoy)
+    return None if ultimo is None else (ultimo - timedelta(days=DIAS_POR_DEFECTO - 1), ultimo)
+
+
+def temporadas_con_datos(sesion, planta: Planta) -> dict[int, tuple[date, date]]:
+    """{temporada: (primer, último día de producción con análisis Scott o muestras de centrífugas)}, en orden. La
+    temporada es la del proceso del dato; una muestra de centrífuga sin proceso cuenta en el año de su fecha."""
+    equipos = _equipos(sesion, planta.id)
+    momentos = {}
+
+    def sumar(temporada, *fechas_hora):
+        for m in fechas_hora:
+            momentos.setdefault(int(temporada), []).append(m)
+
+    for temporada, primero, ultimo in sesion.execute(
+            select(Proceso.temporada, func.min(AnalisisScott.fecha_hora), func.max(AnalisisScott.fecha_hora))
+            .join(AnalisisScott.proceso).join(AnalisisScott.punto_muestreo)
+            .where(PuntoMuestreo.equipo_id.in_(equipos)).group_by(Proceso.temporada)):
+        sumar(temporada, primero, ultimo)
+    for temporada, primero, ultimo in sesion.execute(
+            select(Proceso.temporada, func.min(MuestraCentrifuga.fecha_hora), func.max(MuestraCentrifuga.fecha_hora))
+            .join(Proceso, MuestraCentrifuga.proceso_id == Proceso.id)
+            .where(MuestraCentrifuga.equipo_id.in_(equipos)).group_by(Proceso.temporada)):
+        sumar(temporada, primero, ultimo)
+    for momento in sesion.scalars(select(MuestraCentrifuga.fecha_hora).where(
+            MuestraCentrifuga.equipo_id.in_(equipos), MuestraCentrifuga.proceso_id.is_(None))):
+        sumar(momento.year, momento)
+    return {t: (fecha_produccion(planta, min(m)), fecha_produccion(planta, max(m))) for t, m in sorted(momentos.items())}
+
+
+def ultima_ronda(sesion, planta: Planta, ahora: datetime) -> datetime | None:
+    """Fecha y hora del último análisis Scott de la planta hasta `ahora` (None si no hay)."""
+    return sesion.scalar(select(func.max(AnalisisScott.fecha_hora)).join(AnalisisScott.punto_muestreo).where(
+        PuntoMuestreo.equipo_id.in_(_equipos(sesion, planta.id)), AnalisisScott.fecha_hora <= ahora))
 
 
 def _ventana(planta: Planta, dia: date) -> tuple[datetime, datetime]:
@@ -282,7 +328,7 @@ def datos_flowsheet(sesion, planta: Planta, config: dict, desde: date, hasta: da
     turno.
     Por eBOE: nombre con el MTPH (sin círculo: color None), entrada (aceite en fruta), eBOE (eficiencia), salida
     (aceite en fruta de salida), emulsión (rebalse, laboratorio del BOE) y fase pesada que entra (mediana del
-    laboratorio contra la mediana del agua por eBOE calculada; semáforo con las tolerancias de la planta). Por
+    laboratorio contra la mediana del retorno de FP a eBOE calculado; semáforo con las tolerancias de la planta). Por
     primaria: estado (EN_MARCHA, o gris si no anduvo en todo el período; % de turnos en paralelo en el hover),
     caudal de emulsión, aceite en descarga, fase liviana y fase pesada (caudales del balance). Tanque de emulsión y
     tanque de retorno de fase pesada: aceite en emulsión y en fase pesada de las primarias en marcha (planilla de
@@ -408,9 +454,9 @@ def _del_eboe(sesion, planta: Planta, m: dict, ctx: dict) -> dict:
         color, nota = _color_fp(planta, lab, calc)
         return {"nombre": f"Fase pesada a {corto}", "valor": lab, "color": color, "destino": destino,
                 "claves_alertas": [],
-                "texto": f"{_texto(lab, ' m³/h', 1)}<br><span style='font-size:10px'>calc. {_texto(calc, '', 1)}</span>",
+                "texto": f"{_texto(lab, ' m³/h', 1)}<br><span style='font-size:11px'>calc. {_texto(calc, '', 1)}</span>",
                 "hover": f"<b>Fase pesada que entra al {corto}</b><br>Laboratorio del BOE: {_texto(lab, ' m³/h', 1)} "
-                         f"(mediana; {_n(n, n_turnos)})<br>Calculado (agua por eBOE, centrífugas): "
+                         f"(mediana; {_n(n, n_turnos)})<br>Calculado (retorno de FP a eBOE, centrífugas): "
                          f"{_texto(calc, ' m³/h', 1)} (mediana de {n_calc} turno{'' if n_calc == 1 else 's'})<br>{nota}"}
     if tipo == "salida_eboe":
         valor, n_turnos, n, como = _ponderado(salidas, "aceite_fruta", ctx["toneladas"])
@@ -542,7 +588,7 @@ def _texto(valor, unidad: str, decimales: int = 2) -> str:
 
 def _agua(analisis: pd.DataFrame, muestras: pd.DataFrame, balance: pd.DataFrame,
           primarias_turno: pd.DataFrame | None) -> tuple[float | None, int]:
-    """Agua por eBOE (m³/h) del período: mediana del agua por eBOE de cada turno, calculada desde las centrífugas
+    """Retorno de FP a eBOE (m³/h) del período: mediana del retorno de FP a eBOE de cada turno, calculada desde las centrífugas
     (core.analisis_centrifugas.agua_por_eboe). Devuelve (valor, N turnos)."""
     if primarias_turno is None or muestras[muestras["tipo"] == PRIMARIA].empty or balance.empty:
         return None, 0
@@ -602,29 +648,37 @@ def _hover_alertas(entradas: list[dict]) -> str:
 # ---------------------------------------------------------------- alertas, pendientes y tendencia
 
 def tarjetas_periodo(sesion, planta: Planta, desde: date, hasta: date, turno: str | None = None) -> dict:
-    """Valores de la planta en el período para las tarjetas del Inicio, con las mismas funciones que los marcadores
-    del flowsheet (no hay cálculos nuevos):
-    - eficiencia (%) y aceite en fruta de salida (kg/MT) de los eBOE juntos: _ponderado(), es decir, la media de cada
-      turno ponderada por sus toneladas aprobadas (promedio simple si ningún turno tiene);
-    - agua por eBOE (m³/h): _agua(), la mediana por turno del agua calculada desde las centrífugas;
-    - alertas abiertas o en análisis de la planta: resumen_alertas() (no dependen del período).
-    Devuelve {"eficiencia" y "aceite_salida": {valor, turnos, n, nota}, "agua": {valor, turnos},
-    "alertas": cantidad}."""
-    ctx = datos_periodo(sesion, planta, desde, hasta, turno)
-    analisis, muestras = ctx["analisis"], ctx["muestras"]
+    """Tarjetas del Inicio para el período (días de producción desde–hasta; turno: solo ese tipo, None: todos), con
+    las MISMAS funciones y definiciones que Análisis (no hay cálculos nuevos; los números coinciden entre pantallas):
+    - Proceso: aceite en fruta de entrada, eficiencia eBOE (%) y aceite en fruta de salida de los eBOE juntos, como
+      Análisis › Período (core.proceso.medias_periodo: media de cada turno ponderada por sus toneladas aprobadas);
+      fruta procesada (t), como Análisis › Proceso.
+    - Producción, como Análisis › Proceso (core.proceso.resumen_proceso, solo turnos aprobados): rendimiento de
+      aceite = Σ aceite envasado / Σ fruta (kg/MT) y rendimiento de jugo concentrado 65 °Bx (kg/MT, por día o
+      período). borradores: turnos del período con producción en borrador (core.proceso.turnos_sin_aprobar), que no
+      entran. nota_brix: aviso si el período toca una temporada con el °Bx del concentrado sin verificar.
+    - alertas: abiertas o en análisis de la planta (resumen_alertas; no dependen del período).
+    Devuelve {"entrada", "salida", "eficiencia"} (dicts de media_ponderada_por_turno; eficiencia en %), "fruta"
+    ({valor, n turnos}), "rendimiento_aceite" ({valor, n turnos}), "rendimiento_concentrado" ({valor, n días,
+    nota}), "borradores" y "alertas"."""
+    filtros = Filtros(desde=desde, hasta=hasta, turnos=[] if turno is None else [turno])
+    inicio, fin = _ventana_periodo(planta, desde, hasta)
+    fruta = filtrar(tabla_analisis(sesion, planta.id, desde=inicio, hasta=fin, con_plc=False), filtros)
     toneladas = toneladas_por_turno(sesion, planta.id)
-    entradas, salidas = analisis[analisis["lugar"] == "Entrada"], analisis[analisis["lugar"] == "Salida"]
-    resultado = {}
-    for clave, datos, columna in (("eficiencia", entradas.assign(eficiencia=entradas["eficiencia_par"] * 100),
-                                   "eficiencia"), ("aceite_salida", salidas, "aceite_fruta")):
-        valor, n_turnos, n, nota = _ponderado(datos, columna, toneladas)
-        resultado[clave] = {"valor": valor, "turnos": n_turnos, "n": n, "nota": nota}
-    balance = balance_por_muestreo(por_muestreo(muestras)) if not muestras.empty else muestras
-    primarias = (primarias_por_turno(muestras, planta.umbral_paralelo_lh)
-                 if planta.umbral_paralelo_lh is not None and not muestras.empty else None)
-    agua, n_agua = _agua(analisis, muestras, balance, primarias)
-    resultado["agua"] = {"valor": agua, "turnos": n_agua}
-    resultado["alertas"] = resumen_alertas(sesion, planta.id)["n"]
+    resultado = medias_periodo(fruta, toneladas)
+    eficiencia = resultado["eficiencia"]
+    resultado["eficiencia"] = eficiencia | {k: None if eficiencia[k] is None else eficiencia[k] * 100
+                                            for k in ("valor", "media_simple")}
+    produccion = filtrar_produccion(tabla_produccion(sesion, planta.id), filtros)
+    totales = resumen_proceso(pares_con_emulsion(fruta, SIN_EMULSION), toneladas, produccion)["totales"]
+    sin_verificar = sorted(t for t in TEMPORADAS_BRIX_SIN_VERIFICAR if desde.year <= t <= hasta.year)
+    resultado |= {
+        "fruta": {"valor": totales["fruta_t"], "n": totales["n_turnos"]},
+        "rendimiento_aceite": {"valor": totales["rendimiento"], "n": totales["n_turnos_rendimiento"]},
+        "rendimiento_concentrado": {"valor": totales["rendimiento_concentrado"], "n": totales["n_dias_concentrado"],
+                                    "nota": "; ".join(f"{t}: °Bx sin verificar" for t in sin_verificar)},
+        "borradores": turnos_sin_aprobar(tabla_produccion(sesion, planta.id, solo_aprobados=False), filtros),
+        "alertas": resumen_alertas(sesion, planta.id)["n"]}
     return resultado
 
 
@@ -647,7 +701,8 @@ def rondas_esperadas(planta: Planta, dia: date, turno) -> list[datetime]:
 
 
 def pendientes(sesion, planta: Planta, ahora: datetime, dia: date) -> dict:
-    """Lo que falta cargar:
+    """Lo que falta cargar. en_temporada: hubo alguna ronda de Scott en las últimas HORAS_EN_TEMPORADA horas;
+    ultima_ronda: la última (None si no hay). Fuera de temporada no se buscan rondas ni producción faltantes.
     - rondas: si `dia` es el de hoy, las rondas esperadas del turno en curso cuya hora ya pasó (con 60 min de
       tolerancia) y que no tienen análisis entre 15 min antes y 60 min después; {"turno", "faltan", "hechas",
       "esperadas"} (None si `dia` no es hoy o la planta no tiene horas_rondas).
@@ -655,7 +710,14 @@ def pendientes(sesion, planta: Planta, ahora: datetime, dia: date) -> dict:
       registro de producción (ni borrador): [(fecha, turno)].
     - borradores: registros de producción en borrador.
     """
-    resultado = {"rondas": None, "sin_produccion": [], "borradores": 0}
+    ultima = ultima_ronda(sesion, planta, ahora)
+    en_temporada = ultima is not None and ultima >= ahora - timedelta(hours=HORAS_EN_TEMPORADA)
+    resultado = {"rondas": None, "sin_produccion": [], "borradores": 0, "en_temporada": en_temporada,
+                 "ultima_ronda": ultima}
+    resultado["borradores"] = sesion.scalar(select(func.count(RegistroProduccion.id)).where(
+        RegistroProduccion.planta_id == planta.id, RegistroProduccion.estado == "borrador"))
+    if not en_temporada:
+        return resultado
     equipos = _equipos(sesion, planta.id)
     if planta.horas_rondas and fecha_produccion(planta, ahora) == dia:
         turno = turno_de(planta, ahora)
@@ -683,8 +745,6 @@ def pendientes(sesion, planta: Planta, ahora: datetime, dia: date) -> dict:
     resultado["sin_produccion"] = sorted(
         [(d, n) for (d, n), t in con_analisis.items() if (d, n) not in cargados and fin_de_turno(planta, d, t) <= ahora],
         key=lambda par: inicio_de_turno(planta, par[0], con_analisis[par]))
-    resultado["borradores"] = sesion.scalar(select(func.count(RegistroProduccion.id)).where(
-        RegistroProduccion.planta_id == planta.id, RegistroProduccion.estado == "borrador"))
     return resultado
 
 

@@ -242,8 +242,12 @@ def pares_con_emulsion(fruta: pd.DataFrame, emulsion: pd.DataFrame) -> pd.DataFr
     Entrada con eficiencia_par y se les agrega aceite_salida (kg/MT) y rallado_salida, de la fila de
     Salida del mismo eBOE y fecha_hora, y aceite_emulsion (del análisis de emulsión del mismo eBOE y fecha_hora; vacío
     si no hay). aceite_fruta sigue siendo el de entrada. eficiencia_pct = eficiencia_par × 100.
+    Sin pares (período vacío), una tabla vacía con las mismas columnas.
     """
     pares = fruta[(fruta["lugar"] == "Entrada") & fruta["eficiencia_par"].notna()]
+    if pares.empty:             # pandas no une una fecha vacía con una columna de texto vacía
+        return pares.assign(aceite_salida=pd.Series(dtype=float), rallado_salida=pd.Series(dtype=object),
+                            aceite_emulsion=pd.Series(dtype=float), eficiencia_pct=pd.Series(dtype=float))
     salidas = fruta.loc[fruta["lugar"] == "Salida", ["eboe", "fecha_hora", "aceite_fruta", "rallado"]].rename(
         columns={"aceite_fruta": "aceite_salida", "rallado": "rallado_salida"})
     licor = emulsion[["eboe", "fecha_hora", "aceite_emulsion"]]

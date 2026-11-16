@@ -1022,7 +1022,7 @@ def _bandas_por_categoria(figura: go.Figure, etiquetas: list, bandas: dict, valo
 
 
 def agua_en_el_tiempo(agua: pd.DataFrame, decimales: int = 2) -> go.Figure:
-    """Agua por eBOE calculada desde las centrífugas contra el caudal del laboratorio del BOE, por turno.
+    """Retorno de FP a eBOE calculado desde las centrífugas contra el caudal del laboratorio del BOE, por turno.
 
     agua: core.analisis_centrifugas.agua_por_eboe (momento, agua_por_eboe_m3h, agua_lab_m3h, n_lab, etiqueta,
     desde, hasta, eboe_en_marcha). Fondo gris en los turnos con las primarias en paralelo.
@@ -1049,7 +1049,7 @@ def agua_en_el_tiempo(agua: pd.DataFrame, decimales: int = 2) -> go.Figure:
                           "%{customdata[4]}<extra></extra>")
     figura.add_scatter(x=[None], y=[None], mode="markers", name="Primarias en paralelo",
                        marker=dict(symbol="square", size=12, color=GRIS, opacity=0.4))
-    figura.update_layout(yaxis_title="Agua por eBOE (m³/h)", xaxis=dict(title="", tickformat="%d/%m/%y"))
+    figura.update_layout(yaxis_title="Retorno de FP a eBOE (m³/h)", xaxis=dict(title="", tickformat="%d/%m/%y"))
     return estilo(figura)
 
 
@@ -1339,6 +1339,9 @@ NOMBRES_SEMAFORO = {"verde": "Dentro del rango", "amarillo": "Diferencia interme
 LUGAR_ETIQUETA = {"derecha": (16, 0, "left", "middle"), "izquierda": (-16, 0, "right", "middle"),
                   "arriba": (0, 14, "center", "bottom"), "abajo": (0, -14, "center", "top"),
                   "centro": (0, 0, "center", "middle")}
+TAMANO_ETIQUETA = 12.5          # pt de los valores escritos sobre el flowsheet
+# Valores principales (en negrita): eficiencia del eBOE, aceite en fruta de entrada y de salida, aceite en descarga.
+VALORES_PRINCIPALES = {"eboe", "entrada_eboe", "salida_eboe", "primaria_descarga", "secundaria"}
 # Posición de la 🔔 respecto del marcador (fracción de la imagen; y hacia arriba). Por defecto arriba a la derecha; si la
 # etiqueta va arriba, a la derecha de la etiqueta para no quedar tapada. El marcador puede pedir otra ("campana").
 LUGAR_CAMPANA = {"arriba": (0.022, 0.035), "abajo": (0.022, -0.035), "derecha": (0.048, 0.032)}
@@ -1383,9 +1386,11 @@ def flowsheet(config: dict, marcadores: list[dict]) -> go.Figure:
             continue                                   # dato de línea de una centrífuga que no anduvo
         lugar = "centro" if m["color"] is None else m.get("etiqueta")      # sin círculo (nombre): centrado
         dx, dy, xanchor, yanchor = LUGAR_ETIQUETA.get(lugar, LUGAR_ETIQUETA["derecha"])
-        figura.add_annotation(x=m["x"], y=1 - m["y"], text=m["texto"] if m["color"] is None else f"<b>{m['texto']}</b>",
-                              showarrow=False, xshift=dx, yshift=dy, xanchor=xanchor, yanchor=yanchor, align="center",
-                              font=dict(size=11, color=COLOR_DATOS), bgcolor="rgba(255,255,255,0.82)", borderpad=2)
+        texto = f"<b>{m['texto']}</b>" if m["tipo"] in VALORES_PRINCIPALES else m["texto"]
+        figura.add_annotation(x=m["x"], y=1 - m["y"], text=texto, showarrow=False, xshift=dx, yshift=dy,
+                              xanchor=xanchor, yanchor=yanchor, align="center",
+                              font=dict(size=TAMANO_ETIQUETA, color=COLOR_DATOS), bgcolor="rgba(255,255,255,0.82)",
+                              borderpad=2)
     figura.update_xaxes(range=[0, 1], visible=False, fixedrange=True)
     figura.update_yaxes(range=[0, 1], visible=False, fixedrange=True)
     figura.update_layout(width=ancho, height=alto + 34, margin=dict(l=0, r=0, t=0, b=34), plot_bgcolor="white",

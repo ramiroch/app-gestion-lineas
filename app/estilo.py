@@ -28,6 +28,9 @@ CSS = f"""<style>
 [data-testid="stSidebarHeader"] img {{ height: 2.4rem; max-width: 100%; }}
 [data-testid="stMetric"] {{ background-color: {BEIGE}; padding: 0.7rem 1rem; border-radius: 0.6rem; }}
 [data-testid="stMetricValue"] {{ color: {TEXTO}; }}
+[data-testid="stMetricLabel"] [data-testid="stMarkdownContainer"],
+[data-testid="stMetricLabel"] p {{ white-space: normal !important; overflow: visible !important; }}
+[data-testid="stMetricLabel"] {{ min-height: 2.3em; align-items: flex-start; }}   /* tarjetas parejas: 2 renglones */
 [class*="st-key-tarjeta"] {{ background-color: #FFFFFF; border-radius: 0.6rem; }}
 .pie-brown {{ font-size: 0.8rem; opacity: 0.75; margin-top: 1.5rem; letter-spacing: 0.02em; }}
 .cobrand {{ background: #FFFFFF; border: 1px solid #E2DED0; border-radius: 0.7rem; padding: 0.9rem 1.4rem 0.8rem;

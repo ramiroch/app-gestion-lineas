@@ -9,7 +9,7 @@ backgroundColor = "#FFFFFF"
 secondaryBackgroundColor = "#F4F2EA"    # beige
 textColor = "#333333"
 borderColor = "#E2DED0"
-metricValueFontSize = "2rem"
+metricValueFontSize = "1.75rem"
 font = "Barlow:https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&display=swap, sans-serif"
 headingFont = "Barlow:https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&display=swap, sans-serif"
 
@@ -19,3 +19,8 @@ textColor = "#FFFFFF"
 secondaryBackgroundColor = "#2B5546"    # campos (selector de planta) sobre el verde
 borderColor = "#3C6A5A"
 primaryColor = "#FF8710"
+
+[client]
+# Sin el botón "Deploy" ni el menú de desarrollador. En modo prueba se puede volver a "developer" desde la línea de
+# comandos, sin tocar este archivo: streamlit run app/app.py --client.toolbarMode=developer
+toolbarMode = "viewer"

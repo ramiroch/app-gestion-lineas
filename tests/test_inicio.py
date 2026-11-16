@@ -3,22 +3,29 @@ semáforo, gris sin datos, secundaria con su nombre, alertas; un turno, un rango
 tipo, ponderación por toneladas), pendientes y tendencia semanal."""
 
 import json
+import sqlite3
 from datetime import date, datetime, time, timedelta
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select
 
+from core.analisis import Filtros, filtrar, pares_con_emulsion, tabla_analisis
 from core.carga_scott import guardar_ronda
 from core.gestion_alertas import listar_alertas
 from core.importar_centrifugas import REVISAR_EXTREMO
-from core.inicio import (AMARILLO, EN_MARCHA, NEUTRO, ROJO, SIN_DATOS, VERDE, _color_fp, cargar_flowsheet,
-                         carpeta_planta, color_de, datos_flowsheet, datos_periodo, fecha_referencia, objetivo_eficiencia,
-                         logo_planta, pendientes, rondas_esperadas, tarjetas_periodo, tendencia_semanal,
-                         turnos_con_datos, turnos_del_periodo)
-from core.models import (Alerta, Equipo, Linea, MuestraCentrifuga, Planta, RangoReferencia, RegistroProduccion,
-                         Turno)
+from core.inicio import (AMARILLO, EN_MARCHA, NEUTRO, ROJO, SIN_DATOS, SIN_EMULSION, VERDE, _color_fp,
+                         cargar_flowsheet, carpeta_planta, color_de, datos_flowsheet, datos_periodo, fecha_referencia,
+                         logo_planta, objetivo_eficiencia, pendientes, periodo_por_defecto, rondas_esperadas,
+                         tarjetas_periodo, temporadas_con_datos, tendencia_semanal, turnos_con_datos,
+                         turnos_del_periodo)
+from core.models import (Alerta, Equipo, Linea, MuestraCentrifuga, Planta, Proceso, RangoReferencia,
+                         RegistroProduccion, Turno)
+from core.proceso import filtrar_produccion, medias_periodo, resumen_proceso, turnos_sin_aprobar
+from core.produccion import tabla_produccion, toneladas_por_turno
 from tests.test_carga_scott import _planta, ronda, sesion  # noqa: F401  (fixture)
 
+CARPETA_APP = Path(__file__).resolve().parent.parent / "app"
 DIA = date(2026, 7, 1)
 CONFIG = {"imagen": "flowsheet.jpg", "ancho": 1034, "alto": 775, "marcadores": [
     {"tipo": "nombre_eboe", "equipo": "N-BOE-01", "x": 0.07, "y": 0.15},
@@ -158,7 +165,7 @@ def test_marcadores_del_turno(sesion, planta, tmp_path):  # noqa: F811
     assert (nombre["texto"], nombre["color"]) == ("<b>eBOE 1</b><br>11,0 MTPH", None)
     fase_pesada = marcadores[("retorno_fp_eboe", "Fase pesada a eBOE 1")]
     assert fase_pesada["texto"].startswith("9,5 m³/h<br>") and "calc." in fase_pesada["texto"]
-    assert "Calculado (agua por eBOE" in fase_pesada["hover"]
+    assert "Calculado (retorno de FP a eBOE" in fase_pesada["hover"]
     primaria = marcadores[("primaria", "ESE 230 (1)")]                           # el cuerpo: solo el estado
     assert (primaria["texto"], primaria["color"]) == ("ESE 230 (1)", EN_MARCHA)
     assert marcadores[("primaria_caudal", "Caudal ESE 230 (1)")]["texto"] == "15.500 L/h"
@@ -364,13 +371,23 @@ def test_logo_de_la_planta(tmp_path):
     assert logo_planta("Norte", tmp_path) == tmp_path / "norte" / "logo.png"
 
 
+def _produccion_del_periodo(sesion, planta, hasta):  # noqa: F811
+    """Aceite y concentrado en los turnos aprobados del período y un borrador el 02/07 T (no entra)."""
+    registros = {(r.fecha_produccion, r.turno.nombre): r for r in sesion.scalars(select(RegistroProduccion))}
+    registros[(DIA, "M")].aceite_envasado_kg, registros[(DIA, "M")].jugo_conc_kg = 650.0, 8000.0
+    registros[(DIA, "T")].aceite_envasado_kg = 2100.0             # sin concentrado: cuenta 0 dentro de su día
+    registros[(hasta, "M")].aceite_envasado_kg = 700.0            # día sin concentrado: no entra en el de jugo
+    sesion.add(RegistroProduccion(planta_id=planta.id, fecha_produccion=hasta, turno_id=_turno(sesion, "T").id,
+                                  fruta_t=50.0, aceite_envasado_kg=999.0, jugo_conc_kg=9999.0, estado="borrador",
+                                  origen_carga="app", cargado_por="Ana"))
+    sesion.commit()
+
+
 def test_tarjetas_del_periodo(sesion, planta, periodo):  # noqa: F811
     desde, hasta = periodo
-    for fase, otros in (("descarga", {"ml": 10.0, "t_descarga_s": 200.0}), ("fase_liviana", {"aceite_pct_medido": 70.0}),
-                        ("fase_pesada", {"ml": 2.0})):                          # muestreo completo de 06:30: balance
-        _muestra(sesion, "N-CEN-01", datetime(2026, 7, 1, 6, 30), fase, **otros)
+    _produccion_del_periodo(sesion, planta, hasta)
     tarjetas = tarjetas_periodo(sesion, planta, desde, hasta)
-    # como los marcadores, pero con los 3 eBOE juntos: la media de cada turno, ponderada por 100, 300 y 100 t
+    # los 3 eBOE juntos: la media de cada turno, ponderada por 100, 300 y 100 t aprobadas
     por_turno = []
     for dia, turno, toneladas in ((DIA, "M", 100), (DIA, "T", 300), (hasta, "M", 100)):
         analisis = datos_periodo(sesion, planta, dia, dia, turno)["analisis"]
@@ -378,12 +395,104 @@ def test_tarjetas_del_periodo(sesion, planta, periodo):  # noqa: F811
         salida = analisis.loc[analisis["lugar"] == "Salida", "aceite_fruta"].mean()
         por_turno.append((eficiencia, salida, toneladas))
     assert tarjetas["eficiencia"]["valor"] == pytest.approx(sum(e * t for e, _, t in por_turno) / 500)
-    assert tarjetas["aceite_salida"]["valor"] == pytest.approx(sum(s * t for _, s, t in por_turno) / 500)
-    assert (tarjetas["eficiencia"]["turnos"], tarjetas["eficiencia"]["n"]) == (3, 9)          # 3 eBOE × 3 turnos
-    assert tarjetas["eficiencia"]["nota"] == "ponderado por toneladas aprobadas"
-    retorno = _por_tipo(sesion, planta, desde, hasta)[("retorno_fp_eboe", "Fase pesada a eBOE 1")]
-    assert tarjetas["agua"]["valor"] is not None
-    assert "calc. " + f"{tarjetas['agua']['valor']:.1f}".replace(".", ",") in retorno["texto"]   # el mismo "calc."
+    assert tarjetas["salida"]["valor"] == pytest.approx(sum(s * t for _, s, t in por_turno) / 500)
+    assert (tarjetas["eficiencia"]["n"], tarjetas["eficiencia"]["ponderada"]) == (9, True)    # 3 eBOE × 3 turnos
+    assert (tarjetas["fruta"]["valor"], tarjetas["fruta"]["n"]) == (500, 3)                  # sin el borrador
+    assert tarjetas["rendimiento_aceite"]["valor"] == pytest.approx((650 + 2100 + 700) / 500)
+    assert tarjetas["rendimiento_concentrado"] == {"valor": pytest.approx(8000 / 400), "n": 1, "nota": ""}
+    assert tarjetas["borradores"] == 1
     assert tarjetas["alertas"] == len(listar_alertas(sesion, planta.id, estados=("abierta", "en análisis")))
-    vacio = tarjetas_periodo(sesion, planta, date(2026, 8, 1), date(2026, 8, 1))
-    assert (vacio["eficiencia"]["valor"], vacio["eficiencia"]["n"], vacio["agua"]["valor"]) == (None, 0, None)
+    manana = tarjetas_periodo(sesion, planta, desde, hasta, "M")                # todos los M: sin el borrador (T)
+    assert (manana["fruta"]["valor"], manana["borradores"]) == (200, 0)
+    assert manana["rendimiento_aceite"]["valor"] == pytest.approx((650 + 700) / 200)
+    assert manana["rendimiento_concentrado"]["valor"] == pytest.approx(8000 / 100)
+    vacio = tarjetas_periodo(sesion, planta, date(2024, 8, 1), date(2024, 8, 1))
+    assert (vacio["eficiencia"]["valor"], vacio["eficiencia"]["n"], vacio["fruta"]["valor"]) == (None, 0, None)
+    assert vacio["rendimiento_concentrado"]["nota"] == "2024: °Bx sin verificar"
+
+
+def test_tarjetas_iguales_a_analisis_periodo_y_proceso(sesion, planta, periodo):  # noqa: F811
+    """Los números de las tarjetas son los de Análisis › Período y › Proceso con el mismo período y turno: la página
+    filtra la tabla completa con la barra (filtrar) y usa medias_periodo y resumen_proceso."""
+    desde, hasta = periodo
+    _produccion_del_periodo(sesion, planta, hasta)
+    toneladas = toneladas_por_turno(sesion, planta.id)
+    for turno in (None, "M", "T"):
+        tarjetas = tarjetas_periodo(sesion, planta, desde, hasta, turno)
+        filtros = Filtros(desde=desde, hasta=hasta, turnos=[] if turno is None else [turno])
+        datos = filtrar(tabla_analisis(sesion, planta.id), filtros)               # lo que muestra Análisis
+        en_periodo = medias_periodo(datos, toneladas)                             # pestaña Período
+        produccion = filtrar_produccion(tabla_produccion(sesion, planta.id), filtros)
+        totales = resumen_proceso(pares_con_emulsion(datos, SIN_EMULSION), toneladas, produccion)["totales"]
+        for clave in ("entrada", "salida"):
+            assert tarjetas[clave] == en_periodo[clave]
+        assert tarjetas["eficiencia"]["valor"] == pytest.approx(en_periodo["eficiencia"]["valor"] * 100)
+        assert tarjetas["eficiencia"]["valor"] == pytest.approx(totales["eficiencia"])   # Proceso: la misma
+        assert tarjetas["fruta"]["valor"] == totales["fruta_t"]
+        assert tarjetas["rendimiento_aceite"]["valor"] == totales["rendimiento"]
+        assert tarjetas["rendimiento_concentrado"]["valor"] == totales["rendimiento_concentrado"]
+        assert tarjetas["borradores"] == turnos_sin_aprobar(tabla_produccion(sesion, planta.id, False), filtros)
+
+
+def test_periodo_por_defecto_y_temporadas(sesion, planta):  # noqa: F811
+    assert periodo_por_defecto(sesion, planta, DIA) is None and temporadas_con_datos(sesion, planta) == {}
+    _ronda(sesion, datetime(2026, 7, 1, 6, 10))
+    _ronda(sesion, datetime(2026, 7, 3, 2, 10))                                 # día de producción 02/07
+    _muestra(sesion, "N-CEN-01", datetime(2026, 6, 28, 14, 30), "descarga", ml=10.0)        # sin proceso: su año
+    anterior = Proceso(numero=3, temporada=2025, planta=planta)
+    sesion.add(anterior)
+    sesion.flush()
+    _muestra(sesion, "N-CEN-01", datetime(2025, 9, 10, 8, 0), "descarga", ml=10.0, proceso_id=anterior.id)
+    _muestra(sesion, "N-CEN-01", datetime(2025, 9, 20, 3, 0), "descarga", ml=10.0, proceso_id=anterior.id)
+    hoy = date(2026, 11, 16)                                                    # fuera de temporada
+    assert periodo_por_defecto(sesion, planta, hoy) == (date(2026, 6, 26), date(2026, 7, 2))   # la última semana
+    assert temporadas_con_datos(sesion, planta) == {2025: (date(2025, 9, 10), date(2025, 9, 19)),
+                                                    2026: (date(2026, 6, 28), date(2026, 7, 2))}
+
+
+def test_pendientes_fuera_de_temporada(sesion, planta):  # noqa: F811
+    _ronda(sesion, datetime(2026, 7, 1, 6, 10))
+    _ronda(sesion, datetime(2026, 7, 1, 14, 10), entrada_ml={1: 9.0, 2: 9.2, 3: 9.4})
+    en_marcha = pendientes(sesion, planta, datetime(2026, 7, 2, 9, 0), date(2026, 7, 2))     # 19 h después
+    assert en_marcha["en_temporada"] and en_marcha["rondas"]["faltan"]
+    assert en_marcha["sin_produccion"] == [(DIA, "M"), (DIA, "T")]
+    fuera = pendientes(sesion, planta, datetime(2026, 7, 2, 15, 0), date(2026, 7, 2))        # 25 h después
+    assert not fuera["en_temporada"] and fuera["ultima_ronda"] == datetime(2026, 7, 1, 14, 10)
+    assert (fuera["rondas"], fuera["sin_produccion"]) == (None, [])
+
+
+@pytest.fixture
+def app_con_datos(sesion, planta, periodo, tmp_path, monkeypatch):  # noqa: F811
+    """El Inicio (app/app.py) con la base de prueba copiada a un archivo (APP_DB)."""
+    _produccion_del_periodo(sesion, planta, periodo[1])
+    base = tmp_path / "prueba.db"
+    destino = sqlite3.connect(base)
+    sesion.connection().connection.driver_connection.backup(destino)
+    destino.close()
+    monkeypatch.setenv("APP_DB", str(base))
+    monkeypatch.chdir(CARPETA_APP)
+    import streamlit as st
+    from streamlit.testing.v1 import AppTest
+    st.cache_resource.clear()                   # motor() y plantas() quedan en caché en todo el proceso de pytest
+    st.cache_data.clear()
+    yield AppTest.from_file(str(CARPETA_APP / "app.py"), default_timeout=120)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+
+
+def test_inicio_con_periodo_por_defecto_y_botones_de_temporada(sesion, planta, app_con_datos):  # noqa: F811
+    app = app_con_datos.run()
+    assert not app.exception
+    clave = f"inicio_fechas_{planta.id}"
+    assert app.date_input(key=clave).value == (date(2026, 6, 26), date(2026, 7, 2))          # la última semana
+    botones = [b.label for b in app.button if (b.key or "").startswith(f"inicio_temporada_{planta.id}")]
+    assert botones == ["2026"]                                                  # una por temporada con datos
+    etiquetas = {m.label: m.value for m in app.metric}
+    assert list(etiquetas) == ["Fruta procesada", "Aceite en fruta de entrada", "Eficiencia eBOE", "Aceite en salida",
+                               "Rendimiento de aceite", "Rendimiento de jugo concentrado 65 °Bx", "Alertas abiertas"]
+    assert etiquetas["Fruta procesada"] == "500 t" and etiquetas["Rendimiento de aceite"] == "6,90 kg/MT"
+    assert any("en borrador" in c.value for c in app.caption)                 # aviso de borradores
+    assert any("Fuera de temporada: sin carga de laboratorio desde el 02/07/2026" in i.value for i in app.info)
+    app.button(key=f"inicio_temporada_{planta.id}_2026").click().run()
+    assert app.date_input(key=clave).value == (date(2026, 7, 1), date(2026, 7, 2))           # la temporada
+    assert {m.label: m.value for m in app.metric}["Fruta procesada"] == "500 t"

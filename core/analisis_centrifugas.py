@@ -3,7 +3,7 @@
 - tabla_muestras(): una fila por muestra, con el aceite % recalculado, día de producción y turno.
 - por_muestreo() y balance_por_muestreo(): balance de cada equipo en cada muestreo (core.centrifugas).
 - primarias_por_turno(): primarias en marcha por turno (observado o inferido) y caudal total de emulsión.
-- agua_por_eboe(): agua disponible por eBOE (m³/h) contra el caudal que carga el laboratorio del BOE.
+- agua_por_eboe(): retorno de FP a eBOE (m³/h) contra el caudal que carga el laboratorio del BOE.
 - valores_por_variable() y resumen_por_temporada(): N, mediana, cuartiles (Minitab) y % fuera de rango.
 - perdida_descarga_temporada() y perdida_por_tonelada(): pérdida en descarga ESTIMADA (kg y kg/MT).
 - relacion_boe(): aceite en emulsión de centrífugas contra el laboratorio del BOE, por día de producción.
@@ -297,7 +297,7 @@ def _balance_pulidora(fila: dict) -> dict:
     return _vacio() | _descarga(fila) | {"estado_eficiencia": NO_APLICA, "estado_pesada": NO_APLICA}
 
 
-# ---------------------------------------------------------------- primarias en marcha y agua por eBOE
+# ---------------------------------------------------------------- primarias en marcha y retorno de FP a eBOE
 
 def primarias_por_turno(tabla: pd.DataFrame, umbral_lh: float) -> pd.DataFrame:
     """Primarias en marcha por turno de producción.
@@ -329,7 +329,7 @@ def primarias_por_turno(tabla: pd.DataFrame, umbral_lh: float) -> pd.DataFrame:
 
 
 def agua_por_eboe(balance: pd.DataFrame, turnos: pd.DataFrame, analisis: pd.DataFrame) -> pd.DataFrame:
-    """Agua disponible por eBOE (m³/h) por turno = caudal de fase pesada de las primarias en marcha / eBOE en marcha.
+    """Retorno de FP a eBOE (m³/h) por turno = caudal de fase pesada de las primarias en marcha / eBOE en marcha.
 
     Caudal de fase pesada: del balance de cada muestreo (L/h); en paralelo, suma de las medianas de cada primaria;
     una sola, mediana del turno. eBOE en marcha: los que tienen análisis de Entrada en ese turno (tabla_analisis);
@@ -480,7 +480,7 @@ def relacion_boe(tabla: pd.DataFrame, emulsion_boe: pd.DataFrame, fruta_boe: pd.
     """Por día de producción: mediana del aceite en emulsión de las primarias (%) contra la del laboratorio del BOE
     (%), y la mediana del aceite residual en fruta a la salida del eBOE (kg/MT), con el programa medio del día.
 
-    El programa medio (N0–N9 → 0–9, de las Entradas del laboratorio) va porque el agua está confundida con el
+    El programa medio (N0–N9 → 0–9, de las Entradas del laboratorio) va porque el retorno de FP está confundido con el
     programa. Cada columna lleva su N.
     """
     cen = tabla[(tabla["tipo"] == PRIMARIA) & (tabla["fase"] == "emulsion") & tabla["aceite_pct"].notna()]

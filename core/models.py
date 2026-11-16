@@ -94,7 +94,7 @@ class Planta(Base):
     - turnos_para_alertar: turnos seguidos del mismo ámbito que tienen que violar la misma regla para que se cree
       la alerta (persistencia, core.alertas).
     - tolerancia_fp_verde_pct y tolerancia_fp_amarillo_pct: diferencia |lab − calculado| / calculado (%) del caudal
-      de fase pesada que entra a cada eBOE (laboratorio del BOE contra agua por eBOE de las centrífugas): hasta el
+      de fase pesada que entra a cada eBOE (laboratorio del BOE contra retorno de FP a eBOE de las centrífugas): hasta el
       primero, verde; hasta el segundo, amarillo; más, rojo (Inicio, core.inicio).
     - horas_rondas: horas de las rondas de Scott, como texto ("05:10, 07:10, …"; core.parametros.leer_horas_rondas),
       para saber qué rondas faltan en el turno en curso (core.inicio).

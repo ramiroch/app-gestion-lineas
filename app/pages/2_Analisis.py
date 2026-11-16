@@ -26,7 +26,7 @@ from cartel import cartel_modo_prueba
 from core.analisis import (ATAJO_PERSONALIZADO, FUENTES, atajos, con_fuente, filtrar, filtros_sin_periodo, opciones, pares_con_emulsion,
                            rango_de_atajo)
 from core.comparaciones import comparar_grupos, frase_resultado
-from core.estadistica import limites_iqr, media_ponderada_por_turno, resumen_descriptivo
+from core.estadistica import limites_iqr, resumen_descriptivo
 from core.formato import numero, texto_p
 from core.mensual import (cajas_por_mes, eficiencia_eboe_planta_por_mes, eficiencia_proceso_por_mes, eje_de_meses,
                           por_mes_y_eboe)
@@ -34,7 +34,7 @@ from core.parametros import ParametrosIncompletos
 from core.programa import (N_MINIMO, N_MINIMO_RANKING, combinaciones, de_combinaciones, frase_programa, frase_uso, numero_programa,
                            grilla, mejores_y_peores, rallado_por_programa, uso_de_programas)
 from core.proceso import (INDICADORES_EBOE, INDICADORES_TOTALES, comparar_resumenes, filtrar_produccion,
-                          turnos_sin_aprobar,
+                          medias_periodo, turnos_sin_aprobar,
                           resumen_proceso)
 from core.regresion import frase_pendiente, regresiones_por_grupo
 from core.repetidas import sin_entradas_repetidas
@@ -85,22 +85,15 @@ def pestana_periodo(datos: pd.DataFrame, registro: Descargas) -> None:
     if datos.empty:
         st.info("No hay muestras con estos filtros.")
         return
-    entradas = datos[datos["lugar"] == "Entrada"]
-    salidas = datos[datos["lugar"] == "Salida"]
-    pares = entradas.dropna(subset=["eficiencia_par"])
-    toneladas = toneladas_planta(planta_elegida())
-
-    medias = {"entrada": media_ponderada_por_turno(entradas, "aceite_fruta", toneladas),
-              "salida": media_ponderada_por_turno(salidas, "aceite_fruta", toneladas),
-              "eficiencia": media_ponderada_por_turno(pares, "eficiencia_par", toneladas)}
+    medias = medias_periodo(datos, toneladas_planta(planta_elegida()))     # las mismas del Inicio
     columnas = st.columns(4)
     tarjeta(columnas[0], "Aceite en fruta entrada", medias["entrada"], kg_t)
     tarjeta(columnas[1], "Aceite en fruta salida", medias["salida"], kg_t)
     tarjeta(columnas[2], "Eficiencia eBOE", medias["eficiencia"], porcentaje)
-    columnas[3].metric("Pares entrada/salida", numero(len(pares), 0))
-    columnas[3].caption(f"{numero(len(entradas), 0)} entradas · {numero(len(salidas), 0)} salidas")
+    columnas[3].metric("Pares entrada/salida", numero(medias["n_pares"], 0))
+    columnas[3].caption(f"{numero(medias['n_entradas'], 0)} entradas · {numero(medias['n_salidas'], 0)} salidas")
     avisar_n_chico({"aceite de entrada": medias["entrada"]["n"], "aceite de salida": medias["salida"]["n"],
-                    "pares": len(pares)})
+                    "pares": medias["n_pares"]})
     st.caption("Las tarjetas se ponderan por toneladas procesadas en el turno. Los gráficos y las tablas "
                "describen las muestras: cada muestra cuenta igual.")
 

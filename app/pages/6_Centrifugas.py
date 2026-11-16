@@ -1,8 +1,8 @@
 """Página Centrífugas: primarias, secundarias y pulidora de aceite.
 
 Usa la barra de filtros global: a las centrífugas les aplican las fechas de producción, el turno y el proceso (el
-eBOE y el programa no; sí a los datos del laboratorio del BOE de la pestaña Agua y BOE). Una pestaña por bloque:
-resumen, agua y BOE, fases, operación vs referencias, pérdidas y muestras para revisar. Solo se dibuja la pestaña
+eBOE y el programa no; sí a los datos del laboratorio del BOE de la pestaña Retorno de FP y BOE). Una pestaña por bloque:
+resumen, retorno de FP y BOE, fases, operación vs referencias, pérdidas y muestras para revisar. Solo se dibuja la pestaña
 abierta; cada gráfico tiene botón PNG, cada tabla Excel y cada pestaña "Descargar todo".
 Solo muestra: la lógica está en core/analisis_centrifugas.py y los rangos en RangoReferencia.
 """
@@ -157,9 +157,9 @@ def pestana_resumen(registro: Descargas) -> None:
 def pestana_agua(registro: Descargas) -> None:
     if umbral is None:
         st.warning("La planta no tiene definido el umbral de primarias en paralelo (umbral_paralelo_lh, hoja Planta "
-                   "de los maestros): no se puede calcular el agua por eBOE.")
+                   "de los maestros): no se puede calcular el retorno de FP a eBOE.")
         return
-    st.caption(f"Agua disponible por eBOE = caudal de fase pesada de las primarias en marcha (balance de cada "
+    st.caption(f"Retorno de FP a eBOE = caudal de fase pesada de las primarias en marcha (balance de cada "
                f"muestreo) / eBOE con análisis de Entrada en el turno (3 si no hay). Primarias en paralelo: "
                f"observado si las dos se muestrearon a la misma hora; si no, inferido (las dos en el turno y el caudal "
                f"de cada una ≤ {numero(umbral, 0)} L/h, parámetro de la planta). Laboratorio: columna Caudal de la "
@@ -173,22 +173,22 @@ def pestana_agua(registro: Descargas) -> None:
     de_temporada = agua[agua["temporada"] == temporada]
     calc, lab = de_temporada["agua_por_eboe_m3h"].median(), de_temporada["agua_lab_m3h"].median()
     uno, dos, tres = st.columns(3)
-    uno.metric("Agua por eBOE calculada (mediana)", f"{numero(calc, 2)} m³/h", help=f"N = {len(de_temporada)} turnos")
+    uno.metric("Retorno de FP a eBOE calculado (mediana)", f"{numero(calc, 2)} m³/h", help=f"N = {len(de_temporada)} turnos")
     dos.metric("Caudal del laboratorio (mediana)", f"{numero(lab, 2)} m³/h",
                help=f"N = {int(de_temporada['agua_lab_m3h'].notna().sum())} turnos con dato")
     tres.metric("Turnos en paralelo", f"{int((de_temporada['modo'] == 'en paralelo').sum())} de {len(de_temporada)}")
-    registro.grafico(agua_en_el_tiempo(de_temporada), f"Agua por eBOE {temporada}")
+    registro.grafico(agua_en_el_tiempo(de_temporada), f"Retorno de FP a eBOE {temporada}")
     por_temporada = agua.groupby(["temporada", "modo"], as_index=False).agg(
         turnos=("agua_por_eboe_m3h", "size"), calculada=("agua_por_eboe_m3h", "median"),
         laboratorio=("agua_lab_m3h", "median"))
     with st.expander("Mediana por temporada y modo"):
         registro.tabla(con_coma(por_temporada.rename(columns={
             "temporada": "Temporada", "modo": "Primarias", "turnos": "Turnos", "calculada": "Calculada (m³/h)",
-            "laboratorio": "Laboratorio (m³/h)"}), 2, **{"Turnos": 0, "Temporada": 0}), "Agua por eBOE")
+            "laboratorio": "Laboratorio (m³/h)"}), 2, **{"Turnos": 0, "Temporada": 0}), "Retorno de FP a eBOE")
 
     st.markdown("#### Aceite en emulsión: centrífugas vs laboratorio del BOE")
     st.caption("Mediana por día de producción. En el tooltip, el programa medio del día (de las Entradas del "
-               "laboratorio): el agua está confundida con el programa.")
+               "laboratorio): el retorno de FP está confundido con el programa.")
     relacion = relacion_boe(muestras_f, emulsion_f, datos)
     relacion = relacion[relacion["temporada"] == temporada]
     if relacion.empty:
@@ -333,7 +333,7 @@ if len(muestras_f) < 3:
 
 PESTANAS = {
     "Resumen": pestana_resumen,
-    "Agua y BOE": pestana_agua,
+    "Retorno de FP y BOE": pestana_agua,
     "Fases": pestana_fases,
     "Operación vs referencias": pestana_operacion,
     "Pérdidas": pestana_perdidas,

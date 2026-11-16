@@ -1,10 +1,11 @@
 """Página de inicio: cómo vienen los equipos y qué está pendiente, en 10 segundos (tarea 21).
 
-Encabezado con el logo de la planta y el de Brown; tarjetas de la planta en el período (eficiencia, aceite en salida,
-agua por eBOE, alertas abiertas); flowsheet de la planta con un semáforo por equipo sobre un período (desde–hasta,
-todos los turnos o uno; por defecto, el último día con datos; clic → la página del equipo, o Alertas desde la 🔔),
-alertas abiertas, pendientes (rondas, producción, borradores; siempre sobre hoy) y la tendencia semanal por eBOE
-hasta la fecha "hasta". Solo muestra: la lógica está en core/inicio.py.
+Encabezado con el logo de la planta y el de Brown; período (por defecto, la última semana con datos; un botón por
+temporada) y turno; tarjetas de la planta en el período, las mismas de Análisis › Período y › Proceso (proceso: fruta,
+aceite en entrada, eficiencia, aceite en salida; producción: rendimientos de aceite y de jugo concentrado, alertas
+abiertas); flowsheet de la planta con un semáforo por equipo (clic → la página del equipo, o Alertas desde la 🔔),
+alertas abiertas, pendientes (rondas y producción solo con la temporada en marcha; siempre sobre hoy) y la tendencia
+semanal por eBOE hasta la fecha "hasta". Solo muestra: la lógica está en core/inicio.py.
 """
 
 from datetime import date, datetime
@@ -16,8 +17,9 @@ from cartel import cartel_modo_prueba
 from core.cartas_periodo import parametros_control
 from core.db import crear_sesion
 from core.formato import numero
-from core.inicio import (cargar_flowsheet, datos_flowsheet, fecha_referencia, logo_planta, objetivo_eficiencia,
-                         pendientes, resumen_alertas, tarjetas_periodo, tendencia_semanal, turnos_del_periodo)
+from core.inicio import (cargar_flowsheet, datos_flowsheet, logo_planta, objetivo_eficiencia, pendientes,
+                         periodo_por_defecto, resumen_alertas, tarjetas_periodo, temporadas_con_datos,
+                         tendencia_semanal, turnos_del_periodo)
 from core.models import Planta
 from core.turnos import fecha_produccion
 from estilo import encabezado_cobrand, titulo_planta
@@ -43,10 +45,11 @@ planta_id = plantas()[st.sidebar.selectbox("Planta", etiquetas, key="inicio_plan
 with crear_sesion(motor()) as sesion:
     planta = sesion.get(Planta, planta_id)
     list(planta.turnos)
-    referencia = fecha_referencia(sesion, planta, date.today())
+    por_defecto = periodo_por_defecto(sesion, planta, date.today())
+    temporadas = temporadas_con_datos(sesion, planta)
     sesion.expunge(planta)
 encabezado = st.container()          # se completa cuando se sabe el período y el turno
-if referencia is None:
+if por_defecto is None:
     encabezado.html(encabezado_cobrand(logo_planta(planta.nombre), planta.nombre, TITULO, ""))
     st.info("Esta planta todavía no tiene análisis ni muestras de centrífugas.")
     st.stop()
@@ -54,18 +57,34 @@ if referencia is None:
 # ---------------------------------------------------------------- período y turno
 
 TODOS = "Todos"
-uno, dos, _ = st.columns([1.7, 2, 2.3], vertical_alignment="bottom")
-fechas = uno.date_input("Período (desde – hasta)", value=(referencia, referencia), format="DD/MM/YYYY",
-                        key=f"inicio_fechas_{planta_id}",
-                        help="Días de producción. Por defecto, hoy o el último día con análisis o muestras de "
-                             "centrífugas.")
+CLAVE_FECHAS = f"inicio_fechas_{planta_id}"
+if CLAVE_FECHAS not in st.session_state:
+    st.session_state[CLAVE_FECHAS] = por_defecto
+
+
+def _poner_periodo(desde_, hasta_) -> None:
+    st.session_state[CLAVE_FECHAS] = (desde_, hasta_)
+
+
+uno, dos, tres = st.columns([1.5, 2.3, 1.7], vertical_alignment="bottom")
+fechas = uno.date_input("Período (desde – hasta)", key=CLAVE_FECHAS, format="DD/MM/YYYY",
+                        help="Días de producción. Por defecto, la última semana con datos: los 7 días que terminan en "
+                             "el último día con análisis Scott o muestras de centrífugas.")
+with dos.container(horizontal=True, gap="small"):
+    st.button("Última semana", on_click=_poner_periodo, args=por_defecto, key=f"inicio_semana_{planta_id}",
+              help=f"Del {por_defecto[0]:%d/%m/%Y} al {por_defecto[1]:%d/%m/%Y}")
+    for temporada, (primero, ultimo) in temporadas.items():
+        st.button(str(temporada), on_click=_poner_periodo, args=(primero, ultimo),
+                  key=f"inicio_temporada_{planta_id}_{temporada}",
+                  help=f"Temporada {temporada}: del {primero:%d/%m/%Y} al {ultimo:%d/%m/%Y} (primer y último día con "
+                       "datos)")
 fechas = list(fechas) if isinstance(fechas, (list, tuple)) else [fechas]
-desde, hasta = (fechas[0], fechas[-1]) if fechas else (referencia, referencia)   # mientras se elige el rango: un día
+desde, hasta = (fechas[0], fechas[-1]) if fechas else por_defecto     # mientras se elige el rango: un día
 nombres = [t.nombre for t in sorted(planta.turnos, key=lambda t: (t.hora_inicio < planta.hora_inicio_dia,
                                                                   t.hora_inicio))]
-turno = dos.segmented_control("Turno", [TODOS] + nombres, default=TODOS, key=f"inicio_turno_{planta_id}",
-                              help="Con un período y un turno se toman todos los turnos de ese tipo (por ejemplo, "
-                                   "todos los N de la semana).") or TODOS
+turno = tres.segmented_control("Turno", [TODOS] + nombres, default=TODOS, key=f"inicio_turno_{planta_id}",
+                               help="Con un período y un turno se toman todos los turnos de ese tipo (por ejemplo, "
+                                    "todos los N de la semana).") or TODOS
 elegido = None if turno == TODOS else turno
 with crear_sesion(motor()) as sesion:
     turnos = turnos_del_periodo(sesion, planta, desde, hasta, elegido)
@@ -79,29 +98,61 @@ encabezado.html(encabezado_cobrand(
 # ---------------------------------------------------------------- tarjetas de la planta en el período
 
 
-def _n_turnos(turnos_: int, muestras: int | None = None, que: str = "pares") -> str:
-    texto = f"N = {muestras} {que} en {turnos_} turno{'' if turnos_ == 1 else 's'}" if muestras is not None else \
-        f"N = {turnos_} turno{'' if turnos_ == 1 else 's'}"
-    return texto + (" · ⚠️ N < 3: poco confiable" if (muestras if muestras is not None else turnos_) < 3 else "")
+def _n(cantidad: int, que: str) -> str:
+    """"N = 15 turnos", con el aviso si N < 3."""
+    return f"N = {numero(cantidad, 0)} {que}" + (" · ⚠️ N < 3: poco confiable" if cantidad < 3 else "")
 
 
-eficiencia, salida, agua = tarjetas["eficiencia"], tarjetas["aceite_salida"], tarjetas["agua"]
+def _ponderada(media: dict) -> str:
+    """Cómo se calculó una media de Análisis › Período, con su N."""
+    if media["ponderada"]:
+        como = (f"media de cada turno ponderada por sus toneladas aprobadas ({numero(media['n_ponderados'], 0)} de "
+                f"{numero(media['n'], 0)} muestras en turnos con producción)")
+    else:
+        como = "promedio simple: el período no tiene toneladas aprobadas"
+    return f"{como}. {_n(media['n'], 'muestra' if media['n'] == 1 else 'muestras')}."
+
+
+def _valor(valor, unidad: str, decimales: int) -> str:
+    return "—" if valor is None else f"{numero(valor, decimales)} {unidad}"
+
+
+borradores = tarjetas["borradores"]
+aviso_borradores = (f" ⚠️ {borradores} turno{'s' if borradores != 1 else ''} del período en borrador: no "
+                    f"entra{'n' if borradores != 1 else ''} hasta aprobarlo{'s' if borradores != 1 else ''}."
+                    if borradores else "")
+st.markdown("##### Proceso")
 columnas = st.columns(4)
-columnas[0].metric("Eficiencia eBOE", "—" if eficiencia["valor"] is None else f"{numero(eficiencia['valor'], 1)} %",
-                   border=True, help=f"Eficiencia de la planta: los eBOE juntos, {eficiencia['nota']}. "
-                                     f"{_n_turnos(eficiencia['turnos'], eficiencia['n'])}.")
-columnas[1].metric("Aceite en salida", "—" if salida["valor"] is None else f"{numero(salida['valor'], 2)} kg/MT",
-                   border=True, help=f"Aceite en fruta de salida de los eBOE juntos, {salida['nota']}. "
-                                     f"{_n_turnos(salida['turnos'], salida['n'], 'muestras')}.")
-columnas[2].metric("Agua por eBOE", "—" if agua["valor"] is None else f"{numero(agua['valor'], 1)} m³/h",
-                   border=True, help="Mediana por turno del agua por eBOE calculada desde las centrífugas. "
-                                     f"{_n_turnos(agua['turnos'])}.")
-columnas[3].metric("Alertas abiertas", numero(tarjetas["alertas"], 0), border=True,
+fruta = tarjetas["fruta"]
+columnas[0].metric("Fruta procesada", _valor(fruta["valor"], "t", 0), border=True,
+                   help=f"Σ fruta procesada de los turnos aprobados del período (como Análisis › Proceso). "
+                        f"{_n(fruta['n'], 'turnos')}.{aviso_borradores}")
+for columna, clave, titulo, unidad, decimales, detalle in (
+        (columnas[1], "entrada", "Aceite en fruta de entrada", "kg/MT", 2,
+         "Aceite en fruta de entrada de los eBOE juntos"),
+        (columnas[2], "eficiencia", "Eficiencia eBOE", "%", 1,
+         "Eficiencia de los pares entrada/salida de los eBOE juntos"),
+        (columnas[3], "salida", "Aceite en salida", "kg/MT", 2, "Aceite en fruta de salida de los eBOE juntos")):
+    columna.metric(titulo, _valor(tarjetas[clave]["valor"], unidad, decimales), border=True,
+                   help=f"{detalle}, como Análisis › Período: {_ponderada(tarjetas[clave])}")
+
+st.markdown("##### Producción")
+columnas = st.columns(4)
+aceite, jugo = tarjetas["rendimiento_aceite"], tarjetas["rendimiento_concentrado"]
+columnas[0].metric("Rendimiento de aceite", _valor(aceite["valor"], "kg/MT", 2), border=True,
+                   help="Σ aceite envasado / Σ fruta procesada de los turnos aprobados con los dos datos (como "
+                        f"Análisis › Proceso). {_n(aceite['n'], 'turnos')}.{aviso_borradores}")
+columnas[1].metric("Rendimiento de jugo concentrado 65 °Bx", _valor(jugo["valor"], "kg/MT", 1), border=True,
+                   delta=jugo["nota"] or None, delta_color="off", delta_arrow="off",
+                   help="Σ jugo concentrado 65 °Bx / Σ fruta procesada de los días con concentrado (se envasa por "
+                        "tanda: por día o período, nunca por turno; como Análisis › Proceso). Solo turnos aprobados. "
+                        f"{_n(jugo['n'], 'días')}.{aviso_borradores}"
+                        + (f" {jugo['nota']}: el concentrado de esa temporada no tiene el °Bx verificado."
+                           if jugo["nota"] else ""))
+columnas[2].metric("Alertas abiertas", numero(tarjetas["alertas"], 0), border=True,
                    help="Alertas abiertas o en análisis de la planta (no dependen del período).")
-pocos = [nombre for nombre, n in (("eficiencia", eficiencia["n"]), ("aceite en salida", salida["n"]),
-                                  ("agua por eBOE", agua["turnos"])) if 0 < n < 3]
-if pocos:
-    st.caption(f"⚠️ N < 3 en {', '.join(pocos)}: valores poco confiables.")
+if borradores:
+    st.caption(aviso_borradores.strip() + " Se aprueban en la página Producción.")
 
 # ---------------------------------------------------------------- flowsheet
 
@@ -161,7 +212,11 @@ with izquierda.container(border=True, key="tarjeta_alertas"):
 with derecha.container(border=True, key="tarjeta_pendientes"):
     st.markdown("#### Pendientes")
     rondas = falta["rondas"]
-    if rondas is None:
+    if not falta["en_temporada"]:
+        ultima = falta["ultima_ronda"]
+        st.info("Fuera de temporada: sin carga de laboratorio " + (
+            f"desde el {fecha_produccion(planta, ultima):%d/%m/%Y}." if ultima else "todavía."))
+    elif rondas is None:
         st.caption("Rondas de Scott: se controlan en el día de hoy (turno en curso).")
     elif rondas["faltan"]:
         st.warning(f"Turno {rondas['turno']}: faltan las rondas de las "
@@ -170,7 +225,9 @@ with derecha.container(border=True, key="tarjeta_pendientes"):
     else:
         st.caption(f"Turno {rondas['turno']}: rondas al día ({rondas['hechas']} de {rondas['esperadas']}).")
     st.page_link("pages/7_Carga_Scott.py", label="Cargar una ronda de Scott", icon="🧪")
-    if falta["sin_produccion"]:
+    if not falta["en_temporada"]:
+        pass                                          # fuera de temporada no se busca producción faltante
+    elif falta["sin_produccion"]:
         st.warning("Turnos sin producción cargada: " + ", ".join(f"{d:%d/%m} {t}" for d, t in falta["sin_produccion"]))
     else:
         st.caption("Producción: no hay turnos de la última semana sin cargar.")
