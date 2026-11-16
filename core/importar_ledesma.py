@@ -13,12 +13,20 @@ Reglas:
   la fecha del calendario se detectan por contexto (resolver_fechas).
 - Un PROCESO inválido (fecha pegada, número > 1000) se corrige con el de la fila
   anterior si el Día y la Fecha coinciden; si no, se rechaza (resolver_procesos).
-- Se puede correr muchas veces: lo que ya existe (por su clave) se actualiza.
+- Se puede correr muchas veces: lo que ya existe (por su clave) se actualiza. Con solo_nuevos, lo que ya existe
+  no se toca: se compara y cada diferencia va a Reporte.diferencias (para mostrarla, no para aplicarla).
 - data/reporte_importacion.csv lista cada fila rechazada, corregida o con aviso.
+- Formatos de planilla (FORMATOS): "2025" (eficiencia eBOE Naranja 25 2.xlsm) y "2026" (Control eBOE Naranja 26):
+  la columna nueva "Tipo de Proceso" se ignora; BOE ya no trae N° de Ticket ni Licuadora (quedan vacíos) y la
+  tabla por turno del Resumen ocupa A:W. Lo que se guarda es lo mismo en los dos.
 
-Uso (desde la carpeta del proyecto):  python -m core.importar_ledesma
+Uso (desde la carpeta del proyecto):
+    python -m core.importar_ledesma                                   # planilla 2025, crea y actualiza
+    python -m core.importar_ledesma --archivo "data/historico/Control eBOE Naranja 26 RML 05.xlsm" --formato 2026
+        --solo-nuevos [--simular]                                     # solo lo que falta; --simular no guarda
 """
 
+import argparse
 import csv
 import re
 from collections import defaultdict
@@ -36,7 +44,7 @@ from core.duplicados import separar_repetidas
 from core.models import (AnalisisScott, Cambio, Cliente, LecturaOperacion, Planta, Proceso, RegistroProduccion,
                          texto_origen)
 from core.parametros import validar_parametros
-from core.turnos import fecha_produccion
+from core.turnos import fecha_produccion, turno_de
 
 CARPETA_DATOS = Path(__file__).resolve().parent.parent / "data"
 RUTA_EXCEL = CARPETA_DATOS / "historico" / "eficiencia eBOE Naranja 25 2.xlsm"
@@ -70,6 +78,17 @@ DATOS_CRUDOS_BOE = ["proceso", "fruta", "analista", "operador", "ph", "brix", "e
                     "peso_fruta_kg", "n_frutos", "fruta_g", "fruta_ml", "normalidad", "ticket", "licuadora"]
 # Mediciones de operación: sin ninguna de ellas no se crea la lectura (el operador solo no alcanza).
 MEDICIONES_OPERACION = ["programa", "flip_gate", "tph", "caudal"]
+# Formato de cada planilla: columnas de BOE y de Resumen, ancho de la tabla por turno del Resumen y datos que la
+# planilla no trae (quedan vacíos y no se comparan con lo ya cargado).
+SIN_TICKET = ("N° de Ticket", "Licuadora")
+FORMATOS = {
+    "2025": {"boe": COLUMNAS_BOE, "resumen": COLUMNAS_RESUMEN, "columnas_tabla_turno": COLUMNAS_TABLA_TURNO,
+             "no_trae": ()},
+    "2026": {"boe": {c: n for c, n in COLUMNAS_BOE.items() if c not in SIN_TICKET}, "resumen": COLUMNAS_RESUMEN,
+             "columnas_tabla_turno": COLUMNAS_TABLA_TURNO + 1,         # "Tipo de proceso" corre la tabla a A:W
+             "no_trae": ("ticket", "licuadora")},
+}
+NO_COMPARAR = ("origen", "cargado_por")    # de dónde y quién: no son datos
 
 
 class ErrorFila(Exception):
@@ -77,12 +96,17 @@ class ErrorFila(Exception):
 
 
 class Reporte:
-    """Filas rechazadas, corregidas o con aviso: (hoja, fila, tipo, motivo)."""
+    """Filas rechazadas, corregidas o con aviso: (hoja, fila, tipo, motivo). Además:
+    nuevos: [(tabla, fecha de producción, turno)] de cada registro creado;
+    diferencias: [{tabla, origen, campo, antes, despues}] de lo ya cargado que la planilla trae distinto (solo con
+    solo_nuevos: no se aplican)."""
 
     TIPOS = ("rechazada", "corregida", "aviso", "corregido en la app")
 
     def __init__(self):
         self.filas = []
+        self.nuevos = []
+        self.diferencias = []
 
     def agregar(self, hoja: str, fila: int, tipo: str, motivo: str) -> None:
         self.filas.append((hoja, fila, tipo, motivo))
@@ -283,12 +307,16 @@ def _texto(valor) -> str | None:
 # ---------------------------------------------------------------- importación
 
 def importar_ledesma(sesion: Session, ruta: Path = RUTA_EXCEL, cliente: str = "LEDESMA",
-                     planta: str = "LEDESMA") -> tuple[dict, Reporte]:
+                     planta: str = "LEDESMA", formato: str = "2025", solo_nuevos: bool = False,
+                     guardar: bool = True) -> tuple[dict, Reporte]:
     """Carga las hojas BOE y Resumen en la base. Devuelve (resumen por tabla, reporte).
 
-    resumen: {tabla: {"creados": n, "actualizados": n}}. Todo se guarda junto al final:
-    si algo falla, no queda nada a medio cargar.
+    resumen: {tabla: {"creados", "actualizados", "sin_cambios", "con_diferencias"}}. Todo se guarda junto al final:
+    si algo falla, no queda nada a medio cargar. formato: clave de FORMATOS. solo_nuevos=True: lo que ya existe no
+    se toca (sin_cambios o con_diferencias, detalle en reporte.diferencias). guardar=False arma todo y deshace.
     """
+    if formato not in FORMATOS:
+        raise ValueError(f'Formato "{formato}" no válido. Usá uno de: {", ".join(FORMATOS)}.')
     ruta = Path(ruta)
     la_planta = sesion.scalars(select(Planta).join(Cliente).where(
         Cliente.nombre == cliente, Planta.nombre == planta)).one_or_none()
@@ -302,14 +330,30 @@ def importar_ledesma(sesion: Session, ruta: Path = RUTA_EXCEL, cliente: str = "L
 
     libro = load_workbook(ruta, data_only=True, read_only=True)
     reporte = Reporte()
-    resumen = {tabla: {"creados": 0, "actualizados": 0}
+    resumen = {tabla: {"creados": 0, "actualizados": 0, "sin_cambios": 0, "con_diferencias": 0}
                for tabla in ("Proceso", "AnalisisScott", "LecturaOperacion", "RegistroProduccion")}
-    cargador = _Cargador(sesion, la_planta, resumen)
+    columnas = FORMATOS[formato]
+    cargador = _Cargador(sesion, la_planta, resumen, reporte, solo_nuevos, columnas["no_trae"])
 
-    _importar_boe(libro["BOE"], ruta.name, la_planta, blanco, cargador, reporte)
-    _importar_resumen(libro["Resumen"], ruta.name, la_planta, turnos, cargador, reporte)
-    sesion.commit()
+    _importar_boe(libro["BOE"], ruta.name, la_planta, blanco, cargador, reporte, columnas["boe"])
+    _importar_resumen(libro["Resumen"], ruta.name, la_planta, turnos, cargador, reporte, columnas["resumen"],
+                      columnas["columnas_tabla_turno"])
+    if guardar:
+        sesion.commit()
+    else:
+        sesion.rollback()
     return resumen, reporte
+
+
+def dia_y_turno(planta: Planta, momento: datetime) -> tuple[date, str | None]:
+    """(fecha de producción, turno) de una muestra, para contar lo nuevo; turno None si la planta no tiene turnos."""
+    return fecha_produccion(planta, momento), turno_de(planta, momento).nombre if planta.turnos else None
+
+
+def diferencias(existente, campos: dict, no_comparar=()) -> list[tuple[str, object, object]]:
+    """[(campo, valor en la base, valor de la planilla)] de los campos que cambiarían (sin origen ni cargado_por)."""
+    return [(campo, getattr(existente, campo), valor) for campo, valor in campos.items()
+            if campo not in NO_COMPARAR and campo not in no_comparar and getattr(existente, campo) != valor]
 
 
 TABLA_CAMBIO = {"AnalisisScott": "analisis_scott", "LecturaOperacion": "lectura_operacion"}   # tabla en Cambio
@@ -318,8 +362,11 @@ TABLA_CAMBIO = {"AnalisisScott": "analisis_scott", "LecturaOperacion": "lectura_
 class _Cargador:
     """Crea o actualiza registros por su clave, con los existentes ya leídos de la base."""
 
-    def __init__(self, sesion: Session, planta: Planta, resumen: dict):
+    def __init__(self, sesion: Session, planta: Planta, resumen: dict, reporte: Reporte | None = None,
+                 solo_nuevos: bool = False, no_trae=()):
         self.sesion, self.planta, self.resumen = sesion, planta, resumen
+        self.reporte, self.solo_nuevos, self.no_trae = reporte or Reporte(), solo_nuevos, no_trae
+        self.nombres_turno = {t.id: t.nombre for t in planta.turnos}
         self.procesos = {(p.temporada, p.numero): p for p in planta.procesos}
         puntos = [p.id for linea in planta.lineas for e in linea.equipos for p in e.puntos_muestreo]
         equipos = [e.id for linea in planta.lineas for e in linea.equipos]
@@ -346,13 +393,23 @@ class _Cargador:
 
     def guardar(self, tabla: str, existentes: dict, clave: tuple, modelo, campos: dict) -> None:
         """Crea o actualiza. Arma el registro nuevo primero, así los validadores del modelo
-        controlan los datos antes de tocar uno existente (si fallan, dan ValueError)."""
+        controlan los datos antes de tocar uno existente (si fallan, dan ValueError). Con solo_nuevos, uno
+        existente no se toca: sus diferencias van a reporte.diferencias."""
         nuevo = modelo(**campos)
         existente = existentes.get(clave)
         if existente is None:
             self.sesion.add(nuevo)
             existentes[clave] = nuevo
             self.resumen[tabla]["creados"] += 1
+            if "fecha_hora" in campos:
+                self.reporte.nuevos.append((tabla, *dia_y_turno(self.planta, campos["fecha_hora"])))
+            else:
+                self.reporte.nuevos.append((tabla, campos["fecha_produccion"], self.nombres_turno[campos["turno_id"]]))
+        elif self.solo_nuevos:
+            cambios = diferencias(existente, campos, self.no_trae)
+            self.resumen[tabla]["con_diferencias" if cambios else "sin_cambios"] += 1
+            self.reporte.diferencias += [{"tabla": tabla, "origen": campos.get("origen"), "campo": campo,
+                                          "antes": antes, "despues": despues} for campo, antes, despues in cambios]
         else:
             for campo, valor in campos.items():
                 setattr(existente, campo, valor)
@@ -373,9 +430,9 @@ def _puntos_por_eboe(planta: Planta) -> dict:
 
 
 def _importar_boe(hoja, archivo: str, planta: Planta, blanco: float, cargador: _Cargador,
-                  reporte: Reporte) -> None:
+                  reporte: Reporte, columnas: dict = COLUMNAS_BOE) -> None:
     filas = []
-    for numero, datos in leer_tabla(hoja, COLUMNAS_BOE):
+    for numero, datos in leer_tabla(hoja, columnas):
         faltan = [c for c in ("fecha", "hora", "dia", "analista", "normalidad") if datos.get(c) is None]
         if faltan:
             reporte.agregar("BOE", numero, "rechazada", f"Fila sin {', '.join(faltan)}: no se carga.")
@@ -525,9 +582,10 @@ def _guardar_o_reportar(cargador, tabla, existentes, clave, modelo, campos, que,
 
 
 def _importar_resumen(hoja, archivo: str, planta: Planta, turnos: dict, cargador: _Cargador,
-                      reporte: Reporte) -> None:
+                      reporte: Reporte, columnas: dict = COLUMNAS_RESUMEN,
+                      columnas_tabla: int = COLUMNAS_TABLA_TURNO) -> None:
     filas = []
-    for numero, datos in leer_tabla(hoja, COLUMNAS_RESUMEN, max_col=COLUMNAS_TABLA_TURNO):
+    for numero, datos in leer_tabla(hoja, columnas, max_col=columnas_tabla):
         if all(datos.get(c) is None for c in PRODUCCION):
             continue   # turno sin datos de producción cargados: no hay nada que importar
         fecha = _fecha(datos.get("fecha"))
@@ -582,24 +640,39 @@ def _importar_resumen(hoja, archivo: str, planta: Planta, turnos: dict, cargador
 
 # ---------------------------------------------------------------- resumen en pantalla
 
-def texto_resumen(resumen: dict, reporte: Reporte, ruta_reporte: Path = RUTA_REPORTE) -> str:
-    lineas = ["Importación del histórico de LEDESMA"]
+def texto_resumen(resumen: dict, reporte: Reporte, ruta_reporte: Path = RUTA_REPORTE,
+                  simulado: bool = False) -> str:
+    lineas = [f"Importación del histórico de LEDESMA{' (SIMULACIÓN: no se guardó nada)' if simulado else ''}"]
     for tabla, cuentas in resumen.items():
-        lineas.append(f"  {tabla + ':':<20}{cuentas['creados']:>6} creados, {cuentas['actualizados']:>6} actualizados")
+        lineas.append(f"  {tabla + ':':<20}{cuentas['creados']:>6} creados, {cuentas['actualizados']:>6} actualizados"
+                      + (f", {cuentas['sin_cambios']:>6} ya cargados sin cambios, {cuentas['con_diferencias']} con "
+                         "diferencias (no se aplican)" if cuentas["sin_cambios"] or cuentas["con_diferencias"] else ""))
     lineas.append("  Reporte: " + " · ".join(f"{reporte.cantidad(t)} {t}s" for t in Reporte.TIPOS)
                   + f" (detalle en {ruta_reporte})")
     return "\n".join(lineas)
 
 
 if __name__ == "__main__":
+    argumentos = argparse.ArgumentParser(description="Importa el histórico de LEDESMA (hojas BOE y Resumen).")
+    argumentos.add_argument("--archivo", default=RUTA_EXCEL, help="planilla a importar")
+    argumentos.add_argument("--formato", default="2025", choices=list(FORMATOS), help="formato de la planilla")
+    argumentos.add_argument("--solo-nuevos", action="store_true", help="no toca lo ya cargado (muestra diferencias)")
+    argumentos.add_argument("--simular", action="store_true", help="arma el reporte sin guardar nada")
+    opciones = argumentos.parse_args()
     motor = crear_motor()
     crear_tablas(motor)
     with crear_sesion(motor) as sesion:
-        resumen, reporte = importar_ledesma(sesion)
-        from core.repetidas import marcar_entradas_repetidas
-        ledesma = sesion.scalars(select(Planta).where(Planta.nombre == "LEDESMA")).one()
-        repetidas = marcar_entradas_repetidas(sesion, ledesma.id)
+        resumen, reporte = importar_ledesma(sesion, opciones.archivo, formato=opciones.formato,
+                                            solo_nuevos=opciones.solo_nuevos, guardar=not opciones.simular)
+        if not opciones.simular:
+            from core.repetidas import marcar_entradas_repetidas
+            ledesma = sesion.scalars(select(Planta).where(Planta.nombre == "LEDESMA")).one()
+            repetidas = marcar_entradas_repetidas(sesion, ledesma.id)
     reporte.guardar()
-    print(texto_resumen(resumen, reporte))
-    print("\nEntradas repetidas en varios eBOE (posible copia), por temporada:")
-    print(repetidas.to_string(index=False))
+    print(texto_resumen(resumen, reporte, simulado=opciones.simular))
+    for diferencia in reporte.diferencias:
+        print(f"  DIFERENCIA (no aplicada) {diferencia['origen']}: {diferencia['campo']} {diferencia['antes']!r} → "
+              f"{diferencia['despues']!r}")
+    if not opciones.simular:
+        print("\nEntradas repetidas en varios eBOE (posible copia), por temporada:")
+        print(repetidas.to_string(index=False))

@@ -331,3 +331,74 @@ def test_descarga_extrema_se_marca_pero_no_invalida(sesion, tmp_path):
     assert REVISAR_EXTREMO not in (descarga[13].revisar or "")
     assert descarga[11].gramos == 2.0 and descarga[11].ml == 150.0                     # no se borra nada
     assert motivo_invalido(descarga[11].revisar) is None                               # ni se excluye
+
+
+# ---------------------------------------------------------------- formato 2026 y solo lo nuevo
+
+ENCABEZADO_2026 = {"A": "PROCESO", "B": "Día", "C": "Especie", "D": "Tipo de Proceso", "E": "Fecha", "F": "Hora",
+                   "G": "Químico", "H": "Operador", "I": "Turno", "J": "Fase", "K": "1° Centrifuga",
+                   "L": "1° Caudal [l/h]", "M": "1° Muestra [g]", "N": "1° Volumen [ml]", "O": "1° Aceite [%]",
+                   "P": "1° Tiempo de descarga [s]", "Q": "1° Sólidos Centrífugables [%]",
+                   "R": "1° Contrapresión Fase Liviana [Bar]", "S": "1° Contrapresión Fase Pesada [Bar]",
+                   "T": "1° Eficiencia", "U": "1° Aceite [kg/h]", "V": "Observaciones", "W": "2° Centrifuga",
+                   "X": "2° Caudal [l/h]", "Y": "2° Muestra [g]", "Z": "2° Volumen [ml]", "AA": "2° Aceite [%]",
+                   "AB": "2° Tiempo de descarga [s]", "AC": "2° Contrapresión Fase Liviana [Bar]",
+                   "AD": "2° Contrapresión Fase Pesada [Bar]", "AE": "2° Eficiencia", "AF": "2° Aceite [kg/h]",
+                   "AG": "3° Tiempo de descarga [min]", "AH": "3° Contrapresión Fase Liviana [Bar]", "AI": "0,1 N",
+                   "AJ": "0,01 N"}
+
+
+def a_2026(fila: dict) -> dict:
+    """Fila del formato 2025 → 2026: "Tipo de Proceso" en D, de D a H corren uno a la derecha, las normalidades (I
+    y J) pasan a AI y AJ y de K en adelante corren uno a la izquierda."""
+    from openpyxl.utils import column_index_from_string, get_column_letter
+    nueva = {"D": "BOE"}
+    for letra, valor in fila.items():
+        indice = column_index_from_string(letra)
+        if letra in ("I", "J"):
+            nueva["AI" if letra == "I" else "AJ"] = valor
+        elif indice <= 3:
+            nueva[letra] = valor
+        else:
+            nueva[get_column_letter(indice + 1 if indice <= 8 else indice - 1)] = valor
+    return nueva
+
+
+def escribir_2026(ruta, filas):
+    libro = Workbook()
+    hoja = libro.active
+    hoja.title = "Datos"
+    hoja["B1"] = "CONTROL DE CENTRÍFUGA PRIMARIA"
+    for letra, texto in ENCABEZADO_2026.items():
+        hoja[f"{letra}2"] = texto
+    for numero, fila in enumerate(filas, start=3):
+        for letra, valor in a_2026(fila).items():
+            hoja[f"{letra}{numero}"] = valor
+    libro.save(ruta)
+    return ruta
+
+
+def test_formato_2026_lee_lo_mismo_y_solo_nuevos(sesion, tmp_path):
+    primero, _ = importar_centrifugas(sesion, escribir(tmp_path / "cen.xlsx", planilla_completa()))
+    antes = {(m.equipo_id, m.fecha_hora, m.fase): (m.gramos, m.ml, m.normalidad, m.revisar)
+             for m in sesion.scalars(select(MuestraCentrifuga))}
+    ruta = escribir_2026(tmp_path / "cen26.xlsx", planilla_completa())
+    with pytest.raises(ValueError, match="¿Cambió la planilla?"):
+        importar_centrifugas(sesion, ruta, guardar=False)               # con el mapeo 2025 no se puede leer
+
+    igual, reporte = importar_centrifugas(sesion, ruta, formato="2026", solo_nuevos=True, guardar=False)
+    assert (igual["creados"], igual["sin_cambios"], igual["con_diferencias"]) == (0, primero["creados"], 0)
+    assert reporte.diferencias == [] and reporte.nuevos == []
+
+    filas = planilla_completa()
+    filas[0]["N"] = 3.6                                                 # g de la emulsión del primer bloque
+    filas += bloque(time(13, 10), fecha=datetime(2025, 6, 27), dia=3)  # un muestreo nuevo
+    resumen, reporte = importar_centrifugas(sesion, escribir_2026(tmp_path / "cen26.xlsx", filas), formato="2026",
+                                            solo_nuevos=True)
+    assert (resumen["creados"], resumen["con_diferencias"]) == (4, 1)
+    assert reporte.nuevos == [("MuestraCentrifuga", date(2025, 6, 27), None)] * 4   # la planta de prueba no tiene turnos
+    assert [(d["campo"], d["antes"], d["despues"]) for d in reporte.diferencias] == [("gramos", 3.5, 3.6)]
+    despues = {(m.equipo_id, m.fecha_hora, m.fase): (m.gramos, m.ml, m.normalidad, m.revisar)
+               for m in sesion.scalars(select(MuestraCentrifuga))}
+    assert {k: v for k, v in despues.items() if k in antes} == antes            # lo ya cargado no se toca
+    assert len(despues) == len(antes) + 4

@@ -74,7 +74,7 @@ LimitesControl (variable, punto, período base, LC, LCS, LCI)  ·  Alerta
 - Tipos de equipo: eBOE 6107E, mBOE 6108, bBOE 6107B, JEX 620/720, centrífuga primaria, desludger, pulidora, finisher.
 - **Guardar siempre los datos crudos** (mL, blanco, normalidad, gramos, factor) y calcular el resultado. Nunca guardar solo el resultado.
 - Cada registro guarda quién lo cargó y cuándo.
-- **Datos importados:** AnalisisScott es único por punto de muestreo + fecha_hora; LecturaOperacion por equipo + fecha_hora; RegistroProduccion por planta + fecha de producción + turno + proceso (un turno puede tener dos procesos; las toneladas del turno se suman con `core.produccion.toneladas_turno()`). El campo `origen` guarda archivo › hoja › fila (`texto_origen()`); queda vacío en la carga manual. Si el Excel trae filas con la misma clave y datos distintos, no se carga ninguna y van al reporte (`core.duplicados.separar_repetidas()`).
+- **Datos importados:** AnalisisScott es único por punto de muestreo + fecha_hora; LecturaOperacion por equipo + fecha_hora; RegistroProduccion por planta + fecha de producción + turno + proceso (un turno puede tener dos procesos; las toneladas del turno se suman con `core.produccion.toneladas_turno()`). El campo `origen` guarda archivo › hoja › fila (`texto_origen()`); queda vacío en la carga manual. Si el Excel trae filas con la misma clave y datos distintos, no se carga ninguna y van al reporte (`core.duplicados.separar_repetidas()`). Planillas nuevas (formato 2026, `FORMATOS` de los importadores; detalle en `docs/mapeo_ledesma.md` §11): se cargan con `--solo-nuevos`, que crea solo lo que falta y no toca lo ya cargado (las diferencias se muestran, no se aplican); primero con `--simular`.
 
 ## Fórmulas (fuente: técnica Scott y manual BOE de Brown)
 | KPI | Fórmula | Referencia limón Argentina |
@@ -132,6 +132,9 @@ python -m core.importar_maestros  # carga los datos maestros desde data/maestros
 python -m core.importar_ledesma   # carga el histórico de LEDESMA (hojas BOE y Resumen)
 python -m core.importar_plc       # carga los CSV del PLC de los eBOE (data/plc/ o la carpeta que se pase)
 python -m core.importar_centrifugas  # carga la planilla de centrífugas (--simular: solo arma el reporte)
+python -m core.importar_ledesma --archivo "data/historico/Control eBOE Naranja 26 RML 05.xlsm" --formato 2026 --solo-nuevos --simular
+                                 # planilla en formato 2026: solo lo que falta (sin --simular, lo carga); lo ya cargado no se toca
+python -m core.importar_centrifugas --archivo "data/historico/Control de CENTRIFUGAS Naranja 26.xlsx" --formato 2026 --solo-nuevos --simular
 streamlit run app/app.py        # abrir la app
 python -m core.copia_prueba      # copia data/app.db a data/app_prueba.db (modo prueba)
 $env:APP_DB = "datapp_prueba.db"; streamlit run app/app.py   # app en modo prueba (PowerShell); cartel en todas las páginas

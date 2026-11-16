@@ -20,13 +20,21 @@ Estructura (detalle en docs/mapeo_ledesma.md, sección 10):
   Si la Fecha avanza y el Día no, el que está mal es el Día: la Fecha se deja y se marca.
 - No se importan los resultados de la planilla (P, U, V): se recalculan. Solo se comparan con lo recalculado
   para marcar las filas con errores de planilla (campo revisar). Nada se descarta por estar marcado.
-- Se puede correr muchas veces: lo que ya existe (equipo + fecha_hora + fase) se actualiza.
+- Se puede correr muchas veces: lo que ya existe (equipo + fecha_hora + fase) se actualiza. Con solo_nuevos, lo que
+  ya existe no se toca: se compara y cada diferencia va a reporte.diferencias (no se aplica).
+- Formatos (FORMATOS): "2025" (CENTRIGUGAS Naranja 25 2.xlsx, columnas de arriba) y "2026" (Control de CENTRIFUGAS
+  Naranja 26.xlsx): la columna nueva "Tipo de Proceso" (D) corre todo un lugar; la Fecha queda en E, la primaria en
+  K a V, la secundaria en W a AF, la pulidora en AG y AH, y las normalidades en AI (0,1 N) y AJ (0,01 N). Lo que se
+  guarda es lo mismo en los dos.
 
 Uso (desde la carpeta del proyecto):
     python -m core.importar_centrifugas            # importa
     python -m core.importar_centrifugas --simular  # arma el reporte sin guardar nada
+    python -m core.importar_centrifugas --archivo "data/historico/Control de CENTRIFUGAS Naranja 26.xlsx"
+        --formato 2026 --solo-nuevos [--simular]   # solo lo que falta
 """
 
+import argparse
 import re
 import sys
 import unicodedata
@@ -42,8 +50,8 @@ from core.centrifugas import aceite_pct, balance_centrifuga
 from core.crear_base import crear_tablas
 from core.db import crear_motor, crear_sesion
 from core.duplicados import separar_repetidas
-from core.importar_ledesma import (ErrorFila, Reporte, _fecha, normalizar_hora, normalizar_texto,
-                                   resolver_fechas, resolver_procesos)
+from core.importar_ledesma import (ErrorFila, Reporte, _fecha, dia_y_turno, diferencias, normalizar_hora,
+                                   normalizar_texto, resolver_fechas, resolver_procesos)
 from core.models import MARCAS_CP, Cliente, MuestraCentrifuga, Planta, Proceso, texto_origen
 from core.parametros import validar_parametros
 from core.turnos import fecha_produccion
@@ -67,6 +75,19 @@ COLUMNAS = {
     "AB": ("sec_aceite", "Aceite"), "AC": ("sec_t_descarga", "descarga"), "AD": ("sec_cp_liviana", "Liviana"),
     "AE": ("sec_cp_pesada", "Pesada"), "AH": ("pul_t_descarga_min", "descarga"), "AI": ("pul_cp_liviana", "Liviana"),
 }
+# Formato 2026: "Tipo de Proceso" en D corre todo un lugar y las normalidades pasan al final (AI y AJ).
+COLUMNAS_2026 = {
+    "A": ("proceso", "PROCESO"), "B": ("dia", "Día"), "C": ("fruta", "Especie"), "E": ("fecha", "Fecha"),
+    "F": ("hora", "Hora"), "G": ("analista", "Químico"), "H": ("operador", "Operador"), "AI": ("n01", "N"),
+    "AJ": ("n001", "N"), "J": ("fase", "Fase"), "K": ("equipo", "Centrifuga"), "L": ("caudal", "Caudal"),
+    "M": ("g", "Muestra"), "N": ("ml", "Vol"), "O": ("aceite", "Aceite"), "P": ("t_descarga", "descarga"),
+    "Q": ("solidos", "Sólidos"), "R": ("cp_liviana", "Liviana"), "S": ("cp_pesada", "Pesada"),
+    "T": ("eficiencia", "Eficiencia"), "V": ("observacion", "Observaciones"),
+    "W": ("sec_equipo", "Centrifuga"), "Y": ("sec_g", "Muestra"), "Z": ("sec_ml", "Vol"),
+    "AA": ("sec_aceite", "Aceite"), "AB": ("sec_t_descarga", "descarga"), "AC": ("sec_cp_liviana", "Liviana"),
+    "AD": ("sec_cp_pesada", "Pesada"), "AG": ("pul_t_descarga_min", "descarga"), "AH": ("pul_cp_liviana", "Liviana"),
+}
+FORMATOS = {"2025": COLUMNAS, "2026": COLUMNAS_2026}
 ORDEN_BLOQUE = ("emulsion", "fase_liviana", "fase_pesada", "descarga")
 EQUIPOS_SECUNDARIA = {"130": "ESB 130"}          # abreviaturas de la columna X
 NO_INDICADA = {"0"}                               # el operario no eligió la secundaria
@@ -174,12 +195,13 @@ def _numero(valor) -> float | None:
 
 # ---------------------------------------------------------------- lectura y bloques
 
-def leer_hoja(hoja) -> list[tuple[int, dict]]:
-    """Filas con algún dato como (n.º de fila de Excel, {nombre interno: valor}). Controla el encabezado."""
+def leer_hoja(hoja, columnas: dict = COLUMNAS) -> list[tuple[int, dict]]:
+    """Filas con algún dato como (n.º de fila de Excel, {nombre interno: valor}). Controla el encabezado.
+    columnas: el mapeo de un formato (FORMATOS)."""
     filas = hoja.iter_rows(min_row=FILA_ENCABEZADO, values_only=True)
     encabezado = next(filas)
     indices = {}
-    for letra, (nombre, texto) in COLUMNAS.items():
+    for letra, (nombre, texto) in columnas.items():
         indice = _indice(letra)
         celda = " ".join(str(encabezado[indice]).split()) if indice < len(encabezado) else ""
         if texto.lower() not in celda.lower():
@@ -252,13 +274,17 @@ def _limpiar(valor):
 
 def importar_centrifugas(sesion: Session, ruta: Path = RUTA_EXCEL, cliente: str = "LEDESMA",
                          planta: str = "LEDESMA", guardar: bool = True,
-                         corregir_fechas: bool = True) -> tuple[dict, ReporteCentrifugas]:
+                         corregir_fechas: bool = True, formato: str = "2025",
+                         solo_nuevos: bool = False) -> tuple[dict, ReporteCentrifugas]:
     """Carga la hoja Datos en MuestraCentrifuga. Devuelve (resumen, reporte).
 
-    resumen: filas leídas, muestras creadas/actualizadas, muestras por equipo y año, motivos de revisión.
-    guardar=False arma todo y deshace (para simular). corregir_fechas=False solo marca las fechas fuera de
-    secuencia (sirve para comparar).
+    resumen: filas leídas, muestras creadas/actualizadas (o, con solo_nuevos, ya cargadas sin cambios y con
+    diferencias), muestras por equipo y año, motivos de revisión. guardar=False arma todo y deshace (para simular).
+    corregir_fechas=False solo marca las fechas fuera de secuencia (sirve para comparar). formato: clave de
+    FORMATOS. solo_nuevos=True: lo que ya existe no se toca (detalle de las diferencias en reporte.diferencias).
     """
+    if formato not in FORMATOS:
+        raise ValueError(f'Formato "{formato}" no válido. Usá uno de: {", ".join(FORMATOS)}.')
     ruta = Path(ruta)
     la_planta = sesion.scalars(select(Planta).join(Cliente).where(
         Cliente.nombre == cliente, Planta.nombre == planta)).one_or_none()
@@ -269,9 +295,9 @@ def importar_centrifugas(sesion: Session, ruta: Path = RUTA_EXCEL, cliente: str 
     equipos = {e.nombre: e for linea in la_planta.lineas for e in linea.equipos}
 
     reporte = ReporteCentrifugas()
-    filas = leer_hoja(load_workbook(ruta, data_only=True, read_only=True)[HOJA])
-    resumen = {"filas_leidas": len(filas), "creados": 0, "actualizados": 0, "procesos_creados": 0,
-               "por_equipo": Counter(), "revisar": Counter(), "cp_cero": 0}
+    filas = leer_hoja(load_workbook(ruta, data_only=True, read_only=True)[HOJA], FORMATOS[formato])
+    resumen = {"filas_leidas": len(filas), "creados": 0, "actualizados": 0, "sin_cambios": 0, "con_diferencias": 0,
+               "procesos_creados": 0, "por_equipo": Counter(), "revisar": Counter(), "cp_cero": 0}
 
     bloques = _con_fecha(armar_bloques(filas, reporte), la_planta, reporte, corregir_fechas)
     por_mes = secundarias_por_mes(bloques)
@@ -295,7 +321,7 @@ def importar_centrifugas(sesion: Session, ruta: Path = RUTA_EXCEL, cliente: str 
         for hoja, fila, motivo in avisos:
             reporte.agregar(hoja, fila, "aviso", motivo)
         para_guardar += [m for _, m in grupo]
-    _guardar(sesion, la_planta, _sin_choques(para_guardar, reporte), resumen, reporte)
+    _guardar(sesion, la_planta, _sin_choques(para_guardar, reporte), resumen, reporte, solo_nuevos)
     if guardar:
         sesion.commit()
     else:
@@ -637,8 +663,10 @@ def _datos(muestra: dict) -> tuple:
     return tuple(muestra.get(c) for c in DATOS_CRUDOS)
 
 
-def _guardar(sesion: Session, planta: Planta, muestras: list[dict], resumen: dict, reporte: Reporte) -> None:
-    """Crea o actualiza cada muestra por equipo + fecha_hora + fase."""
+def _guardar(sesion: Session, planta: Planta, muestras: list[dict], resumen: dict, reporte: Reporte,
+             solo_nuevos: bool = False) -> None:
+    """Crea o actualiza cada muestra por equipo + fecha_hora + fase. Con solo_nuevos, una que ya existe no se toca:
+    sus diferencias van a reporte.diferencias."""
     ids = [e.id for linea in planta.lineas for e in linea.equipos]
     existentes = {(m.equipo_id, m.fecha_hora, m.fase): m for m in sesion.scalars(
         select(MuestraCentrifuga).where(MuestraCentrifuga.equipo_id.in_(ids)))}
@@ -665,6 +693,12 @@ def _guardar(sesion: Session, planta: Planta, muestras: list[dict], resumen: dic
                                                                 f"{muestra['equipo']}: {error}")
             continue
         clave = (campos["equipo_id"], campos["fecha_hora"], campos["fase"])
+        if clave in existentes and solo_nuevos:
+            cambios = diferencias(existentes[clave], campos)
+            resumen["con_diferencias" if cambios else "sin_cambios"] += 1
+            reporte.diferencias += [{"tabla": "MuestraCentrifuga", "origen": campos["origen"], "campo": campo,
+                                     "antes": antes, "despues": despues} for campo, antes, despues in cambios]
+            continue                                    # lo ya cargado no se toca ni se vuelve a contar
         if clave in existentes:
             for campo, valor in campos.items():
                 setattr(existentes[clave], campo, valor)
@@ -673,6 +707,7 @@ def _guardar(sesion: Session, planta: Planta, muestras: list[dict], resumen: dic
             sesion.add(nuevo)
             existentes[clave] = nuevo
             resumen["creados"] += 1
+            reporte.nuevos.append(("MuestraCentrifuga", *dia_y_turno(planta, campos["fecha_hora"])))
         resumen["por_equipo"][(muestra["proceso"][0], muestra["equipo_obj"].nombre, muestra["fase"])] += 1
         resumen["cp_cero"] += campos["cp_liviana_marca"] is not None
         for motivo in motivos:
@@ -688,7 +723,9 @@ def texto_resumen(resumen: dict, reporte: ReporteCentrifugas, ruta_reporte: Path
     """Reporte para la pantalla: filas leídas, muestras importadas, saltadas, para revisar y por qué."""
     lineas = [f"Importación de centrífugas de LEDESMA{' (SIMULACIÓN: no se guardó nada)' if simulado else ''}",
               f"  Filas leídas:     {resumen['filas_leidas']:>6}",
-              f"  Muestras:         {resumen['creados']:>6} creadas, {resumen['actualizados']} actualizadas",
+              f"  Muestras:         {resumen['creados']:>6} creadas, {resumen['actualizados']} actualizadas"
+              + (f", {resumen['sin_cambios']} ya cargadas sin cambios, {resumen['con_diferencias']} con diferencias "
+                 "(no se aplican)" if resumen.get("sin_cambios") or resumen.get("con_diferencias") else ""),
               f"  Procesos creados: {resumen['procesos_creados']:>6}",
               f"  Saltadas:         {reporte.cantidad('rechazada'):>6} (bloques o filas que no se importan)",
               f"  Corregidas:       {reporte.cantidad('corregida'):>6} · avisos: {reporte.cantidad('aviso')}",
@@ -715,10 +752,19 @@ def texto_resumen(resumen: dict, reporte: ReporteCentrifugas, ruta_reporte: Path
 
 
 if __name__ == "__main__":
-    simular = "--simular" in sys.argv[1:]
+    argumentos = argparse.ArgumentParser(description="Importa la planilla de centrífugas de LEDESMA (hoja Datos).")
+    argumentos.add_argument("--archivo", default=RUTA_EXCEL, help="planilla a importar")
+    argumentos.add_argument("--formato", default="2025", choices=list(FORMATOS), help="formato de la planilla")
+    argumentos.add_argument("--solo-nuevos", action="store_true", help="no toca lo ya cargado (muestra diferencias)")
+    argumentos.add_argument("--simular", action="store_true", help="arma el reporte sin guardar nada")
+    opciones = argumentos.parse_args(sys.argv[1:])
     motor = crear_motor()
     crear_tablas(motor)
     with crear_sesion(motor) as sesion:
-        resumen, reporte = importar_centrifugas(sesion, guardar=not simular)
+        resumen, reporte = importar_centrifugas(sesion, opciones.archivo, guardar=not opciones.simular,
+                                                formato=opciones.formato, solo_nuevos=opciones.solo_nuevos)
     reporte.guardar(RUTA_REPORTE)
-    print(texto_resumen(resumen, reporte, simulado=simular))
+    print(texto_resumen(resumen, reporte, simulado=opciones.simular))
+    for diferencia in reporte.diferencias:
+        print(f"  DIFERENCIA (no aplicada) {diferencia['origen']}: {diferencia['campo']} {diferencia['antes']!r} → "
+              f"{diferencia['despues']!r}")

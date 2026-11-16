@@ -264,7 +264,7 @@ def test_importa_boe_y_resumen(sesion, tmp_path):
     # fruta: filas 4–11 y 13 (la 12 está vacía y la 14 no tiene datos de fruta);
     # emulsión: Entradas 4, 6, 8 y 10 (la 13 no tiene); lecturas: Entradas 4, 6, 8, 10 y 13.
     assert contar(sesion) == {"Proceso": 2, "AnalisisScott": 13, "LecturaOperacion": 5, "RegistroProduccion": 3}
-    assert resumen["AnalisisScott"] == {"creados": 13, "actualizados": 0}
+    assert resumen["AnalisisScott"] == {"creados": 13, "actualizados": 0, "sin_cambios": 0, "con_diferencias": 0}
 
     fila6 = sesion.scalars(select(AnalisisScott).where(AnalisisScott.origen == "m.xlsx › BOE › fila 6")).first()
     assert fila6.fecha_hora == datetime(2025, 6, 25, 1, 10)            # Fecha de producción + 1 día
@@ -356,3 +356,89 @@ def test_produccion_importada_aprobada_y_respeta_lo_cargado_en_la_app(sesion, tm
     sesion.refresh(de_la_app)
     assert (de_la_app.fruta_t, de_la_app.estado) == (999.0, "borrador")          # no se pisa
     assert reporte.cantidad("corregido en la app") == 1
+
+
+# ---------------------------------------------------------------- formato 2026 y solo lo nuevo
+
+def escribir_excel_2026(ruta, filas_boe=FILAS_BOE, filas_resumen=FILAS_RESUMEN):
+    """Formato 2026: "Tipo de Proceso" después de Especie (BOE) y de Día (Resumen), BOE sin N° de Ticket ni
+    Licuadora, y el Resumen con más columnas a la derecha (W) y otra tabla desde X que no se lee."""
+    libro = Workbook()
+    libro.remove(libro.active)
+    hoja = libro.create_sheet("BOE")
+    hoja.append(["SEGUIMIENTO DE EFICIENCIA eBOE"])
+    hoja.append(["DATOS"])
+    hoja.append(ENCABEZADO_BOE[:3] + ["Tipo de Proceso"] + ENCABEZADO_BOE[3:-2])
+    claves = CLAVES_BOE[:3] + ["tipo"] + CLAVES_BOE[3:-2]
+    for fila in filas_boe:
+        hoja.append([(fila | {"tipo": "BOE"}).get(clave) for clave in claves])
+    hoja = libro.create_sheet("Resumen")
+    hoja.append(["Naranja"])
+    hoja.append(["Resumen Turno"])
+    hoja.append(ENCABEZADO_RESUMEN[:2] + ["Tipo de proceso"] + ENCABEZADO_RESUMEN[2:21] + ["Hs\nProductivas", "Fecha"])
+    for fila in filas_resumen:
+        tabla = (fila[:2] + ["BOE"] + fila[2:21] + [None] * 22)[:23]
+        hoja.append(tabla + [datetime(2000, 1, 1)])                  # X: "Fecha" de otra tabla, fuera de A:W
+    libro.save(ruta)
+    return ruta
+
+
+def test_formato_2026_carga_lo_mismo(sesion, tmp_path):
+    ruta = escribir_excel_2026(tmp_path / "m26.xlsx")
+    with pytest.raises(ValueError, match="N° de Ticket"):
+        importar(sesion, ruta)                                        # con el mapeo 2025 no se puede leer
+
+    importar_ledesma(sesion, ruta, cliente="CLIENTE X", planta="Planta X", formato="2026")
+
+    assert contar(sesion) == {"Proceso": 2, "AnalisisScott": 13, "LecturaOperacion": 5, "RegistroProduccion": 3}
+    fila6 = sesion.scalars(select(AnalisisScott).where(AnalisisScott.origen == "m26.xlsx › BOE › fila 6")).first()
+    assert fila6.fecha_hora == datetime(2025, 6, 25, 1, 10)
+    registro = sesion.scalars(select(RegistroProduccion).where(RegistroProduccion.origen.like("% fila 5"))).one()
+    assert (registro.fecha_produccion, registro.fruta_t, registro.aceite_envasado_kg) == (date(2025, 6, 24), 226, 1160)
+    with pytest.raises(ValueError, match="Formato"):
+        importar_ledesma(sesion, ruta, cliente="CLIENTE X", planta="Planta X", formato="2030")
+
+
+def test_solo_nuevos_no_toca_lo_cargado_y_muestra_las_diferencias(sesion, tmp_path):
+    viejas = copy.deepcopy(FILAS_BOE)
+    viejas[0]["ticket"] = 123                                         # la planilla 2026 no trae ticket
+    importar(sesion, escribir_excel(tmp_path / "m.xlsx", filas_boe=viejas))
+    antes = contar(sesion)
+    nuevas = copy.deepcopy(FILAS_BOE)
+    nuevas[1]["fruta_ml"] = 1.3                                        # fila 5: cambia un dato ya cargado
+    nuevas += [boe(2, D26, time(6, 10), 2, "Entrada"), boe(2, D26, time(6, 10), 2, "Salida")]   # filas 15 y 16
+    resumen_nuevo = copy.deepcopy(FILAS_RESUMEN)
+    resumen_nuevo[1][9] = 1170                                         # aceite envasado 1160 → 1170
+    ruta = escribir_excel_2026(tmp_path / "m26.xlsx", nuevas, resumen_nuevo)
+
+    def solo_nuevos(guardar):
+        return importar_ledesma(sesion, ruta, cliente="CLIENTE X", planta="Planta X", formato="2026",
+                                solo_nuevos=True, guardar=guardar)
+
+    resumen, reporte = solo_nuevos(guardar=False)                     # simulación
+    assert contar(sesion) == antes
+    assert (resumen["AnalisisScott"]["creados"], resumen["AnalisisScott"]["sin_cambios"],
+            resumen["AnalisisScott"]["con_diferencias"]) == (3, 12, 1)
+    assert sorted(reporte.nuevos) == [("AnalisisScott", D26.date(), "M")] * 3 + [("LecturaOperacion", D26.date(), "M")]
+    assert [(d["tabla"], d["campo"], d["antes"], d["despues"]) for d in reporte.diferencias] == [
+        ("AnalisisScott", "vol_ml", 1.2, 1.3), ("RegistroProduccion", "aceite_envasado_kg", 1160.0, 1170.0)]
+
+    solo_nuevos(guardar=True)
+    assert contar(sesion) == antes | {"AnalisisScott": antes["AnalisisScott"] + 3,
+                                      "LecturaOperacion": antes["LecturaOperacion"] + 1}
+    fila5 = sesion.scalars(select(AnalisisScott).where(AnalisisScott.origen == "m.xlsx › BOE › fila 5")).one()
+    fila4 = sesion.scalars(select(AnalisisScott).where(AnalisisScott.origen == "m.xlsx › BOE › fila 4")).first()
+    assert (fila5.vol_ml, fila4.ticket) == (1.2, "123")              # lo ya cargado no se toca (ni su origen)
+    registro = sesion.scalars(select(RegistroProduccion).where(RegistroProduccion.origen.like("% fila 5"))).one()
+    assert registro.aceite_envasado_kg == 1160
+
+
+def test_diferencias_y_dia_y_turno(planta_5am):
+    from core.importar_ledesma import diferencias, dia_y_turno
+    existente = AnalisisScott(vol_ml=1.2, peso_muestra_g=10.0, origen="a", ticket="1")
+    campos = {"vol_ml": 1.3, "peso_muestra_g": 10.0, "origen": "b", "ticket": None}
+    assert diferencias(existente, campos) == [("vol_ml", 1.2, 1.3), ("ticket", "1", None)]
+    assert diferencias(existente, campos, no_comparar=("ticket",)) == [("vol_ml", 1.2, 1.3)]
+    assert dia_y_turno(planta_5am, datetime(2026, 10, 28, 3, 10)) == (date(2026, 10, 27), "N")
+    planta_5am.turnos = []
+    assert dia_y_turno(planta_5am, datetime(2026, 10, 28, 3, 10)) == (date(2026, 10, 27), None)

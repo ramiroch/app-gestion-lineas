@@ -132,11 +132,13 @@ Eficiencia promedio y rendimiento por eBOE, calculados desde la hoja BOE:
 | 2025 | 1 | 732 | 85,3 % | 7,01 | 8,21 | 12 % |
 | 2025 | 2 | 727 | 81,3 % | 6,70 | 8,25 | 35 % |
 | 2025 | 3 | 733 | 86,4 % | 7,02 | 8,13 | 8 % |
-| 2026 | 1 | 817 | 82,7 % | 6,96 | 8,43 | 26 % |
-| 2026 | 2 | 810 | 78,2 % | 6,53 | 8,35 | 51 % |
-| 2026 | 3 | 796 | 83,9 % | 7,06 | 8,42 | 19 % |
+| 2026 | 1 | 908 | 82,2 % | 6,98 | 8,50 | 29 % |
+| 2026 | 2 | 864 | 78,1 % | 6,55 | 8,39 | 52 % |
+| 2026 | 3 | 886 | 83,6 % | 7,09 | 8,49 | 21 % |
 
 Cuando el importador termine, la app tiene que dar estos mismos valores.
+
+2026 = temporada completa (hasta el 06/11, planilla "Control eBOE Naranja 26"; §11): coincide con las columnas calculadas de la planilla (AD, AE y AF; en los eBOE 2 y 3 la planilla tiene un par más). Con la temporada parcial (hasta el 26/10) eran 817 / 810 / 796 pares, 82,7 / 78,2 / 83,9 %, 6,96 / 6,53 / 7,06 kg/MT, 8,43 / 8,35 / 8,42 kg/MT y 26 / 51 / 19 %.
 
 ## 8. Preguntas abiertas
 
@@ -221,3 +223,22 @@ Los GEA van sin fruta (son del fabricante); los de la planilla, con fruta Naranj
 Primarias en paralelo: en 2025 las dos primarias se muestreaban a la misma hora (510 de 695 muestreos), a ~18.000 L/h cada una → "en paralelo (observado)", con prioridad. En 2026, una por ronda, alternando → regla por turno "inferida": las dos aparecen en el turno y la mediana del caudal de cada una es ≤ umbral_paralelo_lh (parámetro de la planta, 17.000 L/h en LEDESMA). La evaluación es por turno, no por día.
 
 **Validación:** el agua por eBOE calculada desde las centrífugas coincide con el caudal del laboratorio del BOE (2025: 11,80 vs 11,81; 2026: 6,21 vs 6,29). La capacidad de centrifugado fija el agua de los eBOE.
+
+## 11. Planillas de la temporada 2026 completa (formato 2026)
+
+Archivos: "Control eBOE Naranja 26 RML 05.xlsm" (hojas BOE y Resumen) y "Control de CENTRIFUGAS Naranja 26.xlsx" (hoja Datos). Se leen con el mapeo "2026" de los importadores (`FORMATOS`); lo que se guarda es lo mismo que con las planillas viejas.
+
+- **Columna nueva "Tipo de Proceso"** (BOE: D; Resumen: C; Datos: D), siempre "BOE": se ignora. Corre las demás un lugar.
+- **BOE:** se lee por nombre de encabezado. Ya no trae "N° de Ticket" ni "Licuadora": quedan vacíos en lo nuevo y no se comparan con lo ya cargado.
+- **Resumen:** la tabla por turno ocupa A:W (antes A:V). Las columnas nuevas (horas productivas y paradas, disponibilidad, OEE, etc.) no se importan.
+- **Centrífugas (por letra):** Fecha en E; primaria K a V; secundaria W a AF; pulidora AG (minutos entre descargas) y AH (CP liviana); normalidades en AI (0,1 N) y AJ (0,01 N).
+- **No se importan:** la hoja Ticket ni las hojas Dashboard, Proyección de indicadores, etc.
+
+**Carga del 16/11/2026** (solo lo nuevo, `--solo-nuevos`):
+- **Simulación previa:** en lo ya cargado hasta el 26/10, 0 cambios en BOE y Resumen (7244 análisis, 2421 lecturas y 249 registros de producción iguales). Centrífugas: 5901 muestras iguales y una diferencia no aplicada, en la fila 4 (01/07, "Observaciones" con un número, 0,465).
+- **Lo nuevo, del 27/10 al 06/11:**
+  - 711 análisis Scott, de 546 filas de BOE: 36 pares sin datos de fruta, sin cargar;
+  - 238 lecturas de operación;
+  - 28 registros de producción, uno de ellos el 25/10 N, que faltaba en la planilla vieja;
+  - 709 muestras de centrífugas, de 89 muestreos: ESE 230 (1), ESB 130 y OSD 60.
+- **Alertas:** los 27 turnos nuevos se evaluaron como "histórico" contra los límites congelados vigentes (fase I 2025) y se marcaron en TurnoEvaluado.
