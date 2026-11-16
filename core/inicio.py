@@ -2,6 +2,9 @@
 
 - cargar_flowsheet(): la configuración del flowsheet de la planta (data/plantas/<planta>/flowsheet.json: imagen y
   marcadores, con x e y en fracción de la imagen, origen arriba a la izquierda). None si la planta no tiene.
+  logo_planta(): el logo de la planta (data/plantas/<planta>/logo.png), o None (se muestra el nombre).
+- tarjetas_periodo(): las tarjetas de arriba del flowsheet (eficiencia y aceite en salida de la planta, agua por
+  eBOE y alertas abiertas), con las mismas funciones que los marcadores.
 - fecha_referencia(): hoy si hay análisis Scott o muestras de centrífugas; si no (fuera de temporada), el último día
   con alguno (el período por defecto es ese día). turnos_del_periodo(): los turnos del período con datos, todos o
   los de un tipo (por ejemplo, todos los N de la semana).
@@ -103,6 +106,12 @@ def cargar_flowsheet(nombre_planta: str, base: Path = CARPETA_PLANTAS) -> dict |
         if m["tipo"] == "secundaria" and not m.get("equipos"):
             raise ValueError(f"Marcador {i} (secundaria): falta la lista de equipos.")
     return config | {"ruta_imagen": str(imagen)}
+
+
+def logo_planta(nombre_planta: str, base: Path = CARPETA_PLANTAS) -> Path | None:
+    """El logo de la planta: data/plantas/<planta>/logo.png (no se sube a GitHub). None si no tiene."""
+    ruta = carpeta_planta(nombre_planta, base) / "logo.png"
+    return ruta if ruta.exists() else None
 
 
 # ---------------------------------------------------------------- período y turnos
@@ -591,6 +600,33 @@ def _hover_alertas(entradas: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------- alertas, pendientes y tendencia
+
+def tarjetas_periodo(sesion, planta: Planta, desde: date, hasta: date, turno: str | None = None) -> dict:
+    """Valores de la planta en el período para las tarjetas del Inicio, con las mismas funciones que los marcadores
+    del flowsheet (no hay cálculos nuevos):
+    - eficiencia (%) y aceite en fruta de salida (kg/MT) de los eBOE juntos: _ponderado(), es decir, la media de cada
+      turno ponderada por sus toneladas aprobadas (promedio simple si ningún turno tiene);
+    - agua por eBOE (m³/h): _agua(), la mediana por turno del agua calculada desde las centrífugas;
+    - alertas abiertas o en análisis de la planta: resumen_alertas() (no dependen del período).
+    Devuelve {"eficiencia" y "aceite_salida": {valor, turnos, n, nota}, "agua": {valor, turnos},
+    "alertas": cantidad}."""
+    ctx = datos_periodo(sesion, planta, desde, hasta, turno)
+    analisis, muestras = ctx["analisis"], ctx["muestras"]
+    toneladas = toneladas_por_turno(sesion, planta.id)
+    entradas, salidas = analisis[analisis["lugar"] == "Entrada"], analisis[analisis["lugar"] == "Salida"]
+    resultado = {}
+    for clave, datos, columna in (("eficiencia", entradas.assign(eficiencia=entradas["eficiencia_par"] * 100),
+                                   "eficiencia"), ("aceite_salida", salidas, "aceite_fruta")):
+        valor, n_turnos, n, nota = _ponderado(datos, columna, toneladas)
+        resultado[clave] = {"valor": valor, "turnos": n_turnos, "n": n, "nota": nota}
+    balance = balance_por_muestreo(por_muestreo(muestras)) if not muestras.empty else muestras
+    primarias = (primarias_por_turno(muestras, planta.umbral_paralelo_lh)
+                 if planta.umbral_paralelo_lh is not None and not muestras.empty else None)
+    agua, n_agua = _agua(analisis, muestras, balance, primarias)
+    resultado["agua"] = {"valor": agua, "turnos": n_agua}
+    resultado["alertas"] = resumen_alertas(sesion, planta.id)["n"]
+    return resultado
+
 
 def resumen_alertas(sesion, planta_id: int, cantidad: int = 5) -> dict:
     """{"n": alertas abiertas o en análisis, "recientes": las `cantidad` más recientes (listar_alertas)}."""

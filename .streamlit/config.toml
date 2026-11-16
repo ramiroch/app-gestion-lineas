@@ -1,0 +1,21 @@
+# Tema de la app (guía de marca Gulftech). Streamlit lo lee de la carpeta desde la que se corre
+# "streamlit run app/app.py" (la del proyecto). Los colores de los semáforos y de las cartas de control no salen de
+# acá: están fijos en app/graficos.py (reglas de CLAUDE.md).
+
+[theme]
+base = "light"
+primaryColor = "#FF8710"                # naranja Gulftech
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F2EA"    # beige
+textColor = "#333333"
+borderColor = "#E2DED0"
+metricValueFontSize = "2rem"
+font = "Barlow:https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&display=swap, sans-serif"
+headingFont = "Barlow:https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&display=swap, sans-serif"
+
+[theme.sidebar]
+backgroundColor = "#1F4034"             # verde Gulftech
+textColor = "#FFFFFF"
+secondaryBackgroundColor = "#2B5546"    # campos (selector de planta) sobre el verde
+borderColor = "#3C6A5A"
+primaryColor = "#FF8710"

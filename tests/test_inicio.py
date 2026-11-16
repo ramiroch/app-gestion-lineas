@@ -12,8 +12,9 @@ from core.carga_scott import guardar_ronda
 from core.gestion_alertas import listar_alertas
 from core.importar_centrifugas import REVISAR_EXTREMO
 from core.inicio import (AMARILLO, EN_MARCHA, NEUTRO, ROJO, SIN_DATOS, VERDE, _color_fp, cargar_flowsheet,
-                         carpeta_planta, color_de, datos_flowsheet, fecha_referencia, objetivo_eficiencia, pendientes,
-                         rondas_esperadas, tendencia_semanal, turnos_con_datos, turnos_del_periodo)
+                         carpeta_planta, color_de, datos_flowsheet, datos_periodo, fecha_referencia, objetivo_eficiencia,
+                         logo_planta, pendientes, rondas_esperadas, tarjetas_periodo, tendencia_semanal,
+                         turnos_con_datos, turnos_del_periodo)
 from core.models import (Alerta, Equipo, Linea, MuestraCentrifuga, Planta, RangoReferencia, RegistroProduccion,
                          Turno)
 from tests.test_carga_scott import _planta, ronda, sesion  # noqa: F401  (fixture)
@@ -354,3 +355,35 @@ def test_semaforo_del_caudal_de_fase_pesada(planta):
     assert _color_fp(planta, 9.5, 8.5)[0] == AMARILLO
     assert _color_fp(planta, 9.5, 7.0) == (ROJO, "diferencia 36 % (verde ≤ 10 %, amarillo ≤ 20 %)")
     assert _color_fp(planta, 9.5, None)[0] == NEUTRO and _color_fp(planta, None, 10.0)[0] == SIN_DATOS
+
+
+def test_logo_de_la_planta(tmp_path):
+    assert logo_planta("Norte", tmp_path) is None                              # sin logo: se muestra el nombre
+    (tmp_path / "norte").mkdir()
+    (tmp_path / "norte" / "logo.png").write_bytes(b"png")
+    assert logo_planta("Norte", tmp_path) == tmp_path / "norte" / "logo.png"
+
+
+def test_tarjetas_del_periodo(sesion, planta, periodo):  # noqa: F811
+    desde, hasta = periodo
+    for fase, otros in (("descarga", {"ml": 10.0, "t_descarga_s": 200.0}), ("fase_liviana", {"aceite_pct_medido": 70.0}),
+                        ("fase_pesada", {"ml": 2.0})):                          # muestreo completo de 06:30: balance
+        _muestra(sesion, "N-CEN-01", datetime(2026, 7, 1, 6, 30), fase, **otros)
+    tarjetas = tarjetas_periodo(sesion, planta, desde, hasta)
+    # como los marcadores, pero con los 3 eBOE juntos: la media de cada turno, ponderada por 100, 300 y 100 t
+    por_turno = []
+    for dia, turno, toneladas in ((DIA, "M", 100), (DIA, "T", 300), (hasta, "M", 100)):
+        analisis = datos_periodo(sesion, planta, dia, dia, turno)["analisis"]
+        eficiencia = analisis.loc[analisis["lugar"] == "Entrada", "eficiencia_par"].mean() * 100
+        salida = analisis.loc[analisis["lugar"] == "Salida", "aceite_fruta"].mean()
+        por_turno.append((eficiencia, salida, toneladas))
+    assert tarjetas["eficiencia"]["valor"] == pytest.approx(sum(e * t for e, _, t in por_turno) / 500)
+    assert tarjetas["aceite_salida"]["valor"] == pytest.approx(sum(s * t for _, s, t in por_turno) / 500)
+    assert (tarjetas["eficiencia"]["turnos"], tarjetas["eficiencia"]["n"]) == (3, 9)          # 3 eBOE × 3 turnos
+    assert tarjetas["eficiencia"]["nota"] == "ponderado por toneladas aprobadas"
+    retorno = _por_tipo(sesion, planta, desde, hasta)[("retorno_fp_eboe", "Fase pesada a eBOE 1")]
+    assert tarjetas["agua"]["valor"] is not None
+    assert "calc. " + f"{tarjetas['agua']['valor']:.1f}".replace(".", ",") in retorno["texto"]   # el mismo "calc."
+    assert tarjetas["alertas"] == len(listar_alertas(sesion, planta.id, estados=("abierta", "en análisis")))
+    vacio = tarjetas_periodo(sesion, planta, date(2026, 8, 1), date(2026, 8, 1))
+    assert (vacio["eficiencia"]["valor"], vacio["eficiencia"]["n"], vacio["agua"]["valor"]) == (None, 0, None)
