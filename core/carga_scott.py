@@ -57,6 +57,8 @@ N_MINIMO_PERCENTILES = 50                # datos del histórico de un punto para
 MINUTOS_FUTURO = 10                      # una ronda más allá de ahora + 10 min es "en el futuro"
 DIAS_TURNOS_CERRADOS = 14                # se buscan turnos sin evaluar en los últimos 14 días
 DIAS_PREVIOS = 10                        # datos anteriores para las reglas que miran hacia atrás (14 turnos)
+SIN_EVALUAR = "(sin evaluar)"            # final de TurnoEvaluado.evaluado_por: turno marcado que nunca se evalúa
+                                         # (temporadas anteriores a la fase I, como 2024 en LEDESMA)
 RONDAS_INMEDIATO = 2
 NO_CONFIRMADA = "no confirmada al cierre del turno"
 

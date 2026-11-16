@@ -188,3 +188,20 @@ def test_alerta_historico_corregida_no_cambia_de_estado(sesion):  # noqa: F811
     for alerta in sesion.scalars(select(Alerta)):
         assert (alerta.estado, alerta.comentario, alerta.episodio_abierto, alerta.datos) == (
             "histórico", "dato corregido", False, [])
+
+
+def test_turno_sin_evaluar_no_crea_alertas_al_corregir(sesion):  # noqa: F811
+    from core.carga_scott import SIN_EVALUAR
+    from core.models import TurnoEvaluado
+    planta = _planta(sesion)
+    planta.turnos_para_alertar = 1
+    _cargar(sesion, salida_ml={1: 30.0})                                 # eficiencia del eBOE 1 al 70 %
+    turno_m = next(t for t in planta.turnos if t.nombre == "M")
+    sesion.add(TurnoEvaluado(planta_id=planta.id, fecha_produccion=R1.date(), turno_id=turno_m.id,
+                             evaluado_en=datetime(2026, 11, 16), evaluado_por=f"histórico 2024 {SIN_EVALUAR}"))
+    sesion.commit()
+    salida = _analisis(sesion, 1, "fruta salida")
+    resultado = editar_dato(sesion, planta, "analisis_scott", salida.id, {"vol_ml": 29.0}, "tipeo", "Ramiro",
+                            datetime(2026, 7, 1, 14))
+    assert resultado["alertas"] == [] and sesion.scalars(select(Alerta)).all() == []
+    assert evaluar_turnos_cerrados(sesion, planta, datetime(2026, 7, 1, 14, 5), "Ramiro") == []   # ya está marcado

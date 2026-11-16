@@ -20,7 +20,7 @@ from core.alertas import CERRADA, HISTORICO
 from core.calculos import aceite_en_emulsion, aceite_en_fruta
 from core.cambios import (COLUMNA_CLAVE, SISTEMA, TABLAS, clave_de, desde_fila, exigir_permiso, fila_completa,
                           nuevo_grupo, registrar)
-from core.carga_scott import (CALIDADES, DIAS_PREVIOS, PROGRAMAS, PUNTOS, RALLADOS, cambios_de_alertas,
+from core.carga_scott import (CALIDADES, DIAS_PREVIOS, PROGRAMAS, PUNTOS, RALLADOS, SIN_EVALUAR, cambios_de_alertas,
                               chequeo_inmediato, estado_alertas, evaluar_turno, series_recientes)
 from core.models import (AlertaDato, AnalisisScott, Cambio, Equipo, LecturaOperacion, Linea, MuestraCentrifuga,
                          Planta, Proceso, PuntoMuestreo, TurnoEvaluado)
@@ -363,7 +363,8 @@ def reevaluar_turnos(sesion, planta: Planta, momentos: list[datetime], quitados:
     evaluar (completo si ya estaba evaluado, con TurnoEvaluado; si no, solo el chequeo inmediato), lo que vuelve a
     sumar los datos a las alertas que se siguen violando; después se ajusta cada alerta tocada (inicio, fin y
     turnos con los datos que le quedan) o, si quedó sin datos, se cierra sola con DATO_CORREGIDO. Un turno con todos
-    sus datos importados se reevalúa como "histórico". Devuelve las alertas nuevas o actualizadas.
+    sus datos importados se reevalúa como "histórico". Un turno marcado "(sin evaluar)" (SIN_EVALUAR, por ejemplo
+    2024) no se evalúa nunca. Devuelve las alertas nuevas o actualizadas.
     """
     antes = estado_alertas(sesion)
     nombres = {t.nombre: t for t in planta.turnos}
@@ -371,6 +372,11 @@ def reevaluar_turnos(sesion, planta: Planta, momentos: list[datetime], quitados:
                     key=lambda par: inicio_de_turno(planta, par[0], nombres[par[1]]))
     for dia, nombre in turnos:
         turno = nombres[nombre]
+        marca = sesion.scalars(select(TurnoEvaluado).where(
+            TurnoEvaluado.planta_id == planta.id, TurnoEvaluado.fecha_produccion == dia,
+            TurnoEvaluado.turno_id == turno.id)).first()
+        if marca is not None and marca.evaluado_por.endswith(SIN_EVALUAR):
+            continue
         inicio, fin = inicio_de_turno(planta, dia, turno), fin_de_turno(planta, dia, turno)
         del_turno = sesion.scalars(select(AnalisisScott).join(AnalisisScott.punto_muestreo).join(PuntoMuestreo.equipo)
                                    .join(Equipo.linea).where(Linea.planta_id == planta.id, Equipo.tipo == "BOE",
@@ -388,9 +394,7 @@ def reevaluar_turnos(sesion, planta: Planta, momentos: list[datetime], quitados:
             alerta.fecha_hora = min(alerta.fecha_hora, inicio)
             alerta.fin = max(alerta.fin or alerta.fecha_hora, fin - timedelta(minutes=1))
         sesion.flush()
-        evaluado = sesion.scalars(select(TurnoEvaluado).where(
-            TurnoEvaluado.planta_id == planta.id, TurnoEvaluado.fecha_produccion == dia,
-            TurnoEvaluado.turno_id == turno.id)).first() is not None
+        evaluado = marca is not None
         if del_turno and evaluado:
             historico = all(a.origen for a in del_turno)
             series = series_recientes(sesion, planta, inicio - timedelta(days=DIAS_PREVIOS))

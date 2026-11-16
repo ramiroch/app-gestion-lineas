@@ -39,7 +39,7 @@ import re
 import sys
 import unicodedata
 from collections import Counter, defaultdict
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -187,6 +187,18 @@ def leer_hora(valor):
 
 def _a_numero(texto: str) -> float:
     return float(texto.replace(",", "."))
+
+
+def texto_observacion(valor) -> str | None:
+    """La observación siempre como texto: una hora de Excel → "18:00"; un número → "16000" (en 2024 anotaban ahí
+    caudales y horas); un texto queda igual."""
+    if valor is None:
+        return None
+    if isinstance(valor, (time, datetime)):
+        return f"{valor:%H:%M}"
+    if isinstance(valor, float) and valor.is_integer():
+        valor = int(valor)
+    return str(valor)
 
 
 def _numero(valor) -> float | None:
@@ -524,7 +536,7 @@ def _muestra(bloque: dict, fase: str, prefijo: str, equipo, comunes: dict, param
     muestra = _vacia(numero, equipo, fase, "secundaria" if prefijo else "primaria", comunes) | {
         "caudal_lh": _numero(datos["caudal"]) if fase == "emulsion" and not prefijo else None,
         "t_descarga_s": _numero(valor("t_descarga")), "cp_liviana_bar": _numero(valor("cp_liviana")),
-        "cp_pesada_bar": _numero(valor("cp_pesada")), "observacion": None if prefijo else datos["observacion"]}
+        "cp_pesada_bar": _numero(valor("cp_pesada")), "observacion": None if prefijo else texto_observacion(datos["observacion"])}
     if not prefijo:
         try:
             muestra["solidos_pct"], muestra["solidos_texto"], muestra["solidos_marca"] = leer_solidos(datos["solidos"])

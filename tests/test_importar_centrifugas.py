@@ -12,7 +12,7 @@ from core.importar_centrifugas import (REVISAR_COPIADA, REVISAR_DIA, REVISAR_ESB
                                        REVISAR_FECHA_CORREGIDA, REVISAR_FISICO,
                                        REVISAR_EXTREMO, REVISAR_NORMALIDAD, REVISAR_NORMALIDAD_PESADA, REVISAR_PEGADO,
                                        REVISAR_SIN_LIVIANA, importar_centrifugas, leer_solidos, normalizar_equipo,
-                                       normalizar_fase, texto_resumen)
+                                       normalizar_fase, texto_observacion, texto_resumen)
 from core.models import MARCAS_CP, Cliente, Equipo, Linea, MuestraCentrifuga, Planta
 from core.turnos import fecha_produccion
 
@@ -402,3 +402,12 @@ def test_formato_2026_lee_lo_mismo_y_solo_nuevos(sesion, tmp_path):
                for m in sesion.scalars(select(MuestraCentrifuga))}
     assert {k: v for k, v in despues.items() if k in antes} == antes            # lo ya cargado no se toca
     assert len(despues) == len(antes) + 4
+
+
+def test_observacion_siempre_como_texto(sesion, tmp_path):
+    assert [texto_observacion(v) for v in (None, time(18, 0), 16000, 16000.0, 0.5, " Caudal ")] == [
+        None, "18:00", "16000", "16000", "0.5", " Caudal "]
+    filas = bloque(time(14, 30), extra={"liviana": {"W": time(18, 0)}, "pesada": {"W": 16000}})
+    importar_centrifugas(sesion, escribir(tmp_path / "cen.xlsx", filas))
+    observaciones = {m.fase: m.observacion for m in sesion.scalars(select(MuestraCentrifuga))}
+    assert (observaciones["fase_liviana"], observaciones["fase_pesada"]) == ("18:00", "16000")

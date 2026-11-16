@@ -242,3 +242,25 @@ Archivos: "Control eBOE Naranja 26 RML 05.xlsm" (hojas BOE y Resumen) y "Control
   - 28 registros de producción, uno de ellos el 25/10 N, que faltaba en la planilla vieja;
   - 709 muestras de centrífugas, de 89 muestreos: ESE 230 (1), ESB 130 y OSD 60.
 - **Alertas:** los 27 turnos nuevos se evaluaron como "histórico" contra los límites congelados vigentes (fase I 2025) y se marcaron en TurnoEvaluado.
+
+## 12. Temporada 2024 (formato 2025)
+
+Archivos: "eficiencia eBOE Naranja 24.xlsx" (hojas BOE y Resumen) y "CENTRIFUGAS Naranja 24.xlsx" (hoja Datos). Se armaron en formato 2025 a partir de las planillas mensuales de agosto, septiembre y octubre de 2024. El detalle está en la hoja Leeme de cada archivo:
+- PROCESO = cada hoja semanal (1 a 18); Día = día de producción dentro del proceso.
+- La producción sale del bloque "SUMARIO PROCESO DE eBOE". Reproceso, QF, Brix Fritz y T/H por eBOE no existen en 2024.
+- Fechas 2023 corregidas a 2024, y "ESB 131/132/133" → ESB 130.
+- En centrífugas, el proceso es el de la ronda del BOE más cercana.
+- Los sólidos del BOE se pasaron a número con la regla de centrífugas ("<1" → 1; ">a y <b" → punto medio).
+- Los pesos y titulaciones ilegibles quedan vacíos.
+- Las filas del 07/09 de 05:10 a 19:10 de centrífugas eran del 08/09 (Día 2).
+- **Especie: las planillas 2024 no la traen; se usa "N Val S/R" (A CONFIRMAR).**
+- El MSD 50 anotado como secundaria el 15/10 15:10 queda como viene, por ahora.
+- Observaciones de centrífugas: en 2024 traen caudales (13.000–20.000) y horas. Se guardan siempre como texto ("16000", "18:00").
+
+**Carga del 16/11/2026** (`--formato 2025 --solo-nuevos`):
+- BOE: 3.913 filas. Se cargaron 5.860 análisis (1.954 de entrada, 1.950 de salida, 1.956 de emulsión) y 1.953 lecturas. Hay 9 filas sin datos de fruta.
+- Pares 652 / 648 / 648; eficiencia media simple 83,1 / 80,9 / 86,7 %; del 31/07 al 19/10/2024; 18 procesos.
+- Resumen: 190 turnos; fruta 43.972,8 t; aceite envasado 285.705 kg; jugo 3.577.460 kg.
+- Centrífugas: 2.552 filas, 638 muestreos y 5.063 muestras.
+- Entradas repetidas en 2024: 115 (39 rondas).
+- **Sin alertas:** 2024 es anterior a la fase I 2025. Los 187 turnos con datos están en TurnoEvaluado como "histórico 2024 (sin evaluar)", y la app no los evalúa ni al corregir un dato. Los límites congelados no cambian.
