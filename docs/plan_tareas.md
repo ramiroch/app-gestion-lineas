@@ -45,7 +45,7 @@ Fuente: `Plan diario - Primera planta LEDESMA.xlsx` (App_Gestion). Bloques de 2 
 ## Tarea 9 · Comparaciones: temporadas y eficiencia vs programa y t/h (05/11) — Hecha
 - **Qué hacer:** ANOVA de un factor + Tukey entre temporadas (aceite en fruta, eficiencia eBOE, aceite en emulsión) con gráfico de intervalos al 95 %. Burbujas: eficiencia promedio vs t/h, color por programa, tamaño por N, una por eBOE. Superficie y contorno de eficiencia vs programa y t/h. Igual que las diapositivas 6–13.
 - **Listo cuando:** Resultados de ANOVA iguales a Minitab (con un caso cargado a mano) y los 3 tipos de gráfico funcionando por eBOE.
-- **Notas:** 04/11: Temporadas (ANOVA/Welch/Tukey), Agua y licor (regresión por temporada), Programa y MTPH (burbujas, superficie, ranking, filtrado cruzado). Unidades kg/MT y MTPH. 173 tests.
+- **Notas:** 04/11: Temporadas (ANOVA/Welch/Tukey), Retorno de FP y licor (antes "Agua y licor"; regresión por temporada), Programa y MTPH (burbujas, superficie, ranking, filtrado cruzado). Unidades kg/MT y MTPH. 173 tests.
 
 ## Tarea 10 · Vista de proceso por temporada + exportar para la presentación (06/11) — Hecha
 - **Qué hacer:** Pestaña "Proceso": por temporada, tarjetas por eBOE (aceite entrada y salida kg/t, t/h, eficiencia) y totales (eficiencia de proceso, fruta procesada, aceite envasado, rendimiento de aceite), como el flowsheet de septiembre. Botón para descargar cada gráfico en PNG y las tablas en Excel. Revisión de la semana.

@@ -299,7 +299,7 @@ def bloque_temporadas(registro: Descargas, titulo: str, datos: pd.DataFrame, var
 
 
 def bloque_caudal(entradas: pd.DataFrame, registro: Descargas) -> None:
-    """Caudal de fase pesada por temporada (¿bajó el agua?): frase, intervalos y medias."""
+    """Caudal de fase pesada por temporada (¿bajó el retorno de FP?): frase, intervalos y medias."""
     st.markdown("##### Caudal de fase pesada")
     try:
         resultado = comparar_grupos(entradas, "caudal_fase_pesada", "temporada")
@@ -324,7 +324,7 @@ def bloque_caudal(entradas: pd.DataFrame, registro: Descargas) -> None:
 
 
 RELACIONES = [  # (columna x, título del eje, unidad, paso de la frase, texto de x, decimales de la pendiente)
-    ("caudal_fase_pesada", "Caudal fase pesada (m³/h)", "m³/h", "1 m³/h", "de caudal de fase pesada", 2),
+    ("caudal_fase_pesada", "Retorno de FP (m³/h)", "m³/h", "1 m³/h", "de retorno de FP", 2),
     ("aceite_emulsion", "Aceite en emulsión (%)", "%", "1 %", "de aceite en emulsión", 1),
 ]
 
@@ -342,20 +342,24 @@ def tabla_rectas(regresiones: pd.DataFrame, unidad_x: str) -> pd.DataFrame:
 
 
 def bloque_agua_licor(fruta: pd.DataFrame, emulsion: pd.DataFrame, registro: Descargas) -> None:
-    """Eficiencia eBOE vs caudal de fase pesada y vs aceite en emulsión, dentro de cada temporada."""
-    st.subheader("Agua y licor")
-    st.caption("Cómo se relaciona la eficiencia del eBOE con el agua (caudal de fase pesada) y con el licor "
+    """Eficiencia eBOE vs retorno de FP (caudal de fase pesada del laboratorio) y vs aceite en emulsión, dentro de
+    cada temporada."""
+    st.subheader("Retorno de FP y licor")
+    st.caption("Cómo se relaciona la eficiencia del eBOE con el retorno de FP al eBOE (caudal de fase pesada que "
+               "carga el laboratorio del BOE) y con el licor "
                "(aceite en emulsión). Las rectas y el R² de los gráficos se calculan dentro de cada eBOE y "
                "temporada; las frases, dentro de cada temporada con los eBOE elegidos juntos. Nunca se juntan "
                "las temporadas. Una relación no prueba una causa.")
     datos = pares_con_emulsion(fruta, emulsion)
     for x, titulo_x, unidad_x, paso, x_texto, decimales in RELACIONES:
-        st.markdown(f"##### Eficiencia eBOE vs {titulo_x.split(' (')[0].lower()}")
+        nombre_x = titulo_x.split(" (")[0]
+        nombre_x = nombre_x[0].lower() + nombre_x[1:]               # "retorno de FP", "aceite en emulsión"
+        st.markdown(f"##### Eficiencia eBOE vs {nombre_x}")
         for reg in regresiones_por_grupo(datos, x, "eficiencia_pct", ["temporada"]).to_dict("records"):
             st.markdown("- " + frase_pendiente(reg, str(reg["temporada"]), paso, x_texto, "puntos", "de eficiencia",
                                                decimales))
         por_eboe = regresiones_por_grupo(datos, x, "eficiencia_pct", ["eboe", "temporada"])
-        nombre = f"Eficiencia vs {titulo_x.split(' (')[0].lower()}"
+        nombre = f"Eficiencia vs {nombre_x}"
         registro.grafico(dispersion_por_eboe(datos, x, "eficiencia_pct", por_eboe, titulo_x, "Eficiencia eBOE (%)",
                                              unidad_x, "puntos", 2, 1), nombre)
         avisar_n_chico({f"eBOE {f['eboe']} {f['temporada']}": f["n"] for f in por_eboe.to_dict("records")})
