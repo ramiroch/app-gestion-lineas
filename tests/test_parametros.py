@@ -30,7 +30,8 @@ COMPLETOS = {"blanco_ml": 0.2, "factor_aceite_fruta": 68.8416, "factor_aceite_em
              "hora_inicio_dia": time(5, 0), "blanco_centrifugas_ml": 0.1,
              "umbral_paralelo_lh": 17000.0, "turnos_fin_episodio": 3, "turnos_para_alertar": 2,
              "sigma_alerta_inmediata": 4.0, "horas_rondas": "05:10, 07:10", "tolerancia_fp_verde_pct": 10.0,
-             "tolerancia_fp_amarillo_pct": 20.0}
+             "tolerancia_fp_amarillo_pct": 20.0, "omega_licor_objetivo_pct": 0.9, "omega_fp_pct": 0.1,
+             "caudal_aspersores_lh": 350.0, "tolerancia_calibre_pct": 5.0}
 
 
 def test_devuelve_los_parametros(sesion):
@@ -60,7 +61,9 @@ def test_faltan_todos(sesion):
             "aceite en emulsión, la hora de inicio del día de producción, el blanco de centrífugas (mL), el umbral "
             "de primarias en paralelo (L/h), los turnos sin alerta que cierran un episodio, los turnos seguidos que "
             "crean una alerta, los σ de alerta inmediata, las horas de las rondas de Scott, la tolerancia verde del "
-            "caudal de fase pesada (%) y la tolerancia amarilla del caudal de fase pesada (%). Completalos"
+            "caudal de fase pesada (%), la tolerancia amarilla del caudal de fase pesada (%), el aceite objetivo en "
+            "el licor (%), el aceite supuesto en la fase pesada que vuelve al eBOE (%), el agua de los aspersores "
+            "(L/h) y la tolerancia de calibre entre entrada y salida (%). Completalos"
             ) in str(error.value)
 
 
@@ -122,3 +125,15 @@ def test_horas_de_las_rondas_mal_escritas(sesion):
 def test_tolerancias_del_caudal_de_fase_pesada(sesion):
     with pytest.raises(ParametrosIncompletos, match="verde del caudal de fase pesada mayor o igual que la amarilla"):
         parametros_planta(sesion, crear_planta(sesion, **(COMPLETOS | {"tolerancia_fp_verde_pct": 25.0})))
+
+
+def test_parametros_del_balance_de_fase_pesada(sesion):
+    assert parametros_planta(sesion, crear_planta(sesion, **(COMPLETOS | {"omega_fp_pct": 0.0,
+                                                                         "caudal_aspersores_lh": 0.0})),
+                             ["omega_fp_pct", "caudal_aspersores_lh"]) == {"omega_fp_pct": 0.0,
+                                                                          "caudal_aspersores_lh": 0.0}
+    for malos, error in (({"omega_fp_pct": -0.1}, "negativo"), ({"caudal_aspersores_lh": -1.0}, "negativo"),
+                         ({"omega_licor_objetivo_pct": 0.1}, "menor o igual"),
+                         ({"tolerancia_calibre_pct": 0.0}, "mayor que 0")):
+        with pytest.raises(ParametrosIncompletos, match=error):
+            parametros_planta(sesion, crear_planta(sesion, **(COMPLETOS | malos)))

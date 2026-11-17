@@ -113,7 +113,7 @@ Tiene tres tablas: **por turno** (Tabla1, A:V), **por día** (Tabla8, X:AR) y **
 | Factor % emulsión | 3,45 | 3,442 | Factor configurable por planta (diferencia ≈ 0,2 %) |
 | Factor kg/MT | 68,8416 | 68,841 | Ídem (diferencia despreciable) |
 | Eficiencia eBOE | 1 − salida/entrada | Remoción del BOE = 100 × (entrada − salida)/entrada | Es la misma fórmula |
-| Caudal fase pesada calc. | (AC × R × AD − 350 × 0,997 × 0,9 %) / ((0,9 % − 0,1 %) × (0,852 × 0,15 % + 0,997 × (1 − 0,15 %)) × 1000) | — | Balance propio de LEDESMA; se implementa después, con sus constantes documentadas |
+| Caudal fase pesada calc. | (AC × R × AD − 350 × 0,997 × 0,9 %) / ((0,9 % − 0,1 %) × (0,852 × 0,15 % + 0,997 × (1 − 0,15 %)) × 1000) | — | Se reemplaza por el balance completo de aceite del licor (`core/fase_pesada.py`): agrega (1 − ω_licor) y usa ω_FP = 0,1 % también en la densidad; da ~1 % menos (−0,95 % en las filas de prueba). Constantes como parámetros de la planta: `omega_licor_objetivo_pct` = 0,9, `omega_fp_pct` = 0,1, `caudal_aspersores_lh` = 350 |
 
 ## 6. Datos maestros que salen de este archivo
 

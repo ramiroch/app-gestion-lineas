@@ -100,6 +100,14 @@ class Planta(Base):
       para saber qué rondas faltan en el turno en curso (core.inicio).
     - sigma_alerta_inmediata: valor por defecto de LimitesControl.sigma_alerta_inmediata al congelar límites (en
       la regla 1, un promedio de turno a más de estos σ de la LC, del lado malo, alerta sin esperar la persistencia).
+    - omega_licor_objetivo_pct: aceite objetivo en el licor (emulsión que sale del eBOE), en %; con él se calcula el
+      caudal de fase pesada requerido (core.fase_pesada).
+    - omega_fp_pct: aceite supuesto en la fase pesada que vuelve al eBOE, en % (un solo valor en el balance).
+    - caudal_aspersores_lh: agua estimada que sale de los aspersores del eBOE, en L/h.
+    - tolerancia_calibre_pct: diferencia de calibre entre la muestra de entrada y la de salida (%) a partir de la
+      cual se avisa que pueden no ser comparables (core.muestreo).
+    - mostrar_personas: si se muestran los análisis por operador y químico (Sistema › Equipos de trabajo). No es un
+      parámetro de cálculo: vacío = no.
     """
 
     __tablename__ = "planta"
@@ -120,6 +128,11 @@ class Planta(Base):
     horas_rondas: Mapped[str | None] = mapped_column(String(200))
     tolerancia_fp_verde_pct: Mapped[float | None] = mapped_column(Float)
     tolerancia_fp_amarillo_pct: Mapped[float | None] = mapped_column(Float)
+    omega_licor_objetivo_pct: Mapped[float | None] = mapped_column(Float)
+    omega_fp_pct: Mapped[float | None] = mapped_column(Float)
+    caudal_aspersores_lh: Mapped[float | None] = mapped_column(Float)
+    tolerancia_calibre_pct: Mapped[float | None] = mapped_column(Float)
+    mostrar_personas: Mapped[bool | None] = mapped_column(Boolean)
 
     cliente: Mapped["Cliente"] = relationship(back_populates="plantas")
     lineas: Mapped[list["Linea"]] = relationship(back_populates="planta")

@@ -100,12 +100,23 @@ mostrar_parametro(c9, "Alerta inmediata (regla 1)",
                   None if sigma_inmediata is None else f"± {numero_es(sigma_inmediata, 1)} σ")
 mostrar_parametro(c10, "Horas de las rondas", planta["horas_rondas"])
 verde, amarillo = planta["tolerancia_fp_verde_pct"], planta["tolerancia_fp_amarillo_pct"]
-c11, _, _, _, _ = st.columns(5)
+licor, fase_pesada, aspersores, calibre = (planta["omega_licor_objetivo_pct"], planta["omega_fp_pct"],
+                                         planta["caudal_aspersores_lh"], planta["tolerancia_calibre_pct"])
+c11, c12, c13, c14, c15 = st.columns(5)
 mostrar_parametro(c11, "Caudal de fase pesada: lab contra calculado",
                   None if None in (verde, amarillo) else f"verde ≤ {numero_es(verde, 0)} %, amarillo ≤ "
                                                          f"{numero_es(amarillo, 0)} %")
+mostrar_parametro(c12, "Aceite objetivo en el licor", None if licor is None else f"{numero_es(licor, 2)} %")
+mostrar_parametro(c13, "Aceite en la fase pesada que vuelve",
+                  None if fase_pesada is None else f"{numero_es(fase_pesada, 2)} %")
+mostrar_parametro(c14, "Agua de los aspersores",
+                  None if aspersores is None else f"{aspersores:,.0f} L/h".replace(",", "."))
+mostrar_parametro(c15, "Tolerancia de calibre entrada/salida",
+                  None if calibre is None else f"{numero_es(calibre, 0)} %")
+st.caption("Análisis por operador y químico (Sistema › Equipos de trabajo): "
+           + ("se muestran." if planta["mostrar_personas"] else "ocultos (mostrar_personas = no)."))
 if None in (blanco, fruta, emulsion, hora, blanco_cen, umbral, fin_episodio, para_alertar, sigma_inmediata,
-            planta["horas_rondas"], verde, amarillo):
+            planta["horas_rondas"], verde, amarillo, licor, fase_pesada, aspersores, calibre):
     st.caption("Los parámetros «a definir» se completan en la hoja Planta de "
                "data/maestros_clientes.xlsx. Sin ellos no se pueden calcular análisis de esta planta.")
 

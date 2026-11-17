@@ -25,7 +25,7 @@ def test_menu_con_todas_las_paginas_y_sus_secciones():
     assert all((CARPETA_APP / ruta).exists() for ruta in _rutas())
     assert {seccion: [titulo for _, titulo, _, _ in lista] for seccion, lista in MENU.items()} == {
         "Planta": ["Inicio", "Planta"],
-        "Análisis": ["Análisis", "Gráficos de control", "Laboratorio", "Operación", "Centrífugas"],
+        "Análisis": ["Análisis", "Gráficos de control", "Laboratorio", "Operación", "Centrífugas", "Sistema"],
         "Carga diaria": ["Carga Scott", "Datos", "Producción"],
         "Gestión": ["Alertas"]}
     for lista in MENU.values():

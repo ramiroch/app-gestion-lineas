@@ -57,6 +57,11 @@ def detalle_planta(sesion: Session, planta_id: int) -> dict | None:
         "horas_rondas": planta.horas_rondas,
         "tolerancia_fp_verde_pct": planta.tolerancia_fp_verde_pct,
         "tolerancia_fp_amarillo_pct": planta.tolerancia_fp_amarillo_pct,
+        "omega_licor_objetivo_pct": planta.omega_licor_objetivo_pct,
+        "omega_fp_pct": planta.omega_fp_pct,
+        "caudal_aspersores_lh": planta.caudal_aspersores_lh,
+        "tolerancia_calibre_pct": planta.tolerancia_calibre_pct,
+        "mostrar_personas": bool(planta.mostrar_personas),
         "lineas": [
             {"nombre": linea.nombre,
              "equipos": [_equipo(e) for e in sorted(linea.equipos, key=lambda e: e.codigo)]}

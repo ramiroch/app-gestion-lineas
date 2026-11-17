@@ -23,6 +23,10 @@ DESCRIPCION_PARAMETROS = {
     "horas_rondas": "las horas de las rondas de Scott",
     "tolerancia_fp_verde_pct": "la tolerancia verde del caudal de fase pesada (%)",
     "tolerancia_fp_amarillo_pct": "la tolerancia amarilla del caudal de fase pesada (%)",
+    "omega_licor_objetivo_pct": "el aceite objetivo en el licor (%)",
+    "omega_fp_pct": "el aceite supuesto en la fase pesada que vuelve al eBOE (%)",
+    "caudal_aspersores_lh": "el agua de los aspersores (L/h)",
+    "tolerancia_calibre_pct": "la tolerancia de calibre entre entrada y salida (%)",
 }
 
 
@@ -87,11 +91,19 @@ def validar_parametros(planta: Planta, requeridos: list[str] | None = None) -> d
                                         f"negativo ({valores[blanco]} mL).")
     for factor in ("factor_aceite_fruta", "factor_aceite_emulsion", "umbral_paralelo_lh", "turnos_fin_episodio",
                    "turnos_para_alertar", "sigma_alerta_inmediata", "tolerancia_fp_verde_pct",
-                   "tolerancia_fp_amarillo_pct"):
+                   "tolerancia_fp_amarillo_pct", "omega_licor_objetivo_pct", "tolerancia_calibre_pct"):
         if factor in valores and valores[factor] <= 0:
             raise ParametrosIncompletos(f'La planta "{planta.nombre}" tiene '
                                         f"{DESCRIPCION_PARAMETROS[factor]} en {valores[factor]}: "
                                         "tiene que ser mayor que 0.")
+    for no_negativo in ("omega_fp_pct", "caudal_aspersores_lh"):
+        if valores.get(no_negativo, 0) < 0:
+            raise ParametrosIncompletos(f'La planta "{planta.nombre}" tiene {DESCRIPCION_PARAMETROS[no_negativo]} '
+                                        f"negativo ({valores[no_negativo]}).")
+    if {"omega_licor_objetivo_pct", "omega_fp_pct"} <= set(valores) and \
+            valores["omega_licor_objetivo_pct"] <= valores["omega_fp_pct"]:
+        raise ParametrosIncompletos(f'La planta "{planta.nombre}" tiene el aceite objetivo en el licor menor o igual '
+                                    "que el aceite en la fase pesada: el balance de fase pesada no se puede calcular.")
     if {"tolerancia_fp_verde_pct", "tolerancia_fp_amarillo_pct"} <= set(valores) and \
             valores["tolerancia_fp_verde_pct"] >= valores["tolerancia_fp_amarillo_pct"]:
         raise ParametrosIncompletos(f'La planta "{planta.nombre}" tiene la tolerancia verde del caudal de fase pesada '

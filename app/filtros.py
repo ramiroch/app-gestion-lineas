@@ -24,6 +24,7 @@ from core.operacion import lecturas_plc, preparar_plc
 from core.parametros import ParametrosIncompletos, validar_parametros
 from core.analisis_centrifugas import balance_por_muestreo, por_muestreo, rangos_centrifugas, tabla_muestras
 from core.capacidad import limites_capacidad
+from core.fase_pesada import parametros_fase_pesada
 
 PLANTA_POR_DEFECTO = "LEDESMA"
 CLAVE = "filtros"
@@ -154,6 +155,14 @@ def umbral_paralelo_planta(planta_id: int) -> float | None:
             return validar_parametros(sesion.get(Planta, planta_id), ["umbral_paralelo_lh"])["umbral_paralelo_lh"]
         except ParametrosIncompletos:
             return None
+
+
+@st.cache_data(ttl=600)
+def parametros_fase_pesada_planta(planta_id: int) -> dict:
+    """Parámetros del balance de fase pesada de la planta (core.fase_pesada.PARAMETROS_FP). Da
+    ParametrosIncompletos, con el mensaje para la pantalla, si falta alguno."""
+    with crear_sesion(motor()) as sesion:
+        return parametros_fase_pesada(sesion.get(Planta, planta_id))
 
 
 @st.cache_data(ttl=600)
