@@ -10,7 +10,8 @@ import pytest
 from core.fase_pesada import caudal_fp_balance, mediana_por, rango_fase_pesada, tabla_fase_pesada
 
 PLANILLA_2025 = Path(__file__).resolve().parent.parent / "data" / "historico" / "eficiencia eBOE Naranja 25 2.xlsm"
-PARAMETROS = {"omega_licor_objetivo_pct": 0.9, "omega_fp_pct": 0.1, "caudal_aspersores_lh": 350.0}
+PARAMETROS = {"omega_licor_objetivo_pct": 0.9, "omega_fp_pct": 0.1, "caudal_aspersores_lh": 350.0,
+              "eficiencia_ref_rango_pct": 85.0}
 
 
 def test_balance_a_mano():
@@ -95,3 +96,18 @@ def test_tabla_y_medianas_por_turno():
     assert turnos["turno"].tolist() == ["M"] and turnos["n"].tolist() == [3]          # el T no tiene rango
     assert turnos["rango_fp_pct"].iloc[0] == pytest.approx(tabla["rango_fp_pct"].iloc[:3].median())
     assert mediana_por(tabla.iloc[3:], ["temporada"]).empty
+
+
+def test_rango_de_referencia_y_fase_pesada_especifica():
+    """Sin circularidad: el rango de referencia usa la eficiencia fija de la planta (85 %), no la del análisis."""
+    tabla = tabla_fase_pesada(_pares(), PARAMETROS)
+    primera, segunda = tabla.iloc[0], tabla.iloc[1]
+    requerido_ref = caudal_fp_balance(11.0, 8.0 * 0.85, 0.9, 0.1, 350)
+    assert primera["requerido_ref"] == pytest.approx(requerido_ref)
+    assert primera["rango_fp_ref"] == pytest.approx((9.0 - requerido_ref) / requerido_ref * 100)
+    assert primera["rango_fp_ref"] == pytest.approx(primera["rango_fp_pct"])     # su eficiencia ya es 85 %
+    assert segunda["rango_fp_ref"] != pytest.approx(segunda["rango_fp_pct"])     # con 80 % no
+    otra = tabla_fase_pesada(_pares().assign(eficiencia_par=0.5), PARAMETROS)     # cambia la eficiencia...
+    assert otra["rango_fp_ref"].tolist()[:3] == pytest.approx(tabla["rango_fp_ref"].tolist()[:3])   # ...y el ref no
+    assert tabla["fp_especifica"].tolist()[:3] == pytest.approx([9.0 / 11.0, 6.0 / 12.0, 10.0 / 11.0])
+    assert pd.isna(tabla.iloc[3]["fp_especifica"]) and pd.isna(tabla.iloc[3]["rango_fp_ref"])    # sin MTPH

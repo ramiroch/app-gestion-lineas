@@ -12,7 +12,7 @@ CARPETA_APP = Path(__file__).resolve().parent.parent / "app"
 sys.path.insert(0, str(CARPETA_APP))
 
 from estilo import LOGO_BROWN, PIE, encabezado_cobrand, titulo_planta  # noqa: E402
-from navegacion import INICIO, MENU  # noqa: E402
+from navegacion import INICIO, MENU, secciones  # noqa: E402
 
 
 def _rutas():
@@ -33,6 +33,11 @@ def test_menu_con_todas_las_paginas_y_sus_secciones():
             assert icono.startswith(":material/")
             if ruta != INICIO:                       # la misma dirección que antes: /Analisis, /Control…
                 assert direccion == re.sub(r"^\d+_", "", Path(ruta).stem)
+
+
+def test_modo_presentacion_sin_carga_diaria():
+    assert list(secciones()) == list(MENU)
+    assert list(secciones(presentacion=True)) == ["Planta", "Análisis", "Gestión"]
 
 
 def test_los_enlaces_entre_paginas_apuntan_al_menu():

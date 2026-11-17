@@ -113,10 +113,14 @@ mostrar_parametro(c14, "Agua de los aspersores",
                   None if aspersores is None else f"{aspersores:,.0f} L/h".replace(",", "."))
 mostrar_parametro(c15, "Tolerancia de calibre entrada/salida",
                   None if calibre is None else f"{numero_es(calibre, 0)} %")
+eficiencia_ref = planta["eficiencia_ref_rango_pct"]
+c16, _, _, _, _ = st.columns(5)
+mostrar_parametro(c16, "Eficiencia de referencia del rango de fase pesada",
+                  None if eficiencia_ref is None else f"{numero_es(eficiencia_ref, 0)} %")
 st.caption("Análisis por operador y químico (Sistema › Equipos de trabajo): "
            + ("se muestran." if planta["mostrar_personas"] else "ocultos (mostrar_personas = no)."))
 if None in (blanco, fruta, emulsion, hora, blanco_cen, umbral, fin_episodio, para_alertar, sigma_inmediata,
-            planta["horas_rondas"], verde, amarillo, licor, fase_pesada, aspersores, calibre):
+            planta["horas_rondas"], verde, amarillo, licor, fase_pesada, aspersores, calibre, eficiencia_ref):
     st.caption("Los parámetros «a definir» se completan en la hoja Planta de "
                "data/maestros_clientes.xlsx. Sin ellos no se pueden calcular análisis de esta planta.")
 

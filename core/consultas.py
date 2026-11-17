@@ -60,6 +60,7 @@ def detalle_planta(sesion: Session, planta_id: int) -> dict | None:
         "omega_licor_objetivo_pct": planta.omega_licor_objetivo_pct,
         "omega_fp_pct": planta.omega_fp_pct,
         "caudal_aspersores_lh": planta.caudal_aspersores_lh,
+        "eficiencia_ref_rango_pct": planta.eficiencia_ref_rango_pct,
         "tolerancia_calibre_pct": planta.tolerancia_calibre_pct,
         "mostrar_personas": bool(planta.mostrar_personas),
         "lineas": [

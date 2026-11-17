@@ -31,7 +31,7 @@ COMPLETOS = {"blanco_ml": 0.2, "factor_aceite_fruta": 68.8416, "factor_aceite_em
              "umbral_paralelo_lh": 17000.0, "turnos_fin_episodio": 3, "turnos_para_alertar": 2,
              "sigma_alerta_inmediata": 4.0, "horas_rondas": "05:10, 07:10", "tolerancia_fp_verde_pct": 10.0,
              "tolerancia_fp_amarillo_pct": 20.0, "omega_licor_objetivo_pct": 0.9, "omega_fp_pct": 0.1,
-             "caudal_aspersores_lh": 350.0, "tolerancia_calibre_pct": 5.0}
+             "caudal_aspersores_lh": 350.0, "tolerancia_calibre_pct": 5.0, "eficiencia_ref_rango_pct": 85.0}
 
 
 def test_devuelve_los_parametros(sesion):
@@ -63,7 +63,8 @@ def test_faltan_todos(sesion):
             "crean una alerta, los σ de alerta inmediata, las horas de las rondas de Scott, la tolerancia verde del "
             "caudal de fase pesada (%), la tolerancia amarilla del caudal de fase pesada (%), el aceite objetivo en "
             "el licor (%), el aceite supuesto en la fase pesada que vuelve al eBOE (%), el agua de los aspersores "
-            "(L/h) y la tolerancia de calibre entre entrada y salida (%). Completalos"
+            "(L/h), la eficiencia de referencia del rango de fase pesada (%) y la tolerancia de calibre entre entrada "
+            "y salida (%). Completalos"
             ) in str(error.value)
 
 
@@ -134,6 +135,8 @@ def test_parametros_del_balance_de_fase_pesada(sesion):
                                                                           "caudal_aspersores_lh": 0.0}
     for malos, error in (({"omega_fp_pct": -0.1}, "negativo"), ({"caudal_aspersores_lh": -1.0}, "negativo"),
                          ({"omega_licor_objetivo_pct": 0.1}, "menor o igual"),
-                         ({"tolerancia_calibre_pct": 0.0}, "mayor que 0")):
+                         ({"tolerancia_calibre_pct": 0.0}, "mayor que 0"),
+                         ({"eficiencia_ref_rango_pct": 100.0}, "entre 0 y 100"),
+                         ({"eficiencia_ref_rango_pct": 0.0}, "entre 0 y 100")):
         with pytest.raises(ParametrosIncompletos, match=error):
             parametros_planta(sesion, crear_planta(sesion, **(COMPLETOS | malos)))

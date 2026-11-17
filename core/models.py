@@ -104,6 +104,8 @@ class Planta(Base):
       caudal de fase pesada requerido (core.fase_pesada).
     - omega_fp_pct: aceite supuesto en la fase pesada que vuelve al eBOE, en % (un solo valor en el balance).
     - caudal_aspersores_lh: agua estimada que sale de los aspersores del eBOE, en L/h.
+    - eficiencia_ref_rango_pct: eficiencia eBOE fija (%) con la que se calcula el rango de fase pesada de referencia
+      (rango_fp_ref, core.fase_pesada), para no usar la eficiencia del mismo análisis cuando se la compara con él.
     - tolerancia_calibre_pct: diferencia de calibre entre la muestra de entrada y la de salida (%) a partir de la
       cual se avisa que pueden no ser comparables (core.muestreo).
     - mostrar_personas: si se muestran los análisis por operador y químico (Sistema › Equipos de trabajo). No es un
@@ -131,6 +133,7 @@ class Planta(Base):
     omega_licor_objetivo_pct: Mapped[float | None] = mapped_column(Float)
     omega_fp_pct: Mapped[float | None] = mapped_column(Float)
     caudal_aspersores_lh: Mapped[float | None] = mapped_column(Float)
+    eficiencia_ref_rango_pct: Mapped[float | None] = mapped_column(Float)
     tolerancia_calibre_pct: Mapped[float | None] = mapped_column(Float)
     mostrar_personas: Mapped[bool | None] = mapped_column(Boolean)
 

@@ -22,6 +22,7 @@ from core.limites import VARIABLES_CONTROL
 from core.models import Alerta, Planta
 from filtros import barra_filtros, filtros_elegidos, motor, planta_elegida
 from graficos import carta_alerta
+from presentacion import en_presentacion
 
 st.set_page_config(page_title="Alertas", layout="wide")
 cartel_modo_prueba()
@@ -115,35 +116,38 @@ st.dataframe(datos.assign(fecha_hora=datos["fecha_hora"].dt.strftime("%d/%m/%Y %
     .style.format(precision=3, decimal=",", na_rep="—"), hide_index=True)
 st.caption("Para corregir un dato, buscá su ronda en la página Datos (la alerta se reevalúa sola).")
 
-with st.form("alertas_seguimiento"):
-    st.markdown("**Seguimiento**")
-    causa_nueva = st.text_area("Causa", value=causa_actual)
-    accion_nueva = st.text_area("Acción", value=accion_actual)
-    comentario_nuevo = st.text_area("Comentario", value=comentario_actual)
-    if st.form_submit_button("Guardar seguimiento", disabled=not usuario):
-        with crear_sesion(motor()) as sesion:
-            n = guardar_seguimiento(sesion, alerta_id, usuario, datetime.now(), causa_nueva, accion_nueva,
-                                    comentario_nuevo)
-        st.session_state["_resultado_alertas"] = f"Seguimiento guardado ({n} campo(s) cambiado(s))."
-        st.rerun()
-
-siguientes = SIGUIENTES.get(estado, ())
-if siguientes:
-    columnas = st.columns(len(siguientes) + 2)
-    motivo = columnas[0].text_input("Motivo (opcional)", key=f"alertas_motivo_{alerta_id}")
-    for donde, nuevo in zip(columnas[1:], siguientes):
-        if donde.button("En análisis" if nuevo == "en análisis" else "Cerrar", key=f"alertas_{nuevo}_{alerta_id}",
-                        disabled=not usuario, type="primary" if nuevo == "cerrada" else "secondary"):
-            with crear_sesion(motor()) as sesion:
-                cambiar_estado(sesion, alerta_id, nuevo, usuario, datetime.now(), motivo or None)
-            st.session_state["_resultado_alertas"] = f"La alerta pasó a «{nuevo}»."
-            st.rerun()
-elif estado == "histórico":
-    st.caption("Alerta histórico: no cambia de estado (sí acepta causa, acción y comentario).")
+if en_presentacion():
+    st.caption("Modo presentación: el seguimiento y los cambios de estado no se muestran.")
 else:
-    st.caption("Alerta cerrada: no se reabre (si vuelve a pasar, se crea otra). Sí acepta comentarios.")
-if not usuario:
-    st.info("Completá «Usuario» en la barra lateral para guardar cambios.")
+    with st.form("alertas_seguimiento"):
+        st.markdown("**Seguimiento**")
+        causa_nueva = st.text_area("Causa", value=causa_actual)
+        accion_nueva = st.text_area("Acción", value=accion_actual)
+        comentario_nuevo = st.text_area("Comentario", value=comentario_actual)
+        if st.form_submit_button("Guardar seguimiento", disabled=not usuario):
+            with crear_sesion(motor()) as sesion:
+                n = guardar_seguimiento(sesion, alerta_id, usuario, datetime.now(), causa_nueva, accion_nueva,
+                                        comentario_nuevo)
+            st.session_state["_resultado_alertas"] = f"Seguimiento guardado ({n} campo(s) cambiado(s))."
+            st.rerun()
+
+    siguientes = SIGUIENTES.get(estado, ())
+    if siguientes:
+        columnas = st.columns(len(siguientes) + 2)
+        motivo = columnas[0].text_input("Motivo (opcional)", key=f"alertas_motivo_{alerta_id}")
+        for donde, nuevo in zip(columnas[1:], siguientes):
+            if donde.button("En análisis" if nuevo == "en análisis" else "Cerrar", key=f"alertas_{nuevo}_{alerta_id}",
+                            disabled=not usuario, type="primary" if nuevo == "cerrada" else "secondary"):
+                with crear_sesion(motor()) as sesion:
+                    cambiar_estado(sesion, alerta_id, nuevo, usuario, datetime.now(), motivo or None)
+                st.session_state["_resultado_alertas"] = f"La alerta pasó a «{nuevo}»."
+                st.rerun()
+    elif estado == "histórico":
+        st.caption("Alerta histórico: no cambia de estado (sí acepta causa, acción y comentario).")
+    else:
+        st.caption("Alerta cerrada: no se reabre (si vuelve a pasar, se crea otra). Sí acepta comentarios.")
+    if not usuario:
+        st.info("Completá «Usuario» en la barra lateral para guardar cambios.")
 with st.expander(f"Historial de la alerta ({len(cambios)})"):
     if cambios:
         st.dataframe(pd.DataFrame(cambios), hide_index=True)

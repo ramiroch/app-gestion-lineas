@@ -26,6 +26,7 @@ DESCRIPCION_PARAMETROS = {
     "omega_licor_objetivo_pct": "el aceite objetivo en el licor (%)",
     "omega_fp_pct": "el aceite supuesto en la fase pesada que vuelve al eBOE (%)",
     "caudal_aspersores_lh": "el agua de los aspersores (L/h)",
+    "eficiencia_ref_rango_pct": "la eficiencia de referencia del rango de fase pesada (%)",
     "tolerancia_calibre_pct": "la tolerancia de calibre entre entrada y salida (%)",
 }
 
@@ -100,6 +101,10 @@ def validar_parametros(planta: Planta, requeridos: list[str] | None = None) -> d
         if valores.get(no_negativo, 0) < 0:
             raise ParametrosIncompletos(f'La planta "{planta.nombre}" tiene {DESCRIPCION_PARAMETROS[no_negativo]} '
                                         f"negativo ({valores[no_negativo]}).")
+    if "eficiencia_ref_rango_pct" in valores and not 0 < valores["eficiencia_ref_rango_pct"] < 100:
+        raise ParametrosIncompletos(f'La planta "{planta.nombre}" tiene '
+                                    f'{DESCRIPCION_PARAMETROS["eficiencia_ref_rango_pct"]} en '
+                                    f'{valores["eficiencia_ref_rango_pct"]}: tiene que estar entre 0 y 100.')
     if {"omega_licor_objetivo_pct", "omega_fp_pct"} <= set(valores) and \
             valores["omega_licor_objetivo_pct"] <= valores["omega_fp_pct"]:
         raise ParametrosIncompletos(f'La planta "{planta.nombre}" tiene el aceite objetivo en el licor menor o igual '

@@ -25,6 +25,7 @@ from core.turnos import fecha_produccion
 from estilo import encabezado_cobrand, titulo_planta
 from filtros import PLANTA_POR_DEFECTO, fijar_filtros, motor, plantas
 from graficos import flowsheet, tendencia_semanal as grafico_tendencia
+from presentacion import en_presentacion
 
 st.set_page_config(page_title="Inicio", layout="wide")
 cartel_modo_prueba()
@@ -224,7 +225,8 @@ with derecha.container(border=True, key="tarjeta_pendientes"):
                    + f" ({rondas['hechas']} de {rondas['esperadas']} hechas).")
     else:
         st.caption(f"Turno {rondas['turno']}: rondas al día ({rondas['hechas']} de {rondas['esperadas']}).")
-    st.page_link("pages/7_Carga_Scott.py", label="Cargar una ronda de Scott", icon="🧪")
+    if not en_presentacion():                      # la carga diaria no está en el menú del modo presentación
+        st.page_link("pages/7_Carga_Scott.py", label="Cargar una ronda de Scott", icon="🧪")
     if not falta["en_temporada"]:
         pass                                          # fuera de temporada no se busca producción faltante
     elif falta["sin_produccion"]:
@@ -233,7 +235,8 @@ with derecha.container(border=True, key="tarjeta_pendientes"):
         st.caption("Producción: no hay turnos de la última semana sin cargar.")
     if falta["borradores"]:
         st.warning(f"{falta['borradores']} registro(s) de producción en borrador sin aprobar.")
-    st.page_link("pages/10_Produccion.py", label="Cargar o aprobar producción", icon="🏭")
+    if not en_presentacion():
+        st.page_link("pages/10_Produccion.py", label="Cargar o aprobar producción", icon="🏭")
 
 # ---------------------------------------------------------------- tendencia semanal
 

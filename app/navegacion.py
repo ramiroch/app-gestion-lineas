@@ -25,9 +25,18 @@ MENU = {
 }
 
 
-def paginas() -> dict[str, list]:
+OCULTAS_EN_PRESENTACION = {"Carga diaria"}   # secciones que no aparecen en el modo presentación
+
+
+def secciones(presentacion: bool = False) -> dict[str, list]:
+    """Las secciones de MENU que se muestran (en el modo presentación, sin OCULTAS_EN_PRESENTACION)."""
+    return {seccion: lista for seccion, lista in MENU.items()
+            if not (presentacion and seccion in OCULTAS_EN_PRESENTACION)}
+
+
+def paginas(presentacion: bool = False) -> dict[str, list]:
     """{sección: [st.Page]} para st.navigation, en el orden de MENU."""
     return {seccion: [st.Page(ruta, title=titulo, icon=icono, default=ruta == INICIO,
                               **({} if ruta == INICIO else {"url_path": direccion}))
                       for ruta, titulo, icono, direccion in lista]
-            for seccion, lista in MENU.items()}
+            for seccion, lista in secciones(presentacion).items()}

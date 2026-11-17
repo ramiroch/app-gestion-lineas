@@ -14,9 +14,17 @@ simplificada: omite (1 − ω_licor) y pone 0,15 % de aceite en la densidad de l
 
 - caudal_fp_balance(): el balance, con un ω_licor dado.
 - Caudal requerido: con el aceite objetivo en el licor (parámetro omega_licor_objetivo_pct).
-- Caudal coherente con lo medido: con el aceite en emulsión que midió el laboratorio en ese análisis.
-- rango_fase_pesada(): (real − requerido) / requerido × 100 (%). Negativo = menos fase pesada que la requerida.
-Parámetros de la planta (sin valor por defecto): omega_licor_objetivo_pct, omega_fp_pct y caudal_aspersores_lh.
+- Coherencia del muestreo (licor): el caudal que explicaría el aceite que midió el laboratorio en el licor de ese
+  análisis. Si queda por debajo del real, la muestra de licor sale más rica que el licor promedio. Indicador interno:
+  no es una pérdida y no se usa en otros análisis (columna "coherente").
+- rango_fase_pesada(): (real − requerido) / requerido × 100 (%). Negativo = menos fase pesada que la requerida. Es el
+  del gráfico Brown y solo se muestra contra él: como el requerido usa la eficiencia del mismo análisis, comparar la
+  eficiencia contra este rango tiene una relación matemática (circularidad).
+- Para comparar contra la eficiencia (Sistema › Volatilización y efectos principales) se usan dos variables sin esa
+  circularidad: rango_fp_ref, el mismo rango con la eficiencia fija en eficiencia_ref_rango_pct (parámetro de la
+  planta), y fp_especifica = caudal real / MTPH (m³/t).
+Parámetros de la planta (sin valor por defecto): omega_licor_objetivo_pct, omega_fp_pct, caudal_aspersores_lh y
+eficiencia_ref_rango_pct.
 """
 
 import pandas as pd
@@ -24,7 +32,7 @@ import pandas as pd
 from core.centrifugas import DENSIDAD_ACUOSA, densidad
 from core.parametros import validar_parametros
 
-PARAMETROS_FP = ["omega_licor_objetivo_pct", "omega_fp_pct", "caudal_aspersores_lh"]
+PARAMETROS_FP = ["omega_licor_objetivo_pct", "omega_fp_pct", "caudal_aspersores_lh", "eficiencia_ref_rango_pct"]
 LITROS_POR_M3 = 1000
 CLAVES_TURNO = ["fecha_produccion", "turno"]
 
@@ -86,9 +94,10 @@ def tabla_fase_pesada(pares: pd.DataFrame, parametros: dict) -> pd.DataFrame:
 
     pares: core.analisis.pares_con_emulsion() (aceite_fruta = entrada, eficiencia_par, tph = MTPH,
     caudal_fase_pesada = caudal real del laboratorio en m³/h, aceite_emulsion = aceite en el licor medido).
-    parametros: omega_licor_objetivo_pct, omega_fp_pct y caudal_aspersores_lh de la planta.
-    Agrega removido (kg/MT), requerido y coherente (m³/h) y rango_fp_pct (%). Vacíos si falta un dato (por ejemplo,
-    sin MTPH o sin emulsión) o si el balance da ≤ 0.
+    parametros: los de PARAMETROS_FP de la planta.
+    Agrega removido (kg/MT), requerido y coherente (m³/h), rango_fp_pct (%), requerido_ref (m³/h, con la eficiencia
+    fija en eficiencia_ref_rango_pct), rango_fp_ref (%) y fp_especifica (m³/t = caudal real / MTPH). Vacíos si falta un
+    dato (por ejemplo, sin MTPH o sin emulsión) o si el balance da ≤ 0.
     """
     omega_fp, agua = parametros["omega_fp_pct"], parametros["caudal_aspersores_lh"]
     datos = pares.assign(removido=pares["aceite_fruta"] * pares["eficiencia_par"])
@@ -101,7 +110,16 @@ def tabla_fase_pesada(pares: pd.DataFrame, parametros: dict) -> pd.DataFrame:
     datos.loc[datos["requerido"] <= 0, "requerido"] = None
     datos.loc[datos["coherente"] <= 0, "coherente"] = None
     rango = [rango_fase_pesada(real, req) for real, req in zip(datos["caudal_fase_pesada"], datos["requerido"])]
-    return datos.assign(rango_fp_pct=pd.Series(rango, index=datos.index, dtype=float))
+    eficiencia_ref = parametros["eficiencia_ref_rango_pct"] / 100
+    requerido_ref = [_o_nada(caudal_fp_balance, m, entrada * eficiencia_ref, parametros["omega_licor_objetivo_pct"],
+                             omega_fp, agua) for m, entrada in zip(datos["tph"], datos["aceite_fruta"])]
+    datos = datos.assign(rango_fp_pct=pd.Series(rango, index=datos.index, dtype=float),
+                         requerido_ref=pd.Series(requerido_ref, index=datos.index, dtype=float))
+    datos.loc[datos["requerido_ref"] <= 0, "requerido_ref"] = None
+    rango_ref = [rango_fase_pesada(real, req) for real, req in zip(datos["caudal_fase_pesada"], datos["requerido_ref"])]
+    mtph = datos["tph"].where(datos["tph"] > 0)
+    return datos.assign(rango_fp_ref=pd.Series(rango_ref, index=datos.index, dtype=float),
+                        fp_especifica=datos["caudal_fase_pesada"] / mtph)
 
 
 def parametros_fase_pesada(planta) -> dict:

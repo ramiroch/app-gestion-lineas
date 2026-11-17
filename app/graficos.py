@@ -904,10 +904,36 @@ def intervalos_agrupados(tabla: pd.DataFrame, titulo_y: str, unidad: str, decima
                                 sub["n"].map(lambda v: numero(v, 0)))),
             hovertemplate=f"<b>{temporada} · %{{x}}</b><br>Media %{{customdata[0]}} {unidad}<br>IC 95 %: "
                           f"%{{customdata[1]}} a %{{customdata[2]}} {unidad}<br>N %{{customdata[3]}}<extra></extra>")
-    margen = (tabla["ic_sup"].max() - tabla["ic_inf"].min()) * 0.15 or 1
-    figura.update_layout(scattermode="group", yaxis=dict(title=titulo_y, range=[tabla["ic_inf"].min() - margen,
-                                                                               tabla["ic_sup"].max() + margen]),
+    abajo = min(tabla["ic_inf"].min(), tabla["media"].min())      # con la media: un grupo sin IC no queda afuera
+    arriba = max(tabla["ic_sup"].max(), tabla["media"].max())
+    margen = (arriba - abajo) * 0.15 or 1
+    figura.update_layout(scattermode="group", yaxis=dict(title=titulo_y, range=[abajo - margen, arriba + margen]),
                          xaxis=dict(type="category", title=titulo_x, categoryorder="array", categoryarray=orden))
+    return estilo(figura, ALTURA_CHICA)
+
+
+def dispersion_por_temporada(datos: pd.DataFrame, x: str, y: str, titulo_x: str, titulo_y: str, unidad_x: str,
+                             unidad_y: str, decimales_x: int = 2, decimales_y: int = 1, n: str | None = None
+                             ) -> go.Figure:
+    """Un punto por fila (por ejemplo, por día de producción), con un color por temporada. n: columna con el N de cada
+    punto (los de N < 3 se ven tenues). Tooltip con el día, los dos valores y el N."""
+    figura = go.Figure()
+    validos = datos.dropna(subset=[x, y])
+    for k, (temporada, sub) in enumerate(validos.groupby("temporada", sort=True)):
+        color = PALETA[k % len(PALETA)]
+        chicos = (sub[n] < 3).tolist() if n else [False] * len(sub)
+        figura.add_scatter(
+            x=sub[x], y=sub[y], mode="markers", name=str(temporada),
+            marker=dict(size=8, color=color, opacity=[0.3 if c else 0.85 for c in chicos],
+                        line=dict(color="white", width=1)),
+            customdata=list(zip(sub["fecha_produccion"].dt.strftime("%d/%m/%Y"),
+                                sub[x].map(lambda v: numero(v, decimales_x)),
+                                sub[y].map(lambda v: numero(v, decimales_y)),
+                                (sub[n].map(lambda v: f"<br>N {numero(v, 0)}") if n else pd.Series("", index=sub.index)),
+                                ["<br><b>⚠ N < 3</b>" if c else "" for c in chicos])),
+            hovertemplate=f"<b>%{{customdata[0]}}</b><br>{titulo_x}: %{{customdata[1]}} {unidad_x}<br>{titulo_y}: "
+                          f"%{{customdata[2]}} {unidad_y}%{{customdata[3]}}%{{customdata[4]}}<extra></extra>")
+    figura.update_layout(xaxis_title=f"{titulo_x} ({unidad_x})", yaxis_title=f"{titulo_y} ({unidad_y})")
     return estilo(figura, ALTURA_CHICA)
 
 

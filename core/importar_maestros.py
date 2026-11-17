@@ -39,7 +39,8 @@ COLUMNAS = {
                "factor_aceite_emulsion", "hora_inicio_dia", "blanco_centrifugas_ml",
                "umbral_paralelo_lh", "turnos_fin_episodio", "turnos_para_alertar", "sigma_alerta_inmediata",
                "horas_rondas", "tolerancia_fp_verde_pct", "tolerancia_fp_amarillo_pct", "omega_licor_objetivo_pct",
-               "omega_fp_pct", "caudal_aspersores_lh", "tolerancia_calibre_pct", "mostrar_personas"],
+               "omega_fp_pct", "caudal_aspersores_lh", "tolerancia_calibre_pct", "mostrar_personas",
+               "eficiencia_ref_rango_pct"],
     "Turno": ["cliente", "planta", "nombre", "hora_inicio", "hora_fin"],
     "Linea": ["cliente", "planta", "nombre"],
     "Equipo": ["codigo", "cliente", "planta", "linea", "nombre", "tipo", "numero", "modelo",
@@ -240,6 +241,7 @@ def _fila_planta(sesion: Session, datos: dict):
         "omega_licor_objetivo_pct": _numero(datos, "omega_licor_objetivo_pct"),
         "omega_fp_pct": _numero(datos, "omega_fp_pct"),
         "caudal_aspersores_lh": _numero(datos, "caudal_aspersores_lh"),
+        "eficiencia_ref_rango_pct": _numero(datos, "eficiencia_ref_rango_pct"),
         "tolerancia_calibre_pct": _numero(datos, "tolerancia_calibre_pct"),
         "mostrar_personas": _si_no(datos["mostrar_personas"], por_defecto=False),
     }
