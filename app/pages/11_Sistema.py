@@ -20,9 +20,9 @@ import streamlit as st
 from cartel import cartel_modo_prueba
 from core.analisis import filtrar, pares_con_emulsion
 from core.analisis_centrifugas import filtrar_centrifugas
-from core.efectos import (CARGAS, EXPLICACION_MEDIA_AJUSTADA, NOMBRES, RESPUESTAS, captado_por_turno, correlaciones,
-                          datos_por_turno, frase_quiebre, modelo_efectos, modelo_interaccion, orden_de_niveles, por_mtph,
-                          preparar_datos, quiebres_por_temporada)
+from core.efectos import (AYUDA_CAPTADO, CARGAS, EXPLICACION_MEDIA_AJUSTADA, NOMBRES, RESPUESTAS, captado_por_turno,
+                          correlaciones, datos_por_turno, frase_quiebre, modelo_efectos, modelo_interaccion,
+                          orden_de_niveles, por_mtph, preparar_datos, segmentada_por_temporada)
 from core.inicio import SIN_EMULSION
 from core.estadistica import es_outlier_iqr
 from core.fase_pesada import CLAVES_TURNO, mediana_por, tabla_fase_pesada
@@ -264,10 +264,16 @@ def datos_para_modelo(parametros: dict, clave: str, respuesta: str) -> pd.DataFr
     if RESPUESTAS[respuesta]["por_turno"]:
         _, balance = centrifugas_planta(planta_elegida())
         balance = filtrar_centrifugas(balance, filtros_elegidos()) if not balance.empty else balance
-        st.caption("Aceite captado por las primarias (kg/MT) = aceite de la fase liviana de las primarias en marcha "
-                   "(kg/h, balance de cada muestreo sin los copiados; mediana de cada primaria en el turno, sumadas) / "
-                   "MTPH total de los eBOE del turno. Un registro por turno.")
-        return datos_por_turno(preparar_datos(tabla_fase_pesada(pares, parametros)), captado_por_turno(balance))
+        st.caption("Aceite captado = aceite de la fase liviana de las primarias en marcha (kg/h, balance de cada "
+                   "muestreo sin los copiados; mediana de cada primaria en el turno, sumadas). En %: dividido por el "
+                   "aceite removido por los eBOE (Σ MTPH × aceite en fruta de entrada × eficiencia, kg/h). En kg/MT: "
+                   "dividido por la MTPH total de los eBOE. Un registro por turno.")
+        turnos = datos_por_turno(preparar_datos(tabla_fase_pesada(pares, parametros)), captado_por_turno(balance))
+        if respuesta == "captado_pct" and not turnos.empty:
+            mas_de_100 = int((turnos["captado_pct"] > 100).sum())
+            st.caption(f"{numero(mas_de_100, 0)} de {numero(int(turnos['captado_pct'].notna().sum()), 0)} turnos con "
+                       "más de 100 % captado (error de medición): se marcan, no se excluyen.")
+        return turnos
     incluir = casilla_repetidas(f"{clave}_repetidas")
     if not incluir:
         pares = sin_entradas_repetidas(pares)
@@ -276,8 +282,19 @@ def datos_para_modelo(parametros: dict, clave: str, respuesta: str) -> pd.DataFr
 
 
 def elegir_respuesta(clave: str) -> str:
-    return st.radio("Respuesta", list(RESPUESTAS), horizontal=True, key=clave,
-                    format_func=lambda r: f"{RESPUESTAS[r]['nombre']} ({RESPUESTAS[r]['unidad']})")
+    """Eficiencia eBOE, aceite en salida o aceite captado por las primarias (en %, por defecto, o en kg/MT)."""
+    opcion = st.radio("Respuesta", ["eficiencia_pct", "aceite_salida", "captado"], horizontal=True, key=clave,
+                      format_func=lambda r: "Aceite captado por las primarias" if r == "captado" else
+                      f"{RESPUESTAS[r]['nombre']} ({RESPUESTAS[r]['unidad']})")
+    if opcion != "captado":
+        return opcion
+    medida = st.radio("Aceite captado", ["captado_pct", "captado_kg_mt"], horizontal=True, key=f"{clave}_captado",
+                      format_func=lambda r: {"captado_pct": "% del aceite removido por los eBOE",
+                                             "captado_kg_mt": "kg por tonelada de fruta"}[r])
+    if medida == "captado_pct":
+        st.caption(AYUDA_CAPTADO + " Más de 100 % no es físico: indica error de medición (se cuentan abajo y no se "
+                   "borran).")
+    return medida
 
 
 def tabla_correlaciones(tabla: pd.DataFrame) -> pd.DataFrame:
@@ -392,6 +409,21 @@ def pestana_efectos(registro: Descargas) -> None:
         f"Interacción - {nombre}")
 
 
+def mostrar_quiebres(registro: Descargas, quiebres: pd.DataFrame, respuesta: str, titulo: str) -> None:
+    """Frases y tabla de los quiebres por temporada (core.efectos.segmentada_por_temporada)."""
+    for fila in quiebres.to_dict("records"):
+        st.markdown("- " + frase_quiebre(fila, respuesta))
+    unidad_pendiente = "puntos" if RESPUESTAS[respuesta]["unidad"] == "%" else RESPUESTAS[respuesta]["unidad"]
+    registro.tabla(pd.DataFrame({
+        "Temporada": quiebres["temporada"].astype(str), "Quiebre (MTPH)": quiebres["quiebre"].map(lambda v: numero(v, 0)),
+        f"Pendiente antes ({unidad_pendiente}/MTPH)": quiebres["pendiente_antes"].map(lambda v: numero(v, 3)),
+        f"Pendiente después ({unidad_pendiente}/MTPH)": quiebres["pendiente_despues"].map(lambda v: numero(v, 3)),
+        "p del cambio": quiebres["p_cambio"].map(lambda v: "—" if pd.isna(v) else texto_p(v)),
+        "p después": quiebres["p_despues"].map(lambda v: "—" if pd.isna(v) else texto_p(v)),
+        "N": quiebres["n"].map(lambda v: numero(v, 0)), "N después": quiebres["n_despues"].map(lambda v: numero(v, 0))}),
+        titulo)
+
+
 def pestana_umbral(registro: Descargas) -> None:
     try:
         parametros = parametros_fase_pesada_planta(planta_elegida())
@@ -405,27 +437,24 @@ def pestana_umbral(registro: Descargas) -> None:
     if base.dropna(subset=["tph", respuesta]).empty:
         st.info("No hay datos con MTPH con estos filtros.")
         return
-    quiebres = quiebres_por_temporada(base, respuesta)
-    registro.grafico(curva_mtph(por_mtph(base, respuesta, por=None), quiebres, nombre, unidad, decimales),
-                     f"{nombre} por MTPH")
-    st.caption("Media e IC 95 % de cada MTPH (redondeada a la unidad), los eBOE juntos; tenues con N < 3. Línea "
-               "punteada: el punto de quiebre de cada temporada. Sin ajustar por los demás factores (ver Efectos "
-               "principales).")
-    st.markdown("##### Punto de quiebre por temporada")
-    for fila in quiebres.to_dict("records"):
-        st.markdown("- " + frase_quiebre(fila, respuesta))
-    unidad_pendiente = "puntos" if unidad == "%" else unidad
-    registro.tabla(pd.DataFrame({
-        "Temporada": quiebres["temporada"].astype(str), "Quiebre (MTPH)": quiebres["quiebre"].map(lambda v: numero(v, 0)),
-        f"Pendiente antes ({unidad_pendiente}/MTPH)": quiebres["pendiente_antes"].map(lambda v: numero(v, 3)),
-        f"Pendiente después ({unidad_pendiente}/MTPH)": quiebres["pendiente_despues"].map(lambda v: numero(v, 3)),
-        "p del cambio": quiebres["p_cambio"].map(lambda v: "—" if pd.isna(v) else texto_p(v)),
-        "p después": quiebres["p_despues"].map(lambda v: "—" if pd.isna(v) else texto_p(v)),
-        "N": quiebres["n"].map(lambda v: numero(v, 0)), "N después": quiebres["n_despues"].map(lambda v: numero(v, 0))}),
-        f"Quiebre de MTPH - {nombre}")
+    ajustados, ajustada = segmentada_por_temporada(base, respuesta, ajustado=True)
+    st.markdown("##### Ajustado por programa, aceite en fruta, calibre, mes, turno" +
+                (" y eBOE" if not info["por_turno"] else ""))
+    registro.grafico(curva_mtph(por_mtph(base.assign(_ajustada=ajustada), "_ajustada", por=None), ajustados,
+                                f"{nombre} ajustada", unidad, decimales), f"{nombre} ajustada por MTPH")
+    st.caption("Respuesta ajustada (residuo parcial): sin el efecto de los demás factores, estimado en el mismo modelo "
+               "segmentado. Media e IC 95 % de cada MTPH (redondeada a la unidad), los eBOE juntos; tenues con N < 3. "
+               "Línea punteada: el punto de quiebre de cada temporada.")
+    mostrar_quiebres(registro, ajustados, respuesta, f"Quiebre de MTPH ajustado - {nombre}")
     st.caption("Regresión segmentada: se prueba cada MTPH entera de 10 a 18 como quiebre (con al menos 10 datos de "
-               "cada lado) y se elige la de menor error. p del cambio: ¿la pendiente cambia en el quiebre? p después: "
-               "¿por encima del quiebre la respuesta sube o baja con la MTPH?")
+               "cada lado) y se elige la de menor error. Los demás factores entran en el mismo modelo, así la pendiente "
+               "no se confunde con ellos (por ejemplo, con programas más agresivos a más MTPH). p del cambio: ¿la "
+               "pendiente cambia en el quiebre? p después: ¿por encima del quiebre la respuesta sube o baja?")
+    with st.expander("Sin ajustar"):
+        crudos, _ = segmentada_por_temporada(base, respuesta, ajustado=False)
+        registro.grafico(curva_mtph(por_mtph(base, respuesta, por=None), crudos, nombre, unidad, decimales),
+                         f"{nombre} por MTPH sin ajustar")
+        mostrar_quiebres(registro, crudos, respuesta, f"Quiebre de MTPH sin ajustar - {nombre}")
     if not info["por_turno"]:
         with st.expander("Por eBOE"):
             tabla = por_mtph(base, respuesta, por="eboe")

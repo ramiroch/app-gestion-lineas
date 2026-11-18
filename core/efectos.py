@@ -19,8 +19,13 @@ aceite captado por las primarias, un registro por turno (datos_por_turno).
   específica ≥ REGIMEN_UMBRAL m³/t o menos), con el p de la interacción y las medias ajustadas de cada celda.
 - quiebre(): regresión segmentada y = a + b₁·x + b₂·máx(0, x − q), probando cada MTPH entera entre 10 y 18 y
   eligiendo la de menor error; pendiente antes (b₁) y después (b₁ + b₂), p del cambio (b₂) y de la pendiente después.
-- aceite captado por las primarias (kg/MT) = aceite de la fase liviana de las primarias en marcha (kg/h, del balance
-  de cada muestreo, sin muestreos copiados; mediana por primaria en el turno, sumadas) / MTPH total de los eBOE.
+- Aceite captado por las primarias, por turno. Aceite de la fase liviana de las primarias en marcha (kg/h, del
+  balance de cada muestreo, sin muestreos copiados; mediana por primaria en el turno, sumadas), dividido:
+  · captado % = por el aceite removido por los eBOE (Σ de cada eBOE en marcha: MTPH × aceite en fruta de entrada ×
+    eficiencia, kg/h) × 100. Del aceite que sacaron los rolos, cuánto llegó a la fase liviana.
+  · captado kg/MT = por la MTPH total de los eBOE.
+- segmentada_por_temporada(ajustado=True): la regresión segmentada con programa, aceite en fruta, calibre, mes, turno
+  y eBOE dentro del mismo modelo (dentro de cada temporada), y el residuo parcial para dibujarla.
 """
 
 import re
@@ -51,9 +56,13 @@ N_MINIMO_LADO = 10                                        # datos mínimos de ca
 RESPUESTAS = {
     "eficiencia_pct": {"nombre": "Eficiencia eBOE", "unidad": "%", "decimales": 1, "por_turno": False},
     "aceite_salida": {"nombre": "Aceite en fruta de salida", "unidad": "kg/MT", "decimales": 2, "por_turno": False},
-    "captado_kg_mt": {"nombre": "Aceite captado por las primarias", "unidad": "kg/MT", "decimales": 2,
+    "captado_pct": {"nombre": "Aceite captado por las primarias", "unidad": "%", "decimales": 1, "por_turno": True},
+    "captado_kg_mt": {"nombre": "Aceite captado por las primarias (por tonelada)", "unidad": "kg/MT", "decimales": 2,
                       "por_turno": True},
 }
+AYUDA_CAPTADO = ("Del aceite que sacaron los rolos, cuánto llegó a la fase liviana. Lo que falta se perdió entre el BOE "
+                 "y las centrífugas (aire, esponja, purgas) o es error de medición.")
+FACTORES_AJUSTE = ["programa_grupo", "aceite_rango", "calibre", "mes", "turno", "eboe"]   # el umbral, sin la MTPH
 NOMBRES = {"programa_grupo": "Programa", "mtph_rango": "MTPH", "fp_rango": "Fase pesada específica",
            "aceite_rango": "Aceite en fruta de entrada", "calibre": "Calibre (frutos en 10 kg)", "mes": "Mes",
            "turno": "Turno", "eboe": "eBOE", "temporada": "Temporada", "regimen": "Régimen de agua"}
@@ -123,13 +132,17 @@ def preparar_datos(tabla: pd.DataFrame) -> pd.DataFrame:
 
 def captado_por_turno(balance: pd.DataFrame) -> pd.DataFrame:
     """Aceite captado por las primarias en cada turno (kg/h): aceite de la fase liviana (caudal × ρ × aceite,
-    core.centrifugas.aceite_perdido_kgh) de cada muestreo con balance, sin los copiados; mediana de cada primaria
-    en el turno y suma de las primarias. Columnas: fecha_produccion, turno, captado_kgh, n_muestreos."""
+    core.centrifugas.aceite_perdido_kgh) de cada muestreo con balance, sin los copiados ni los fuera de rango físico
+    (caudal de fase liviana ≤ 0 o eficiencia imposible); mediana de cada primaria en el turno y suma de las primarias.
+    Columnas: fecha_produccion, turno, captado_kgh, n_muestreos."""
     columnas = CLAVES_TURNO + ["captado_kgh", "n_muestreos"]
     if balance.empty:
         return pd.DataFrame(columns=columnas)
-    validos = balance[(balance["tipo"] == PRIMARIA) & ~balance["copiada"].fillna(False).astype(bool)
-                      & balance["caudal_liviana"].notna() & balance["aceite_liviana"].notna()]
+    fuera = (balance["fuera_fisico"].fillna(False).astype(bool) if "fuera_fisico" in balance
+             else pd.Series(False, index=balance.index))
+    validos = balance[(balance["tipo"] == PRIMARIA) & ~balance["copiada"].fillna(False).astype(bool) & ~fuera
+                      & (pd.to_numeric(balance["caudal_liviana"], errors="coerce") > 0)
+                      & balance["aceite_liviana"].notna()]
     if validos.empty:
         return pd.DataFrame(columns=columnas)
     validos = validos.assign(captado_kgh=[aceite_perdido_kgh(c, a / 100) for c, a in
@@ -141,13 +154,17 @@ def captado_por_turno(balance: pd.DataFrame) -> pd.DataFrame:
 
 
 def datos_por_turno(datos: pd.DataFrame, captado: pd.DataFrame) -> pd.DataFrame:
-    """Un registro por turno con el aceite captado por las primarias (kg/MT) y los factores del turno: MTPH (media de
-    los eBOE), fase pesada específica (mediana), aceite en fruta y calibre (medias) y programa más usado. datos:
-    preparar_datos(); captado: captado_por_turno(). captado_kg_mt = captado_kgh / MTPH total (suma de la MTPH media
-    de cada eBOE en marcha en el turno)."""
+    """Un registro por turno con el aceite captado por las primarias y los factores del turno: MTPH (media de los
+    eBOE), fase pesada específica (mediana), aceite en fruta y calibre (medias) y programa más usado. datos:
+    preparar_datos() (con removido = entrada × eficiencia, kg/MT); captado: captado_por_turno(). De cada eBOE en
+    marcha en el turno: su MTPH media y su removido medio. mtph_total = Σ MTPH; removido_kgh = Σ MTPH × removido;
+    captado_pct = captado_kgh / removido_kgh × 100; captado_kg_mt = captado_kgh / mtph_total."""
     if datos.empty or captado.empty:
-        return pd.DataFrame(columns=CLAVES_TURNO + ["captado_kg_mt"])
-    por_eboe = datos.groupby(CLAVES_TURNO + ["eboe"])["tph"].mean().groupby(CLAVES_TURNO).sum().rename("mtph_total")
+        return pd.DataFrame(columns=CLAVES_TURNO + ["captado_pct", "captado_kg_mt"])
+    eboes = datos.groupby(CLAVES_TURNO + ["eboe"]).agg(tph=("tph", "mean"), removido=("removido", "mean"))
+    eboes["removido_kgh"] = eboes["tph"] * eboes["removido"]
+    por_eboe = eboes.groupby(CLAVES_TURNO).agg(mtph_total=("tph", "sum"),
+                                               removido_kgh=("removido_kgh", lambda s: s.sum(min_count=1)))
     turnos = datos.groupby(CLAVES_TURNO).agg(
         temporada=("temporada", "first"), tph=("tph", "mean"), fp_especifica=("fp_especifica", "median"),
         aceite_fruta=("aceite_fruta", "mean"), frutos_10kg=("frutos_10kg", "mean"),
@@ -156,6 +173,7 @@ def datos_por_turno(datos: pd.DataFrame, captado: pd.DataFrame) -> pd.DataFrame:
     captado = captado.assign(fecha_produccion=pd.to_datetime(captado["fecha_produccion"]))
     unidos = turnos.merge(captado, on=CLAVES_TURNO, how="inner")
     unidos["captado_kg_mt"] = unidos["captado_kgh"] / unidos["mtph_total"].where(unidos["mtph_total"] > 0)
+    unidos["captado_pct"] = unidos["captado_kgh"] / unidos["removido_kgh"].where(unidos["removido_kgh"] > 0) * 100
     return _categorias(unidos)
 
 
@@ -363,42 +381,78 @@ def por_mtph(datos: pd.DataFrame, respuesta: str, por: str | None = "eboe") -> p
     return pd.DataFrame(filas, columns=["temporada", "grupo", "mtph", "n", "media", "ic_inf", "ic_sup"])
 
 
-def quiebre(x, y, candidatos=QUIEBRES, minimo_lado: int = N_MINIMO_LADO) -> dict | None:
-    """Regresión segmentada y = a + b₁·x + b₂·máx(0, x − q): prueba cada q de `candidatos` (con al menos minimo_lado
-    datos de cada lado) y elige el de menor suma de cuadrados del error. Devuelve quiebre, pendiente_antes (b₁),
-    pendiente_despues (b₁ + b₂), p_cambio (de b₂: ¿cambia la pendiente?), p_despues (¿la pendiente después es ≠ 0?),
-    r2, n y n_despues (datos con x > q). None si ningún candidato tiene datos suficientes de los dos lados."""
-    tabla = pd.DataFrame({"x": pd.to_numeric(pd.Series(x), errors="coerce"),
-                          "y": pd.to_numeric(pd.Series(y), errors="coerce")}).dropna()
+def quiebre(x, y, candidatos=QUIEBRES, minimo_lado: int = N_MINIMO_LADO,
+            covariables: pd.DataFrame | None = None) -> dict | None:
+    """Regresión segmentada y = a + b₁·x + b₂·máx(0, x − q) [+ covariables]: prueba cada q de `candidatos` (con al
+    menos minimo_lado datos de cada lado) y elige el de menor suma de cuadrados del error. covariables: columnas
+    numéricas (por ejemplo, variables indicadoras de los factores) que entran en el mismo modelo, así las pendientes
+    quedan ajustadas por ellas. Devuelve quiebre, pendiente_antes (b₁), pendiente_despues (b₁ + b₂), p_cambio (de b₂:
+    ¿cambia la pendiente?), p_despues (¿la pendiente después es ≠ 0?), r2, n, n_despues (datos con x > q) y ajustada
+    (y sin el efecto de las covariables más su media, con el índice de x: el residuo parcial para dibujar contra x).
+    None si ningún candidato tiene datos suficientes de los dos lados."""
+    x, y = pd.Series(x), pd.Series(y)
+    indice = x.index
+    tabla = pd.DataFrame({"x": pd.to_numeric(x, errors="coerce").values, "y": pd.to_numeric(y, errors="coerce").values})
+    extra = (covariables.reset_index(drop=True).astype(float) if covariables is not None
+             else pd.DataFrame(index=tabla.index))
+    nombres = list(extra.columns)
+    tabla = pd.concat([tabla, extra], axis=1).dropna()
     mejor = None
     for q in candidatos:
         despues = int((tabla["x"] > q).sum())
         if despues < minimo_lado or len(tabla) - despues < minimo_lado:
             continue
-        matriz = sm.add_constant(pd.DataFrame({"x": tabla["x"], "bisagra": (tabla["x"] - q).clip(lower=0)}))
+        matriz = sm.add_constant(pd.concat([tabla[["x"]], (tabla["x"] - q).clip(lower=0).rename("bisagra"),
+                                            tabla[nombres]], axis=1), has_constant="add")
         modelo = sm.OLS(tabla["y"], matriz).fit()
         if mejor is None or modelo.ssr < mejor[1].ssr:
             mejor = (q, modelo, despues)
     if mejor is None:
         return None
     q, modelo, despues = mejor
+    efecto = (tabla[nombres] @ modelo.params[nombres]) if nombres else pd.Series(0.0, index=tabla.index)
+    ajustada = pd.Series((tabla["y"] - efecto + efecto.mean()).values, index=indice[tabla.index])
     pendiente_despues = modelo.t_test("x + bisagra = 0")
     return {"quiebre": q, "pendiente_antes": float(modelo.params["x"]),
             "pendiente_despues": float(modelo.params["x"] + modelo.params["bisagra"]),
             "p_cambio": float(modelo.pvalues["bisagra"]), "p_despues": float(pendiente_despues.pvalue),
-            "r2": float(modelo.rsquared), "n": len(tabla), "n_despues": despues}
+            "r2": float(modelo.rsquared), "n": len(tabla), "n_despues": despues, "ajustada": ajustada}
 
 
-def quiebres_por_temporada(datos: pd.DataFrame, respuesta: str) -> pd.DataFrame:
-    """quiebre() de la respuesta contra la MTPH en cada temporada. Columnas: temporada y las de quiebre() (vacías si
-    no hay datos suficientes de los dos lados de ningún candidato)."""
+def _indicadoras(datos: pd.DataFrame, factores: list[str]) -> pd.DataFrame:
+    """Variables indicadoras (0/1) de los factores, sin el primer nivel de cada uno."""
+    if not factores:
+        return pd.DataFrame(index=datos.index)
+    return pd.get_dummies(datos[factores].astype(str), drop_first=True, dtype=float)
+
+
+def segmentada_por_temporada(datos: pd.DataFrame, respuesta: str, ajustado: bool = True
+                             ) -> tuple[pd.DataFrame, pd.Series]:
+    """quiebre() de la respuesta contra la MTPH en cada temporada. ajustado=True: los FACTORES_AJUSTE (programa,
+    aceite en fruta, calibre, mes, turno y eBOE, los que varían en la temporada) entran en el mismo modelo
+    segmentado, así las pendientes no se confunden con ellos. (Ajustar solo la respuesta, con los residuos de un
+    modelo sin MTPH, achica la pendiente cuando la MTPH está correlacionada con esos factores.) Devuelve la tabla
+    (temporada y las columnas de quiebre(), vacías si no hay datos suficientes) y la respuesta ajustada de cada
+    registro (residuo parcial; sin ajustar, la respuesta tal cual), para dibujarla por MTPH."""
     columnas = ["temporada", "quiebre", "pendiente_antes", "pendiente_despues", "p_cambio", "p_despues", "r2", "n",
                 "n_despues"]
-    filas = []
+    filas, ajustada = [], pd.Series(np.nan, index=datos.index, dtype=float)
     for temporada, sub in datos.dropna(subset=["tph", respuesta]).groupby("temporada", sort=True):
-        resultado = quiebre(sub["tph"], sub[respuesta])
-        filas.append({"temporada": temporada, **(resultado or {"n": len(sub)})})
-    return pd.DataFrame(filas, columns=columnas)
+        factores = [f for f in FACTORES_AJUSTE if ajustado and f in sub and sub[f].nunique() > 1]
+        sub = sub.dropna(subset=factores)
+        resultado = quiebre(sub["tph"], sub[respuesta], covariables=_indicadoras(sub, factores))
+        if resultado is None:
+            filas.append({"temporada": temporada, "n": len(sub)})
+            continue
+        serie = resultado.pop("ajustada")
+        ajustada.loc[serie.index] = serie.values
+        filas.append({"temporada": temporada, **resultado})
+    return pd.DataFrame(filas, columns=columnas), ajustada
+
+
+def quiebres_por_temporada(datos: pd.DataFrame, respuesta: str, ajustado: bool = False) -> pd.DataFrame:
+    """La tabla de segmentada_por_temporada() (sin ajustar por defecto)."""
+    return segmentada_por_temporada(datos, respuesta, ajustado)[0]
 
 
 def frase_quiebre(fila: dict, respuesta: str, alfa: float = ALFA) -> str:

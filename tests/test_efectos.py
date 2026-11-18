@@ -127,13 +127,34 @@ def test_quiebre_conocido():
     assert tabla["quiebre"].tolist() == [13]
 
 
+def test_quiebre_ajustado_por_los_demas_factores():
+    """El programa alto se usa más con MTPH alta y sube la eficiencia 4 puntos: sin ajustar tapa la caída por encima
+    de 13 MTPH; ajustado por el programa aparece la pendiente real (−2 puntos por MTPH)."""
+    azar = np.random.default_rng(3)
+    x = np.repeat(np.arange(9, 19, 0.5), 30)
+    alto = azar.random(len(x)) < (x - 8) / 11                    # más programa alto a más MTPH
+    y = 85 + 4 * alto - 2 * np.clip(x - 13, 0, None) + azar.normal(0, 0.3, len(x))
+    datos = pd.DataFrame({"temporada": "2026", "tph": x, "eficiencia_pct": y,
+                          "programa_grupo": np.where(alto, "N6–N9", "N0–N3")})
+    ajustado = quiebres_por_temporada(datos, "eficiencia_pct", ajustado=True).iloc[0]
+    crudo = quiebres_por_temporada(datos, "eficiencia_pct").iloc[0]
+    assert ajustado["quiebre"] == 13 and ajustado["pendiente_despues"] == pytest.approx(-2, abs=0.2)
+    assert ajustado["pendiente_antes"] == pytest.approx(0, abs=0.2)
+    assert crudo["pendiente_antes"] > 0.2                         # sin ajustar, el programa la hace subir
+    assert crudo["pendiente_despues"] > -1.8                      # y achica la caída
+
+
 def test_aceite_captado_por_turno():
     dia = pd.Timestamp("2026-07-01")
     balance = pd.DataFrame({
         "fecha_produccion": [dia] * 4, "turno": ["M"] * 4, "tipo": ["Centrífuga primaria"] * 3 + ["Pulidora"],
         "equipo": ["ESE 230 (1)", "ESE 230 (1)", "ESE 230 (2)", "OSD 60"],
         "caudal_liviana": [200.0, 300.0, 250.0, 100.0], "aceite_liviana": [80.0, 80.0, 70.0, 99.0],
-        "copiada": [False, False, True, False]})
+        "copiada": [False, False, True, False], "fuera_fisico": False})
+    fuera = pd.DataFrame({"fecha_produccion": [dia] * 2, "turno": ["M"] * 2, "tipo": ["Centrífuga primaria"] * 2,
+                          "equipo": ["ESE 230 (2)"] * 2, "caudal_liviana": [-50.0, 400.0], "aceite_liviana": [75.0, 75.0],
+                          "copiada": False, "fuera_fisico": [False, True]})
+    balance = pd.concat([balance, fuera], ignore_index=True)       # caudal negativo y fuera de rango: no entran
     captado = captado_por_turno(balance)
     densidad = 0.852 * 0.8 + 0.997 * 0.2
     assert captado["captado_kgh"].iloc[0] == pytest.approx(250 * 0.8 * densidad)      # mediana; sin la copiada
@@ -141,9 +162,12 @@ def test_aceite_captado_por_turno():
     pares = pd.DataFrame({"fecha_produccion": [dia] * 3, "turno": ["M"] * 3, "eboe": ["1", "1", "2"],
                           "temporada": ["2026"] * 3, "tph": [10.0, 12.0, 12.0], "fp_especifica": [0.5, 0.6, 0.7],
                           "aceite_fruta": [8.0, 8.0, 8.0], "frutos_10kg": [40.0, 45.0, 50.0],
-                          "programa": ["N3", "N3", "N5"], "rango_fp_ref": [-30.0, -20.0, -10.0]})
+                          "programa": ["N3", "N3", "N5"], "rango_fp_ref": [-30.0, -20.0, -10.0],
+                          "removido": [6.8, 7.0, 6.0]})
     turnos = datos_por_turno(pares, captado)
     assert turnos["captado_kg_mt"].iloc[0] == pytest.approx(250 * 0.8 * densidad / (11 + 12))   # MTPH total 23
+    removido_kgh = 11 * 6.9 + 12 * 6.0                         # de cada eBOE: MTPH media × removido medio
+    assert turnos["captado_pct"].iloc[0] == pytest.approx(250 * 0.8 * densidad / removido_kgh * 100)
     assert turnos["tph"].iloc[0] == pytest.approx(34 / 3) and turnos["programa_grupo"].iloc[0] == "N0–N3"
 
 
