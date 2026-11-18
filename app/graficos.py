@@ -958,6 +958,40 @@ def marcar_cambios(figura: go.Figure, marcas: list[dict]) -> go.Figure:
     return figura
 
 
+def brix_contra_ph(datos: pd.DataFrame, brix_maximo: float, ph_aviso: float) -> go.Figure:
+    """°Brix contra pH de la emulsión, un color por eBOE, con las zonas del diagnóstico (core.emulsion) sombreadas en
+    gris y sus nombres: fruta rota (°Brix alto, pH bajo), ensuciamiento (°Brix alto, pH alto) y riesgo en la
+    separación (pH alto). Líneas punteadas en el °Brix máximo y el aviso de pH. Tooltip con día, eBOE, valores y
+    zona."""
+    from core.emulsion import ENSUCIAMIENTO, FRUTA_ROTA, SEPARACION
+    validos = datos.dropna(subset=["brix", "ph"])
+    figura = go.Figure()
+    x0, x1 = min(validos["ph"].min(), ph_aviso) - 0.2, max(validos["ph"].max(), ph_aviso) + 0.2
+    y0, y1 = min(validos["brix"].min(), brix_maximo) - 0.3, max(validos["brix"].max(), brix_maximo) + 0.3
+    for (a, b, c, d), texto, opacidad in (((x0, ph_aviso, brix_maximo, y1), FRUTA_ROTA, 0.10),
+                                          ((ph_aviso, x1, brix_maximo, y1), ENSUCIAMIENTO, 0.18),
+                                          ((ph_aviso, x1, y0, brix_maximo), SEPARACION, 0.10)):
+        figura.add_shape(type="rect", x0=a, x1=b, y0=c, y1=d, fillcolor=GRIS, opacity=opacidad, line_width=0,
+                         layer="below")
+        abajo = texto == SEPARACION                        # su zona está abajo: el nombre, al pie
+        figura.add_annotation(x=(a + b) / 2, y=c if abajo else d, yanchor="bottom" if abajo else "top", text=texto,
+                              showarrow=False, font=dict(size=10, color=GRIS))
+    figura.add_hline(y=brix_maximo, line=dict(color=GRIS, dash="dot", width=1))
+    figura.add_vline(x=ph_aviso, line=dict(color=GRIS, dash="dot", width=1))
+    for eboe, sub in validos.groupby("eboe", sort=True):
+        color = PALETA[(int(eboe) - 1) % len(PALETA)]
+        figura.add_scatter(
+            x=sub["ph"], y=sub["brix"], mode="markers", name=f"eBOE {eboe}",
+            marker=dict(size=5, color=color, opacity=0.5),
+            customdata=list(zip(sub["fecha_hora"].dt.strftime("%d/%m/%Y %H:%M"), sub["ph"].map(lambda v: numero(v, 2)),
+                                sub["brix"].map(lambda v: numero(v, 1)), sub["zona"].fillna("—"))),
+            hovertemplate=f"<b>eBOE {eboe}</b> · %{{customdata[0]}}<br>pH %{{customdata[1]}} · °Brix "
+                          "%{customdata[2]}<br>%{customdata[3]}<extra></extra>")
+    figura.update_layout(xaxis=dict(title="pH de la emulsión", range=[x0, x1]),
+                         yaxis=dict(title="°Brix de la emulsión", range=[y0, y1]))
+    return estilo(figura)
+
+
 def efectos_principales(medias: pd.DataFrame, titulo_y: str, unidad: str, decimales: int,
                         por_fila: int = 4) -> go.Figure:
     """Gráfica de efectos principales (medias ajustadas, como Minitab): un panel por factor, la media ajustada de cada

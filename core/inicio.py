@@ -54,7 +54,7 @@ TIPOS = DEL_EBOE + DE_PRIMARIA + ("tanque_emulsion", "retorno_pesada", "secundar
 CON_EQUIPO = DEL_EBOE + DE_PRIMARIA + ("pulidora",)
 # Variable de alerta → grupo de marcador donde va la 🔔 (los del eBOE; las de centrífugas van a su equipo)
 GRUPO_ALERTA = {"eficiencia": "eboe", "aceite_salida": "salida_eboe", "aceite_emulsion": "emulsion_eboe",
-                "brix": "emulsion_eboe", "ph": "emulsion_eboe"}
+                "brix": "emulsion_eboe", "ph": "emulsion_eboe", "ph_aviso": "emulsion_eboe"}
 VERDE, AMARILLO, ROJO, NEUTRO, SIN_DATOS = "verde", "amarillo", "rojo", "neutro", "sin datos"
 EN_MARCHA = "en marcha"            # estado de una primaria que anduvo en el período (su cuerpo no lleva semáforo)
 ABIERTAS = ("abierta", EN_ANALISIS)
@@ -469,11 +469,18 @@ def _del_eboe(sesion, planta: Planta, m: dict, ctx: dict) -> dict:
         de_emulsion = ctx["emulsion"][ctx["emulsion"]["eboe"] == equipo.numero]
         valor, n_turnos, n = _de_turnos(de_emulsion, "aceite_emulsion")
         color, nota = color_de(valor, _rango(sesion, planta.id, "Aceite en emulsión", "Emulsión (licor)", fruta))
+        ph = _de_turnos(de_emulsion, "ph")[0]
+        aviso = _rango(sesion, planta.id, "pH emulsión (aviso)", "Emulsión (licor)", fruta)    # informe Brown 2023
+        alto = ph is not None and aviso is not None and aviso["maximo"] is not None and ph > aviso["maximo"]
         return {"nombre": f"Emulsión {corto}", "valor": valor, "color": color, "destino": destino,
-                "texto": _texto(valor, " %"), "claves_alertas": claves,
+                "texto": _texto(valor, " %") + (f"<br><span style='font-size:11px'>pH {_num(ph, 1)} ⚠</span>"
+                                                if alto else ""),
+                "claves_alertas": claves,
                 "hover": f"<b>Emulsión {corto}</b> (rebalse, laboratorio del BOE)<br>Aceite en emulsión: "
                          f"{_texto(valor, ' %')} ({nota})<br>°Brix: {_texto(_de_turnos(de_emulsion, 'brix')[0], '', 1)}"
-                         f" · pH: {_texto(_de_turnos(de_emulsion, 'ph')[0], '')}<br>{_n(n, n_turnos)}"}
+                         f" · pH: {_texto(ph, '')}"
+                         + (f"<br>⚠ pH > {_num(aviso['maximo'], 0)}: riesgo en la separación (revisar dureza del agua)"
+                            if alto else "") + f"<br>{_n(n, n_turnos)}"}
     if tipo == "entrada_eboe":
         valor, n_turnos, n = _de_turnos(entradas, "aceite_fruta")
         frutos = entradas.assign(frutos=entradas["n_frutos"] * 10 / entradas["peso_fruta_kg"].where(
@@ -614,7 +621,7 @@ def _alertas_por_marcador(sesion, planta: Planta, equipos: dict, desde: date, ha
         grupo = GRUPO_ALERTA.get(a.variable, "centrifuga")
         if a.equipo_id is not None:
             claves = [(a.equipo_id, grupo)]
-        elif a.variable == "ph":
+        elif a.variable in ("ph", "ph_aviso"):
             claves = [("planta", grupo)]
         else:
             claves = [(e.id, grupo) for e in eboes]

@@ -496,3 +496,16 @@ def test_inicio_con_periodo_por_defecto_y_botones_de_temporada(sesion, planta, a
     app.button(key=f"inicio_temporada_{planta.id}_2026").click().run()
     assert app.date_input(key=clave).value == (date(2026, 7, 1), date(2026, 7, 2))           # la temporada
     assert {m.label: m.value for m in app.metric}["Fruta procesada"] == "500 t"
+
+
+def test_aviso_de_ph_en_la_emulsion(sesion, planta):  # noqa: F811
+    sesion.add(RangoReferencia(planta=planta, variable="pH emulsión (aviso)", punto_o_equipo="Emulsión (licor)",
+                               maximo=6.0, unidad="pH", fuente="Informe Brown 2023", lado_capacidad="superior"))
+    sesion.commit()
+    _ronda(sesion, datetime(2026, 7, 1, 6, 10))                                   # pH 5,5: sin aviso
+    normal = _por_tipo(sesion, planta, DIA, DIA)[("emulsion_eboe", "Emulsión eBOE 1")]
+    assert "⚠" not in normal["texto"] and "riesgo en la separación" not in normal["hover"]
+    alto = {"g": 10.0, "ml": 25.0, "brix": 4.0, "ph": 6.6}
+    _ronda(sesion, datetime(2026, 7, 2, 6, 10), e1={"emulsion": alto})
+    con_aviso = _por_tipo(sesion, planta, date(2026, 7, 2), date(2026, 7, 2))[("emulsion_eboe", "Emulsión eBOE 1")]
+    assert "pH 6,6 ⚠" in con_aviso["texto"] and "⚠ pH > 6: riesgo en la separación" in con_aviso["hover"]

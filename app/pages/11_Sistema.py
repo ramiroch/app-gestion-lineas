@@ -13,6 +13,8 @@ cada tabla Excel y cada pestaña "Descargar todo".
 - Equipos de trabajo: eficiencia del eBOE y de la primaria por operador, químico y turno (medias ajustadas por las
   condiciones de trabajo). Solo con mostrar_personas = sí y nunca en el modo presentación; anonimizado por defecto; no
   se exporta (sin PNG, Excel ni "Descargar todo").
+- Emulsión: °Brix contra pH con las zonas del diagnóstico, dilución de la emulsión entre el BOE y las centrífugas y
+  % de muestras sobre la mediana de la temporada (riesgo de volatilización).
 - Fase pesada: caudal de fase pesada real (laboratorio) contra el requerido por el balance de aceite del licor;
   rango de fase pesada (gráfico Brown) por temporada, eBOE, día y turno; coherencia del muestreo del licor (indicador
   interno: no se usa en otros análisis y no se muestra en el modo presentación).
@@ -32,6 +34,7 @@ from core.efectos import (AYUDA_CAPTADO, CARGAS, EXPLICACION_MEDIA_AJUSTADA, NOM
                           modelo_interaccion,
                           orden_de_niveles, por_mtph, preparar_datos, segmentada_por_temporada)
 from core.inicio import SIN_EMULSION
+from core.emulsion import ZONAS, dilucion_por_turno, pct_sobre_mediana, resumen_dilucion, resumen_zonas, zonas
 from core.estadistica import es_outlier_iqr
 from core.fase_pesada import CLAVES_TURNO, mediana_por, tabla_fase_pesada
 from core.formato import numero, texto_p
@@ -45,11 +48,11 @@ from core.repetidas import sin_entradas_repetidas
 from core.volatilizacion import (HIPOTESIS, RANGOS_FP, eficiencia_eboe_por_turno, eficiencias_por_dia,
                                  medias_por_rango)
 from descargas import Descargas
-from filtros import (barra_filtros, cambios_planta, casilla_repetidas, centrifugas_planta, filtros_elegidos, motor,
+from filtros import (barra_filtros, cambios_planta, rango_planta, casilla_repetidas, centrifugas_planta, filtros_elegidos, motor,
                      mostrar_personas_planta, operadores_planta,
                      parametros_fase_pesada_planta, planta_elegida, produccion_con_borradores, produccion_planta,
                      tabla_emulsion_planta, toneladas_planta, umbral_paralelo_planta)
-from graficos import (boxplot_temporadas, curva_mtph, dispersion_por_temporada, efectos_principales,
+from graficos import (boxplot_temporadas, brix_contra_ph, curva_mtph, dispersion_por_temporada, efectos_principales,
                       grafico_interaccion, intervalos, intervalos_agrupados, lineas_en_el_tiempo)
 from presentacion import en_presentacion
 
@@ -579,6 +582,77 @@ def pestana_antes_despues(registro: Descargas) -> None:
                "menos 60 t). Retorno de FP y aceite captado: por turno, desde las centrífugas.")
 
 
+def pestana_emulsion(registro: Descargas) -> None:
+    planta = planta_elegida()
+    brix, ph = rango_planta(planta, "°Brix emulsión"), rango_planta(planta, "pH emulsión (aviso)")
+    emulsion = filtrar(tabla_emulsion_planta(planta), filtros_elegidos())
+    if emulsion.empty:
+        st.info("No hay análisis de emulsión con estos filtros.")
+        return
+    st.markdown("##### °Brix contra pH de la emulsión")
+    if brix is None or brix["maximo"] is None or ph is None or ph["maximo"] is None:
+        st.warning("Faltan en RangoReferencia el °Brix máximo de la emulsión o el aviso de pH (\"pH emulsión "
+                   "(aviso)\"): sin ellos no se pueden marcar las zonas.")
+    else:
+        con_zona = zonas(emulsion, brix["maximo"], ph["maximo"])
+        registro.grafico(brix_contra_ph(con_zona, brix["maximo"], ph["maximo"]), "Brix contra pH de la emulsión")
+        st.caption(f"°Brix alto (> {numero(brix['maximo'], 1)}) con pH bajo: posible fruta rota en la mesa. °Brix "
+                   f"alto con pH ≥ {numero(ph['maximo'], 1)}: ensuciamiento de la línea. pH > "
+                   f"{numero(ph['maximo'], 1)}: riesgo en la separación (revisar la dureza del agua). Límites de "
+                   f"RangoReferencia (aviso de pH: {ph['fuente'] or 'sin fuente'}). N = "
+                   f"{numero(int(con_zona['zona'].notna().sum()), 0)} muestras con °Brix y pH.")
+        resumen = resumen_zonas(con_zona, ["temporada", "eboe"])
+        vista = resumen.assign(valor=[f"{numero(p, 1)} % ({numero(n, 0)})" for p, n in zip(resumen["pct"], resumen["n"])])
+        vista = vista.pivot(index=["temporada", "eboe"], columns="zona", values="valor").reset_index()
+        registro.tabla(vista.rename(columns={"temporada": "Temporada", "eboe": "eBOE"})[
+            ["Temporada", "eBOE", *[z for z in ZONAS if z in vista]]].astype(str).fillna("—"),
+            "Zonas de la emulsión por temporada y eBOE")
+        st.caption("% de las muestras de cada temporada y eBOE (N entre paréntesis).")
+
+    st.markdown("##### Dilución entre el BOE y las centrífugas")
+    muestras, _ = centrifugas_planta(planta)
+    if muestras.empty:
+        st.info("La planta no tiene muestras de centrífugas.")
+    else:
+        muestras = filtrar_centrifugas(muestras, filtros_elegidos())
+        turnos = dilucion_por_turno(muestras, emulsion, datos)
+        if turnos.empty:
+            st.info("No hay turnos con emulsión de las primarias y del laboratorio del BOE con estos filtros.")
+        else:
+            dias = turnos.groupby("fecha_produccion").agg(dilucion=("dilucion", "median"),
+                                                          n=("dilucion", "size")).reset_index()
+            registro.grafico(lineas_en_el_tiempo(dias, "fecha_produccion", {"dilucion": ("Dilución", "n")},
+                                                 "Alimentación / BOE", "", 2), "Dilución de la emulsión por día")
+            por_mes = resumen_dilucion(turnos, ["temporada", "mes"])
+            registro.tabla(pd.DataFrame({
+                "Temporada": por_mes["temporada"].astype(str), "Mes": por_mes["mes"],
+                "Mediana": por_mes["mediana"].map(lambda v: numero(v, 2)),
+                "% de turnos < 1": por_mes["pct_menor_1"].map(lambda v: numero(v, 0)),
+                "N turnos": por_mes["n"].map(lambda v: numero(v, 0) + (" ⚠️" if v < 3 else "")),
+                "Ponderada": por_mes["ponderada"].map({True: "sí", False: "no (algún turno sin caudal)"})}),
+                "Dilución de la emulsión por mes")
+            st.caption("Por turno: aceite en la emulsión de alimentación a las primarias (mediana, sin muestras "
+                       "copiadas) / aceite en la emulsión del laboratorio del BOE (promedio de los eBOE, ponderado por "
+                       "el caudal de fase pesada de cada eBOE; si a algún eBOE le falta el caudal, promedio simple). "
+                       "Menos de 1: la emulsión llega más diluida a las centrífugas que como sale del BOE. En el "
+                       "gráfico, la mediana de los turnos de cada día.")
+
+    st.markdown("##### Muestras de emulsión por encima de la mediana de la temporada")
+    por_mes = pct_sobre_mediana(emulsion, ["temporada", "mes"])
+    por_eboe = pct_sobre_mediana(emulsion, ["temporada", "eboe"])
+    izquierda, derecha = st.columns(2)
+    for donde, tabla, clave, titulo in ((izquierda, por_mes, "mes", "Mes"), (derecha, por_eboe, "eboe", "eBOE")):
+        registro.tabla(pd.DataFrame({
+            "Temporada": tabla["temporada"].astype(str), titulo: tabla[clave].astype(str),
+            "Mediana de la temporada (%)": tabla["mediana_temporada"].map(lambda v: numero(v, 2)),
+            "% sobre la mediana": tabla["pct"].map(lambda v: numero(v, 0)),
+            "N": tabla["n"].map(lambda v: numero(v, 0) + (" ⚠️" if v < 3 else ""))}),
+            f"Emulsión sobre la mediana por {titulo.lower()}", donde=donde)
+    st.caption("Indicador de riesgo de volatilización del informe 2023: más muestras por encima de la mediana de la "
+               "temporada = licor más rico en aceite. Por definición, en toda la temporada es ~50 %; importa cómo se "
+               "reparte entre meses y eBOE.")
+
+
 PERSONAS = "Equipos de trabajo"
 AGRUPACIONES_EBOE = {"Operador de eBOE": ["operador"], "Químico": ["analista"], "Turno": ["turno"],
                      "Operador × turno": ["operador", "turno"], "Químico × operador": ["analista", "operador"]}
@@ -689,7 +763,7 @@ def pestana_personas(registro: Descargas) -> None:
 
 PESTANAS = {"Volatilización": pestana_volatilizacion, "Efectos principales": pestana_efectos,
             "Umbral de MTPH": pestana_umbral, "Antes/después": pestana_antes_despues,
-            "Fase pesada": pestana_fase_pesada}
+            "Emulsión": pestana_emulsion, "Fase pesada": pestana_fase_pesada}
 if mostrar_personas_planta(planta_elegida()) and not en_presentacion():
     PESTANAS[PERSONAS] = pestana_personas
 # Con key y on_change, cada pestaña sabe si está abierta (.open): solo se dibuja la abierta.

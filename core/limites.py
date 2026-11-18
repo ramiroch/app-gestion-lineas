@@ -50,12 +50,16 @@ VARIABLES_CONTROL = {
              "rango": ("°Brix emulsión", "Emulsión (licor)"), "lado_alerta": "arriba"},
     "ph": {"nombre": "pH emulsión", "unidad": "pH", "nivel": "planta", "titulacion": False,
            "rango": ("pH emulsión", "Emulsión (licor)"), "lado_alerta": "ambos"},
+    # Aviso del informe Brown 2023: pH > 6 = riesgo en la separación (revisar dureza del agua). Los mismos datos que el
+    # pH, otro rango (RangoReferencia "pH emulsión (aviso)", lado superior); sin límites de control, solo el rango.
+    "ph_aviso": {"nombre": "pH emulsión (aviso > 6)", "unidad": "pH", "nivel": "planta", "titulacion": False,
+                 "rango": ("pH emulsión (aviso)", "Emulsión (licor)"), "lado_alerta": "arriba"},
     "cp_pesada": {"nombre": "CP fase pesada", "unidad": "bar", "nivel": "equipo", "titulacion": False,
                   "rango": ("CP fase pesada", None), "lado_alerta": "ambos"},
     "aceite_descarga": {"nombre": "Aceite en descarga", "unidad": "%", "nivel": "equipo", "titulacion": True,
                         "rango": ("Aceite en descarga", None), "lado_alerta": "arriba"},
 }
-VARIABLES_BOE = ("eficiencia", "aceite_salida", "aceite_emulsion", "brix", "ph")
+VARIABLES_BOE = ("eficiencia", "aceite_salida", "aceite_emulsion", "brix", "ph", "ph_aviso")
 
 
 def ambito_de(equipo_id=None, planta_id=None) -> str:
@@ -109,6 +113,7 @@ def series_boe(analisis: pd.DataFrame, emulsion: pd.DataFrame, equipos: dict[int
         "aceite_emulsion": emulsion.assign(valor=emulsion["aceite_emulsion"]),
         "brix": emulsion.assign(valor=emulsion["brix"]),
         "ph": emulsion.assign(valor=emulsion["ph"]),
+        "ph_aviso": emulsion.assign(valor=emulsion["ph"]),
     }
     series = {}
     for variable, datos in fuentes.items():
