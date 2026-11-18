@@ -41,6 +41,7 @@ from core.regresion import frase_pendiente, regresiones_por_grupo
 from core.repetidas import sin_entradas_repetidas
 from descargas import Descargas
 from pestana_factores import pestana_factores
+from presentacion import en_presentacion
 from filtros import (barra_filtros, cambios_planta, casilla_repetidas, produccion_con_borradores, ultima_fecha_planta, filtros_elegidos, planta_elegida, produccion_planta, rango_planta,
                      tabla_emulsion_planta, tabla_planta, toneladas_planta)
 from graficos import (PALETA, barras_uso, boxplot, boxplot_mensual, boxplot_temporadas, burbujas, columnas_mensuales,
@@ -194,25 +195,26 @@ def bloque_evolucion_mensual(datos: pd.DataFrame, registro: Descargas) -> None:
     with st.expander("Tabla"):
         registro.tabla(tabla_mensual(mtph, "MTPH"), "MTPH por mes")
 
-    st.markdown("##### Eficiencia eBOE y del proceso por mes (planta)")
-    registro.grafico(columnas_mensuales_series([("Eficiencia eBOE", planta_eboe, COLOR_EFICIENCIA_EBOE),
-                                                ("Eficiencia del proceso", proceso, COLOR_EFICIENCIA_PROCESO)],
-                                               eje, "Eficiencia (%)", rango_y=[0, tope]),
-                     "Eficiencia eBOE y del proceso por mes")
-    with st.expander("Tabla"):
-        tabla_planta_mes = proceso.merge(planta_eboe[["mes", "valor", "n"]].rename(
-            columns={"valor": "eboe", "n": "n_eboe"}), on="mes", how="left")
-        registro.tabla(pd.DataFrame({
-            "Mes": tabla_planta_mes["etiqueta"], "Rendimiento (kg/MT)": tabla_planta_mes["rendimiento"].map(numero),
-            "Aceite en fruta entrada (kg/MT)": tabla_planta_mes["aceite_entrada"].map(numero),
-            "Eficiencia del proceso (%)": tabla_planta_mes["valor"].map(lambda v: numero(v, 1)),
-            "Eficiencia eBOE (%)": tabla_planta_mes["eboe"].map(lambda v: numero(v, 1)),
-            "N turnos": tabla_planta_mes["n"].map(lambda n: numero(n, 0)),
-            "N pares": tabla_planta_mes["n_pares"].map(lambda n: numero(n, 0)),
-        }), "Eficiencia eBOE y del proceso por mes")
-    st.caption("Eficiencia eBOE: los eBOE filtrados juntos, ponderada por toneladas (N = pares). Eficiencia del "
-               "proceso: N turnos = turnos con fruta procesada y aceite envasado aprobados (los que entran en el "
-               "rendimiento); un mes sin producción cargada muestra solo la eficiencia eBOE.")
+    if not en_presentacion():     # las dos eficiencias juntas: no en el modo presentación
+        st.markdown("##### Eficiencia eBOE y del proceso por mes (planta)")
+        registro.grafico(columnas_mensuales_series([("Eficiencia eBOE", planta_eboe, COLOR_EFICIENCIA_EBOE),
+                                                    ("Eficiencia del proceso", proceso, COLOR_EFICIENCIA_PROCESO)],
+                                                   eje, "Eficiencia (%)", rango_y=[0, tope]),
+                         "Eficiencia eBOE y del proceso por mes")
+        with st.expander("Tabla"):
+            tabla_planta_mes = proceso.merge(planta_eboe[["mes", "valor", "n"]].rename(
+                columns={"valor": "eboe", "n": "n_eboe"}), on="mes", how="left")
+            registro.tabla(pd.DataFrame({
+                "Mes": tabla_planta_mes["etiqueta"], "Rendimiento (kg/MT)": tabla_planta_mes["rendimiento"].map(numero),
+                "Aceite en fruta entrada (kg/MT)": tabla_planta_mes["aceite_entrada"].map(numero),
+                "Eficiencia del proceso (%)": tabla_planta_mes["valor"].map(lambda v: numero(v, 1)),
+                "Eficiencia eBOE (%)": tabla_planta_mes["eboe"].map(lambda v: numero(v, 1)),
+                "N turnos": tabla_planta_mes["n"].map(lambda n: numero(n, 0)),
+                "N pares": tabla_planta_mes["n_pares"].map(lambda n: numero(n, 0)),
+            }), "Eficiencia eBOE y del proceso por mes")
+        st.caption("Eficiencia eBOE: los eBOE filtrados juntos, ponderada por toneladas (N = pares). Eficiencia del "
+                   "proceso: N turnos = turnos con fruta procesada y aceite envasado aprobados (los que entran en el "
+                   "rendimiento); un mes sin producción cargada muestra solo la eficiencia eBOE.")
 
     st.markdown("##### Aceite en fruta por mes (entrada y salida)")
     if cajas.empty:

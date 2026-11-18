@@ -20,7 +20,8 @@ aceite captado por las primarias, un registro por turno (datos_por_turno).
 - quiebre(): regresión segmentada y = a + b₁·x + b₂·máx(0, x − q), probando cada MTPH entera entre 10 y 18 y
   eligiendo la de menor error; pendiente antes (b₁) y después (b₁ + b₂), p del cambio (b₂) y de la pendiente después.
 - Aceite captado por las primarias, por turno. Aceite de la fase liviana de las primarias en marcha (kg/h, del
-  balance de cada muestreo, sin muestreos copiados; mediana por primaria en el turno, sumadas), dividido:
+  balance de cada muestreo, sin los fuera de rango físico; los copiados sí entran, ver captado_por_turno; mediana
+  por primaria en el turno, sumadas; un turno en paralelo con una sola primaria con balance queda afuera), dividido:
   · captado % = por el aceite removido por los eBOE (Σ de cada eBOE en marcha: MTPH × aceite en fruta de entrada ×
     eficiencia, kg/h) × 100. Del aceite que sacaron los rolos, cuánto llegó a la fase liviana.
   · captado kg/MT = por la MTPH total de los eBOE.
@@ -36,7 +37,7 @@ import statsmodels.api as sm
 import statsmodels.formula.api as smf
 from scipy import stats
 
-from core.analisis_centrifugas import PRIMARIA
+from core.analisis_centrifugas import PARALELO, PRIMARIA
 from core.centrifugas import aceite_perdido_kgh
 from core.factores import (FRUTOS_MAXIMO, ORDENES, asignar_cuartil, asignar_quintil, cortes_cuartiles, cortes_quintiles,
                            etiquetas_cuartiles, etiquetas_quintiles, frutos_en_10kg, grupo_programa)
@@ -130,17 +131,22 @@ def preparar_datos(tabla: pd.DataFrame) -> pd.DataFrame:
     return _categorias(datos)
 
 
-def captado_por_turno(balance: pd.DataFrame) -> pd.DataFrame:
+def captado_por_turno(balance: pd.DataFrame, modos: pd.DataFrame | None = None) -> pd.DataFrame:
     """Aceite captado por las primarias en cada turno (kg/h): aceite de la fase liviana (caudal × ρ × aceite,
-    core.centrifugas.aceite_perdido_kgh) de cada muestreo con balance, sin los copiados ni los fuera de rango físico
-    (caudal de fase liviana ≤ 0 o eficiencia imposible); mediana de cada primaria en el turno y suma de las primarias.
-    Columnas: fecha_produccion, turno, captado_kgh, n_muestreos."""
-    columnas = CLAVES_TURNO + ["captado_kgh", "n_muestreos"]
+    core.centrifugas.aceite_perdido_kgh) de cada muestreo con balance; mediana de cada primaria en el turno y suma de
+    las primarias. Fuera de rango físico (caudal de fase liviana ≤ 0 o eficiencia imposible): no entran.
+    Copiados: SÍ entran. Lo copiado es la fase pesada (o la descarga), que en el caudal de fase liviana pesa muy poco
+    (~0,1 % de aceite); la fase liviana es propia de cada primaria. Si se sacaran, en 2025 (la fase pesada de la
+    ESE 230 (2) es copia de la (1)) los turnos en paralelo sumarían una sola primaria y el captado daría la mitad.
+    modos (core.analisis_centrifugas.primarias_por_turno): un turno con las primarias en paralelo y una sola con
+    balance queda afuera (incompleto), en vez de sumar la mitad.
+    Columnas: fecha_produccion, turno, captado_kgh, n_primarias, n_muestreos."""
+    columnas = CLAVES_TURNO + ["captado_kgh", "n_primarias", "n_muestreos"]
     if balance.empty:
         return pd.DataFrame(columns=columnas)
     fuera = (balance["fuera_fisico"].fillna(False).astype(bool) if "fuera_fisico" in balance
              else pd.Series(False, index=balance.index))
-    validos = balance[(balance["tipo"] == PRIMARIA) & ~balance["copiada"].fillna(False).astype(bool) & ~fuera
+    validos = balance[(balance["tipo"] == PRIMARIA) & ~fuera
                       & (pd.to_numeric(balance["caudal_liviana"], errors="coerce") > 0)
                       & balance["aceite_liviana"].notna()]
     if validos.empty:
@@ -149,8 +155,13 @@ def captado_por_turno(balance: pd.DataFrame) -> pd.DataFrame:
                                           zip(validos["caudal_liviana"], validos["aceite_liviana"])])
     por_equipo = validos.groupby(CLAVES_TURNO + ["equipo"]).agg(captado_kgh=("captado_kgh", "median"),
                                                                 n=("captado_kgh", "size"))
-    turnos = por_equipo.groupby(CLAVES_TURNO).agg(captado_kgh=("captado_kgh", "sum"), n_muestreos=("n", "sum"))
-    return turnos.reset_index()[columnas]
+    turnos = por_equipo.groupby(CLAVES_TURNO).agg(captado_kgh=("captado_kgh", "sum"), n_primarias=("n", "size"),
+                                                  n_muestreos=("n", "sum")).reset_index()
+    if modos is not None and not modos.empty:
+        en_paralelo = modos.loc[modos["modo"] == PARALELO, CLAVES_TURNO].assign(_paralelo=True)
+        turnos = turnos.merge(en_paralelo, on=CLAVES_TURNO, how="left")
+        turnos = turnos[~(turnos["_paralelo"].fillna(False).astype(bool) & (turnos["n_primarias"] < 2))]
+    return turnos.reset_index(drop=True)[columnas]
 
 
 def datos_por_turno(datos: pd.DataFrame, captado: pd.DataFrame) -> pd.DataFrame:
@@ -477,3 +488,42 @@ def frase_quiebre(fila: dict, respuesta: str, alfa: float = ALFA) -> str:
     return (f"{temporada}: quiebre en {q} MTPH ({cambio}, {texto_p(fila['p_cambio'])}). Hasta ahí, "
             f"{numero(antes, decimales + 1)} {unidad} por MTPH. Por encima ({numero(fila['n_despues'], 0)} datos): "
             f"{tendencia}.{borde}")
+
+
+def descomponer_por_mezcla(interaccion: dict, datos: pd.DataFrame, base: str, nueva: str) -> dict | None:
+    """Separa la diferencia de la media ajustada entre dos temporadas (nueva − base) en la parte que se debe a operar
+    con otra mezcla de la carga (por ejemplo, más MTPH) y la parte a igual carga.
+
+    interaccion: modelo_interaccion(con="temporada") con todas las temporadas (sus celdas: media ajustada de cada
+    rango de carga en cada temporada). datos: los registros del modelo (para la proporción de cada rango en cada
+    temporada). Con μ_t(m) la media ajustada del rango m en la temporada t y p_t(m) la proporción de registros:
+    media_t = Σ p_t(m)·μ_t(m); nueva_con_mezcla_base = Σ p_base(m)·μ_nueva(m);
+    por_mezcla = media_nueva − nueva_con_mezcla_base; a_igual_carga = nueva_con_mezcla_base − media_base (suman la
+    diferencia). Solo con los rangos estimables en las dos temporadas (proporciones reescaladas a 1). Devuelve
+    media_base, media_nueva, nueva_con_mezcla_base, diferencia, por_mezcla, a_igual_carga, rangos (tabla por rango:
+    rango, p_base, p_nueva, media_base, media_nueva, n_base, n_nueva) y n_base, n_nueva. None si no hay celdas."""
+    celdas = interaccion.get("celdas")
+    if celdas is None or interaccion.get("b") != "temporada":
+        return None
+    a = interaccion["a"]
+    cel = celdas[celdas["estimable"]].pivot(index="a", columns="b", values="media")
+    if base not in cel or nueva not in cel:
+        return None
+    rangos = [r for r in orden_de_niveles(a, cel.index) if pd.notna(cel.loc[r, base]) and pd.notna(cel.loc[r, nueva])]
+    if not rangos:
+        return None
+    conteo = datos.dropna(subset=[a]).groupby(["temporada", a]).size()
+    n_base = pd.Series({r: conteo.get((base, r), 0) for r in rangos}, dtype=float)
+    n_nueva = pd.Series({r: conteo.get((nueva, r), 0) for r in rangos}, dtype=float)
+    if n_base.sum() == 0 or n_nueva.sum() == 0:
+        return None
+    p_base, p_nueva = n_base / n_base.sum(), n_nueva / n_nueva.sum()
+    mu_base, mu_nueva = cel.loc[rangos, base], cel.loc[rangos, nueva]
+    media_base, media_nueva = float((p_base * mu_base).sum()), float((p_nueva * mu_nueva).sum())
+    con_mezcla_base = float((p_base * mu_nueva).sum())
+    return {"media_base": media_base, "media_nueva": media_nueva, "nueva_con_mezcla_base": con_mezcla_base,
+            "diferencia": media_nueva - media_base, "por_mezcla": media_nueva - con_mezcla_base,
+            "a_igual_carga": con_mezcla_base - media_base, "n_base": int(n_base.sum()), "n_nueva": int(n_nueva.sum()),
+            "rangos": pd.DataFrame({"rango": rangos, "p_base": p_base.values, "p_nueva": p_nueva.values,
+                                    "media_base": mu_base.values, "media_nueva": mu_nueva.values,
+                                    "n_base": n_base.astype(int).values, "n_nueva": n_nueva.astype(int).values})}

@@ -16,7 +16,7 @@ from cartel import cartel_modo_prueba
 from core.cambios import historial
 from core.cambios_operativos import borrar_cambio, crear_cambio, editar_cambio, equipos_de_planta
 from core.db import crear_sesion
-from core.models import CATEGORIAS_CAMBIO_OPERATIVO
+from core.models import CATEGORIAS_CAMBIO_OPERATIVO, ORIGENES_CAMBIO_OPERATIVO
 from filtros import barra_filtros, cambios_planta, filtros_elegidos, motor, planta_elegida
 
 CONFIRMAR = "BORRAR"
@@ -68,11 +68,15 @@ with st.form("cambios_nuevo", clear_on_submit=True):
     equipo = cuatro.selectbox("Equipo (opcional)", [None, *equipos], format_func=nombre_equipo)
     descripcion = st.text_area("Descripción", placeholder="Qué cambió y por qué (por ejemplo: programa N5 → N7 en el "
                                                          "eBOE 2 por fruta blanda).")
+    cinco, seis = st.columns(2)
+    origen = cinco.selectbox("Origen", ORIGENES_CAMBIO_OPERATIVO,
+                             help="Informado por planta, o detectado en el análisis de los datos (y confirmado).")
+    aproximada = seis.checkbox("Fecha aproximada", help="La fecha no se conoce con exactitud (por ejemplo, días sin datos).")
     if st.form_submit_button("Guardar", type="primary", disabled=not usuario):
         try:
             with crear_sesion(motor()) as sesion:
                 crear_cambio(sesion, planta_id, datetime.combine(dia, hora), categoria, descripcion, usuario,
-                             datetime.now(), equipo_id=equipo)
+                             datetime.now(), equipo_id=equipo, origen=origen, fecha_aproximada=aproximada)
             listo("Cambio guardado.")
         except (ValueError, PermissionError) as error:
             st.error(str(error))
@@ -93,7 +97,9 @@ eleccion = st.dataframe(pd.DataFrame({
     "Fecha y hora": en_periodo["fecha_hora"].dt.strftime("%d/%m/%Y %H:%M"),
     "Día de producción": en_periodo["fecha_produccion"].dt.strftime("%d/%m/%Y"), "Turno": en_periodo["turno"],
     "Equipo": en_periodo["equipo"].fillna("Planta (general)"), "Categoría": en_periodo["categoria"],
-    "Descripción": en_periodo["descripcion"], "Cargado por": en_periodo["cargado_por"]}),
+    "Descripción": en_periodo["descripcion"], "Origen": en_periodo["origen"],
+    "Fecha aproximada": en_periodo["fecha_aproximada"].map({True: "sí", False: ""}),
+    "Cargado por": en_periodo["cargado_por"]}),
     hide_index=True, on_select="rerun", selection_mode="single-row", key="cambios_lista")
 filas = eleccion.selection.rows
 if not filas:
@@ -113,13 +119,18 @@ with izquierda.form(f"cambios_editar_{cambio_id}"):
     actual = None if pd.isna(fila["equipo_id"]) else int(fila["equipo_id"])
     nuevo_equipo = st.selectbox("Equipo (opcional)", opciones, index=opciones.index(actual), format_func=nombre_equipo)
     nueva_descripcion = st.text_area("Descripción", value=fila["descripcion"])
+    nuevo_origen = st.selectbox("Origen", ORIGENES_CAMBIO_OPERATIVO,
+                                index=ORIGENES_CAMBIO_OPERATIVO.index(fila["origen"]))
+    nueva_aproximada = st.checkbox("Fecha aproximada", value=bool(fila["fecha_aproximada"]))
     motivo = st.text_input("Motivo de la corrección")
     if st.form_submit_button("Guardar corrección", disabled=not usuario):
         try:
             with crear_sesion(motor()) as sesion:
                 n = editar_cambio(sesion, cambio_id, {"fecha_hora": datetime.combine(nuevo_dia, nueva_hora),
                                                       "categoria": nueva_categoria, "equipo_id": nuevo_equipo,
-                                                      "descripcion": nueva_descripcion}, motivo, usuario, datetime.now())
+                                                      "descripcion": nueva_descripcion, "origen": nuevo_origen,
+                                                      "fecha_aproximada": nueva_aproximada},
+                                   motivo, usuario, datetime.now())
             listo(f"Cambio corregido ({n} campo{'' if n == 1 else 's'}).")
         except (ValueError, PermissionError) as error:
             st.error(str(error))

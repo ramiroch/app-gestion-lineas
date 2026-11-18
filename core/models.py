@@ -29,6 +29,7 @@ ESTADOS_PRODUCCION = ("borrador", "aprobado")
 ORIGENES_CARGA = ("importación", "app")
 ACCIONES_CAMBIO = ("edición", "borrado", "restaurado", "hora", "estado", "seguimiento")
 CATEGORIAS_CAMBIO_OPERATIVO = ("programa", "agua/fase pesada", "centrífugas", "mantenimiento", "fruta", "otro")
+ORIGENES_CAMBIO_OPERATIVO = ("informado por planta", "detectado en datos")
 
 
 class Base(DeclarativeBase):
@@ -806,6 +807,9 @@ class CambioOperativo(Base):
     """Bitácora de cambios operativos de la planta (core.cambios_operativos): un cambio de programa, de agua o fase
     pesada, de centrífugas, un mantenimiento, un cambio de fruta u otro, con su fecha y hora y, si es de un equipo, el
     equipo. Se dibujan como líneas verticales en los gráficos de evolución y se comparan antes/después (Sistema).
+    origen: "informado por planta" (lo cargó la planta) o "detectado en datos" (salió del análisis de los datos y
+    lo confirmó un ingeniero). fecha_aproximada: la fecha no se conoce con exactitud (por ejemplo, un hueco sin
+    datos).
     Editar o borrar queda en el historial (Cambio, tabla "cambio_operativo"), con motivo.
     """
 
@@ -817,6 +821,8 @@ class CambioOperativo(Base):
     equipo_id: Mapped[int | None] = mapped_column(ForeignKey("equipo.id"))
     categoria: Mapped[str] = mapped_column(String(30))
     descripcion: Mapped[str] = mapped_column(Text)
+    origen: Mapped[str | None] = mapped_column(String(30))
+    fecha_aproximada: Mapped[bool | None] = mapped_column(Boolean)
     cargado_por: Mapped[str] = mapped_column(String(100))
     cargado_en: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
@@ -834,3 +840,9 @@ class CambioOperativo(Base):
         if not (valor or "").strip():
             raise ValueError("La descripción del cambio es obligatoria.")
         return valor.strip()
+
+    @validates("origen")
+    def validar_origen(self, clave, valor):
+        if valor is not None and valor not in ORIGENES_CAMBIO_OPERATIVO:
+            raise ValueError(f'Origen "{valor}" no válido. Usá uno de: {", ".join(ORIGENES_CAMBIO_OPERATIVO)}.')
+        return valor

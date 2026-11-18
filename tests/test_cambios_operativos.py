@@ -10,7 +10,8 @@ from sqlalchemy import select
 
 from core.cambios import historial
 from core.cambios_operativos import (antes_despues, borrar_cambio, comparar, crear_cambio, editar_cambio,
-                                     equipos_de_planta, listar_cambios, marcas, periodo_de)
+                                     equipos_de_planta, listar_cambios, marcas, periodo_de,
+                                     texto_cambio)
 from core.models import Cliente, Equipo, Linea, Planta
 from tests.test_carga_scott import sesion  # noqa: F401  (fixture)
 from tests.test_inicio import _ronda, planta  # noqa: F401  (fixture)
@@ -30,6 +31,14 @@ def test_crear_editar_y_borrar_con_historial(sesion, planta):  # noqa: F811
     assert len(lista) == 1 and lista["descripcion"].iloc[0] == "N5 → N7" and lista["equipo"].iloc[0] == "eBOE 2"
     assert (lista["fecha_produccion"].iloc[0], lista["turno"].iloc[0]) == (pd.Timestamp("2026-07-01"), "N")  # 03:30
     assert listar_cambios(sesion, planta.id, desde=date(2026, 7, 2)).empty
+    assert (lista["origen"].iloc[0], lista["fecha_aproximada"].iloc[0]) == ("informado por planta", False)
+    detectado = crear_cambio(sesion, planta.id, datetime(2026, 7, 4, 5, 0), "centrífugas", "vuelve a una",
+                             "Ana", AHORA, origen="detectado en datos", fecha_aproximada=True)
+    texto = texto_cambio(listar_cambios(sesion, planta.id).iloc[1])
+    assert "04/07/2026 (fecha aproximada)" in texto and "[detectado en datos]" in texto
+    with pytest.raises(ValueError, match="Origen"):
+        crear_cambio(sesion, planta.id, datetime(2026, 7, 4, 5, 0), "otro", "x", "Ana", AHORA, origen="rumor")
+    borrar_cambio(sesion, detectado.id, "prueba", "Ana", AHORA)
     assert editar_cambio(sesion, cambio.id, {"descripcion": "N5 → N8", "categoria": "programa"}, "error de tipeo",
                          "Beto", AHORA) == 1                                  # la categoría no cambió
     registro = historial(sesion, "cambio_operativo", [cambio.id])[0]

@@ -24,14 +24,16 @@ from core.cambios import a_texto, exigir_permiso, fila_completa, nuevo_grupo, re
 from core.capacidad import normalidad
 from core.efectos import captado_por_turno, datos_por_turno, preparar_datos
 from core.fase_pesada import PARAMETROS_FP, tabla_fase_pesada
-from core.models import CATEGORIAS_CAMBIO_OPERATIVO, CambioOperativo, Equipo, Linea, Planta
+from core.models import (CATEGORIAS_CAMBIO_OPERATIVO, ORIGENES_CAMBIO_OPERATIVO, CambioOperativo, Equipo, Linea,
+                         Planta)
 from core.parametros import ParametrosIncompletos, validar_parametros
 from core.produccion import tabla_produccion, toneladas_por_turno
 from core.turnos import fecha_produccion, turno_de
 from core.volatilizacion import eficiencias_por_dia
 
 TABLA = "cambio_operativo"
-CAMPOS_EDITABLES = ("fecha_hora", "equipo_id", "categoria", "descripcion")
+CAMPOS_EDITABLES = ("fecha_hora", "equipo_id", "categoria", "descripcion", "origen", "fecha_aproximada")
+INFORMADO, DETECTADO = ORIGENES_CAMBIO_OPERATIVO
 DIAS_POR_DEFECTO = 10
 ALFA = 0.05
 TIPO_EBOE = "BOE"
@@ -46,7 +48,7 @@ KPI = [("aceite_entrada", "Aceite en fruta de entrada", "kg/MT", 2, "análisis",
        ("retorno_fp", "Retorno de FP a eBOE", "m³/h", 2, "turno", "planta"),
        ("captado", "Aceite captado por las primarias", "%", 1, "turno", "planta")]
 COLUMNAS_LISTA = ["id", "fecha_hora", "fecha_produccion", "turno", "equipo_id", "equipo", "categoria", "descripcion",
-                  "cargado_por", "cargado_en"]
+                  "origen", "fecha_aproximada", "cargado_por", "cargado_en"]
 
 
 # ---------------------------------------------------------------- carga, edición y borrado
@@ -71,13 +73,18 @@ def _usuario(usuario: str) -> str:
 
 
 def crear_cambio(sesion, planta_id: int, fecha_hora: datetime, categoria: str, descripcion: str, usuario: str,
-                 ahora: datetime, equipo_id: int | None = None) -> CambioOperativo:
+                 ahora: datetime, equipo_id: int | None = None, origen: str = INFORMADO,
+                 fecha_aproximada: bool = False) -> CambioOperativo:
     """Carga un cambio operativo (y lo guarda). Error claro si falta la fecha, la descripción o el usuario, si la
-    categoría no es una de CATEGORIAS_CAMBIO_OPERATIVO o si el equipo no es de la planta."""
+    categoría no es una de CATEGORIAS_CAMBIO_OPERATIVO, el origen uno de ORIGENES_CAMBIO_OPERATIVO o si el equipo no
+    es de la planta. origen: "informado por planta" (por defecto) o "detectado en datos"."""
     usuario = _usuario(usuario)
     _validar(sesion, planta_id, fecha_hora, categoria, descripcion, equipo_id)
+    if origen not in ORIGENES_CAMBIO_OPERATIVO:
+        raise ValueError(f'Origen "{origen}" no válido. Usá uno de: {", ".join(ORIGENES_CAMBIO_OPERATIVO)}.')
     cambio = CambioOperativo(planta_id=planta_id, fecha_hora=fecha_hora, equipo_id=equipo_id, categoria=categoria,
-                             descripcion=descripcion, cargado_por=usuario, cargado_en=ahora)
+                             descripcion=descripcion, origen=origen, fecha_aproximada=bool(fecha_aproximada),
+                             cargado_por=usuario, cargado_en=ahora)
     sesion.add(cambio)
     sesion.commit()
     return cambio
@@ -145,7 +152,9 @@ def listar_cambios(sesion, planta_id: int, desde: date | None = None, hasta: dat
         filas.append({"id": c.id, "fecha_hora": c.fecha_hora, "fecha_produccion": pd.Timestamp(dia),
                       "turno": turno_de(planta, c.fecha_hora).nombre, "equipo_id": c.equipo_id,
                       "equipo": c.equipo.nombre if c.equipo else None, "categoria": c.categoria,
-                      "descripcion": c.descripcion, "cargado_por": c.cargado_por, "cargado_en": c.cargado_en})
+                      "descripcion": c.descripcion, "origen": c.origen or INFORMADO,
+                      "fecha_aproximada": bool(c.fecha_aproximada), "cargado_por": c.cargado_por,
+                      "cargado_en": c.cargado_en})
     tabla = pd.DataFrame(filas, columns=COLUMNAS_LISTA)
     tabla["fecha_produccion"] = pd.to_datetime(tabla["fecha_produccion"])
     return tabla
@@ -217,9 +226,10 @@ def valores_kpi(sesion, planta: Planta, desde: datetime, hasta: datetime, eboe: 
     muestras = tabla_muestras(sesion, planta.id, desde=desde, hasta=hasta)
     balance = balance_por_muestreo(por_muestreo(muestras)) if not muestras.empty else muestras
     valores["retorno_fp"] = vacio
-    if planta.umbral_paralelo_lh is not None and not muestras.empty and not balance.empty:
-        agua = agua_por_eboe(balance, primarias_por_turno(muestras, planta.umbral_paralelo_lh), fruta)
-        valores["retorno_fp"] = tabla(agua, "agua_por_eboe_m3h")
+    modos = (primarias_por_turno(muestras, planta.umbral_paralelo_lh)
+             if planta.umbral_paralelo_lh is not None and not muestras.empty else None)
+    if modos is not None and not balance.empty:
+        valores["retorno_fp"] = tabla(agua_por_eboe(balance, modos, fruta), "agua_por_eboe_m3h")
     valores["captado"] = vacio
     try:
         parametros = validar_parametros(planta, PARAMETROS_FP)
@@ -227,7 +237,7 @@ def valores_kpi(sesion, planta: Planta, desde: datetime, hasta: datetime, eboe: 
         parametros = None
     if parametros is not None and not balance.empty and not pares_planta.empty:
         turnos = datos_por_turno(preparar_datos(tabla_fase_pesada(pares_planta, parametros)),
-                                 captado_por_turno(balance))
+                                 captado_por_turno(balance, modos))
         if "captado_pct" in turnos:
             valores["captado"] = tabla(turnos, "captado_pct")
     return valores
@@ -266,7 +276,10 @@ def equipos_de_planta(sesion, planta_id: int) -> dict[int, str]:
 def texto_cambio(fila) -> str:
     """"10/08/2025 08:00 · centrífugas · ESE 230 (2): reemplaza a la (1)" (para el tooltip de la línea del cambio)."""
     equipo = f" · {fila['equipo']}" if isinstance(fila.get("equipo"), str) and fila["equipo"] else ""
-    return f"{fila['fecha_hora']:%d/%m/%Y %H:%M} · {fila['categoria']}{equipo}: {fila['descripcion']}"
+    fecha = (f"{fila['fecha_hora']:%d/%m/%Y} (fecha aproximada)" if fila.get("fecha_aproximada")
+             else f"{fila['fecha_hora']:%d/%m/%Y %H:%M}")
+    origen = " [detectado en datos]" if fila.get("origen") == DETECTADO else ""
+    return f"{fecha} · {fila['categoria']}{equipo}: {fila['descripcion']}{origen}"
 
 
 def marcas(cambios: pd.DataFrame, posiciones: list) -> list[dict]:

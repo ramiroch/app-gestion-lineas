@@ -10,7 +10,7 @@ import pytest
 import statsmodels.formula.api as smf
 
 from core.efectos import (ETIQUETAS_MTPH, REGIMENES, _media_ajustada, captado_por_turno, correlaciones,
-                          datos_por_turno, frase_quiebre, modelo_efectos, modelo_interaccion, quiebre, quiebres_por_temporada,
+                          datos_por_turno, descomponer_por_mezcla, frase_quiebre, modelo_efectos, modelo_interaccion, quiebre, quiebres_por_temporada,
                           rango_mtph, regimen_agua)
 
 RUIDO = np.random.default_rng(7)
@@ -156,18 +156,23 @@ def test_aceite_captado_por_turno():
                           "copiada": False, "fuera_fisico": [False, True]})
     balance = pd.concat([balance, fuera], ignore_index=True)       # caudal negativo y fuera de rango: no entran
     captado = captado_por_turno(balance)
-    densidad = 0.852 * 0.8 + 0.997 * 0.2
-    assert captado["captado_kgh"].iloc[0] == pytest.approx(250 * 0.8 * densidad)      # mediana; sin la copiada
-    assert captado["n_muestreos"].iloc[0] == 2
+    densidad, densidad_2 = 0.852 * 0.8 + 0.997 * 0.2, 0.852 * 0.7 + 0.997 * 0.3
+    total = 250 * 0.8 * densidad + 250 * 0.7 * densidad_2      # (1): mediana de 200 y 300; (2): la copiada SÍ entra
+    assert captado["captado_kgh"].iloc[0] == pytest.approx(total)
+    assert (captado["n_primarias"].iloc[0], captado["n_muestreos"].iloc[0]) == (2, 3)
+    paralelo = pd.DataFrame({"fecha_produccion": [dia], "turno": ["M"], "modo": ["en paralelo"]})
+    solo_una = balance[balance["equipo"] != "ESE 230 (2)"]
+    assert captado_por_turno(solo_una, paralelo).empty            # en paralelo con una sola primaria: incompleto
+    assert len(captado_por_turno(solo_una, paralelo.assign(modo="una sola"))) == 1
     pares = pd.DataFrame({"fecha_produccion": [dia] * 3, "turno": ["M"] * 3, "eboe": ["1", "1", "2"],
                           "temporada": ["2026"] * 3, "tph": [10.0, 12.0, 12.0], "fp_especifica": [0.5, 0.6, 0.7],
                           "aceite_fruta": [8.0, 8.0, 8.0], "frutos_10kg": [40.0, 45.0, 50.0],
                           "programa": ["N3", "N3", "N5"], "rango_fp_ref": [-30.0, -20.0, -10.0],
                           "removido": [6.8, 7.0, 6.0]})
     turnos = datos_por_turno(pares, captado)
-    assert turnos["captado_kg_mt"].iloc[0] == pytest.approx(250 * 0.8 * densidad / (11 + 12))   # MTPH total 23
+    assert turnos["captado_kg_mt"].iloc[0] == pytest.approx(total / (11 + 12))   # MTPH total 23
     removido_kgh = 11 * 6.9 + 12 * 6.0                         # de cada eBOE: MTPH media × removido medio
-    assert turnos["captado_pct"].iloc[0] == pytest.approx(250 * 0.8 * densidad / removido_kgh * 100)
+    assert turnos["captado_pct"].iloc[0] == pytest.approx(total / removido_kgh * 100)
     assert turnos["tph"].iloc[0] == pytest.approx(34 / 3) and turnos["programa_grupo"].iloc[0] == "N0–N3"
 
 
@@ -195,3 +200,19 @@ def test_frase_del_quiebre():
                          "conjunto exportado de la app y compararlas acá.")
 def test_medias_ajustadas_contra_minitab():
     pass
+
+
+def test_descomponer_por_mezcla_de_mtph():
+    """2025 opera casi todo a baja MTPH y 2026 a alta; a igual MTPH, 2026 rinde 1 punto menos."""
+    celdas = pd.DataFrame({"a": ["≤ 11", "> 14"] * 2, "b": ["2025", "2025", "2026", "2026"],
+                           "media": [86.0, 82.0, 85.0, 81.0], "estimable": True, "n": 1})
+    datos = pd.DataFrame({"temporada": ["2025"] * 4 + ["2026"] * 4,
+                          "mtph_rango": ["≤ 11", "≤ 11", "≤ 11", "> 14", "≤ 11", "> 14", "> 14", "> 14"]})
+    resultado = descomponer_por_mezcla({"celdas": celdas, "a": "mtph_rango", "b": "temporada"}, datos, "2025", "2026")
+    assert resultado["media_base"] == pytest.approx(0.75 * 86 + 0.25 * 82)               # 85
+    assert resultado["media_nueva"] == pytest.approx(0.25 * 85 + 0.75 * 81)              # 82
+    assert resultado["nueva_con_mezcla_base"] == pytest.approx(0.75 * 85 + 0.25 * 81)    # 84
+    assert (resultado["por_mezcla"], resultado["a_igual_carga"]) == (pytest.approx(-2), pytest.approx(-1))
+    assert resultado["por_mezcla"] + resultado["a_igual_carga"] == pytest.approx(resultado["diferencia"])
+    assert resultado["rangos"]["n_nueva"].tolist() == [1, 3]
+    assert descomponer_por_mezcla({"celdas": None}, datos, "2025", "2026") is None

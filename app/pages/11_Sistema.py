@@ -21,11 +21,12 @@ import streamlit as st
 
 from cartel import cartel_modo_prueba
 from core.analisis import filtrar, pares_con_emulsion
-from core.analisis_centrifugas import filtrar_centrifugas
+from core.analisis_centrifugas import filtrar_centrifugas, primarias_por_turno
 from core.cambios_operativos import DIAS_POR_DEFECTO, antes_despues, texto_cambio
 from core.db import crear_sesion
 from core.efectos import (AYUDA_CAPTADO, CARGAS, EXPLICACION_MEDIA_AJUSTADA, NOMBRES, RESPUESTAS, captado_por_turno,
-                          correlaciones, datos_por_turno, frase_quiebre, modelo_efectos, modelo_interaccion,
+                          correlaciones, datos_por_turno, descomponer_por_mezcla, frase_quiebre, modelo_efectos,
+                          modelo_interaccion,
                           orden_de_niveles, por_mtph, preparar_datos, segmentada_por_temporada)
 from core.inicio import SIN_EMULSION
 from core.estadistica import es_outlier_iqr
@@ -39,7 +40,7 @@ from core.volatilizacion import (HIPOTESIS, RANGOS_FP, eficiencia_eboe_por_turno
 from descargas import Descargas
 from filtros import (barra_filtros, cambios_planta, casilla_repetidas, centrifugas_planta, filtros_elegidos, motor,
                      parametros_fase_pesada_planta, planta_elegida, produccion_con_borradores, produccion_planta,
-                     tabla_emulsion_planta, toneladas_planta)
+                     tabla_emulsion_planta, toneladas_planta, umbral_paralelo_planta)
 from graficos import (boxplot_temporadas, curva_mtph, dispersion_por_temporada, efectos_principales,
                       grafico_interaccion, intervalos_agrupados, lineas_en_el_tiempo)
 from presentacion import en_presentacion
@@ -266,13 +267,18 @@ def datos_para_modelo(parametros: dict, clave: str, respuesta: str) -> pd.DataFr
     compara eBOE) o, para el aceite captado, un registro por turno (las centrífugas, con la barra de filtros)."""
     pares = pares_con_emulsion(datos, SIN_EMULSION)
     if RESPUESTAS[respuesta]["por_turno"]:
-        _, balance = centrifugas_planta(planta_elegida())
-        balance = filtrar_centrifugas(balance, filtros_elegidos()) if not balance.empty else balance
+        muestras, balance = centrifugas_planta(planta_elegida())
+        if not balance.empty:
+            muestras, balance = filtrar_centrifugas(muestras, filtros_elegidos()), filtrar_centrifugas(balance,
+                                                                                                  filtros_elegidos())
+        umbral = umbral_paralelo_planta(planta_elegida())
+        modos = primarias_por_turno(muestras, umbral) if umbral is not None and not muestras.empty else None
         st.caption("Aceite captado = aceite de la fase liviana de las primarias en marcha (kg/h, balance de cada "
                    "muestreo sin los copiados; mediana de cada primaria en el turno, sumadas). En %: dividido por el "
                    "aceite removido por los eBOE (Σ MTPH × aceite en fruta de entrada × eficiencia, kg/h). En kg/MT: "
                    "dividido por la MTPH total de los eBOE. Un registro por turno.")
-        turnos = datos_por_turno(preparar_datos(tabla_fase_pesada(pares, parametros)), captado_por_turno(balance))
+        turnos = datos_por_turno(preparar_datos(tabla_fase_pesada(pares, parametros)),
+                                 captado_por_turno(balance, modos))
         if respuesta == "captado_pct" and not turnos.empty:
             mas_de_100 = int((turnos["captado_pct"] > 100).sum())
             st.caption(f"{numero(mas_de_100, 0)} de {numero(int(turnos['captado_pct'].notna().sum()), 0)} turnos con "
@@ -411,6 +417,57 @@ def pestana_efectos(registro: Descargas) -> None:
         "IC 95 %": [f"{numero(x, decimales)} a {numero(y, decimales)}" if e else "—"
                     for x, y, e in zip(celdas["ic_inf"], celdas["ic_sup"], celdas["estimable"])]}),
         f"Interacción - {nombre}")
+    if con == "temporada":
+        mostrar_descomposicion(registro, interaccion, base.dropna(subset=[respuesta]), nombre, unidad, decimales)
+
+
+def mostrar_descomposicion(registro: Descargas, interaccion: dict, base: pd.DataFrame, nombre: str, unidad: str,
+                           decimales: int) -> None:
+    """Diferencia entre dos temporadas separada en "por operar con otra mezcla de carga" y "a igual carga"
+    (core.efectos.descomponer_por_mezcla)."""
+    temporadas = orden_de_niveles("temporada", base["temporada"].dropna().unique())
+    if len(temporadas) < 2:
+        return
+    carga = NOMBRES[interaccion["a"]]
+    st.markdown(f"##### ¿Cuánto de la diferencia entre temporadas es por operar con otra mezcla de {carga}?")
+    uno, dos = st.columns(2)
+    elegida_base = uno.selectbox("Temporada de referencia", temporadas, index=len(temporadas) - 2,
+                                 key="sistema_descomposicion_base")
+    nueva = dos.selectbox("Temporada a explicar", temporadas, index=len(temporadas) - 1,
+                          key="sistema_descomposicion_nueva")
+    if elegida_base == nueva:
+        st.info("Elegí dos temporadas distintas.")
+        return
+    resultado = descomponer_por_mezcla(interaccion, base, elegida_base, nueva)
+    if resultado is None:
+        st.info("No hay rangos de carga con datos en las dos temporadas.")
+        return
+    unidad_dif = "puntos" if unidad == "%" else unidad
+    registro.tabla(pd.DataFrame({
+        "": [f"{nombre} {elegida_base}", f"{nombre} {nueva}", f"{nueva} con la mezcla de {carga} de {elegida_base}",
+             f"Diferencia {elegida_base} → {nueva}", f"· por operar con otra mezcla de {carga}",
+             f"· a igual {carga}"],
+        f"Valor ({unidad}; diferencias en {unidad_dif})": [numero(resultado[c], decimales) for c in (
+            "media_base", "media_nueva", "nueva_con_mezcla_base")] + [
+            ("+" if resultado[c] > 0 else "") + numero(resultado[c], decimales)
+            for c in ("diferencia", "por_mezcla", "a_igual_carga")]}),
+        f"Descomposición {elegida_base}-{nueva} - {nombre}")
+    st.caption(f"Con las medias ajustadas de la interacción: la temporada {nueva} se repondera con las proporciones de "
+               f"cada rango de {carga} de {elegida_base}. La parte por la mezcla es lo que cambia solo por operar con "
+               f"otra distribución de {carga}; la otra parte es la diferencia a igual {carga}. Las dos suman la "
+               f"diferencia total. N = {numero(resultado['n_base'], 0)} ({elegida_base}) y "
+               f"{numero(resultado['n_nueva'], 0)} ({nueva}).")
+    with st.expander(f"Proporciones y medias por rango de {carga}"):
+        rangos = resultado["rangos"]
+        registro.tabla(pd.DataFrame({
+            carga: rangos["rango"],
+            f"% {elegida_base}": (rangos["p_base"] * 100).map(lambda v: numero(v, 1)),
+            f"% {nueva}": (rangos["p_nueva"] * 100).map(lambda v: numero(v, 1)),
+            f"Media ajustada {elegida_base}": rangos["media_base"].map(lambda v: numero(v, decimales)),
+            f"Media ajustada {nueva}": rangos["media_nueva"].map(lambda v: numero(v, decimales)),
+            f"N {elegida_base}": rangos["n_base"].map(lambda v: numero(v, 0) + (" ⚠️" if v < 3 else "")),
+            f"N {nueva}": rangos["n_nueva"].map(lambda v: numero(v, 0) + (" ⚠️" if v < 3 else ""))}),
+            f"Proporciones por rango {elegida_base}-{nueva}")
 
 
 def mostrar_quiebres(registro: Descargas, quiebres: pd.DataFrame, respuesta: str, titulo: str) -> None:
