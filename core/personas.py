@@ -10,14 +10,19 @@ Cálculo: medias ajustadas (como core.efectos) del modelo respuesta ~ grupo + co
 Condiciones: para el eBOE, eBOE, programa (grupos), MTPH (rangos), temporada y turno (si el grupo no es el turno);
 para la primaria, el equipo, la temporada y el turno. Solo entran los grupos (o combinaciones) con N ≥ N_MINIMO.
 Eficiencia de la primaria: la del balance de cada muestreo, sin copiados ni fuera de rango físico (dato inválido).
+- turno_por_temporada(): el turno dentro de cada temporada (¿un turno sale abajo siempre o en una sola?).
+- lectura_por_quimico(): ¿un químico lee distinto la entrada o la salida con la misma fruta? Es un posible sesgo de
+  medición, no desempeño.
 """
 
+import numpy as np
 import pandas as pd
 import statsmodels.formula.api as smf
+from scipy import stats
 from sqlalchemy import select
 
 from core.analisis_centrifugas import PRIMARIA
-from core.efectos import _media_ajustada, orden_de_niveles
+from core.efectos import _media_ajustada, _vector, orden_de_niveles
 from core.models import Equipo, LecturaOperacion, Linea, MuestraCentrifuga
 
 N_MINIMO = 20
@@ -127,3 +132,84 @@ def medias_por_grupo(datos: pd.DataFrame, respuesta: str, grupo: list[str], ajus
 def orden_turnos(niveles) -> list[str]:
     """Los turnos en el orden del día (M, T, N)."""
     return orden_de_niveles("turno", niveles)
+
+
+def turno_por_temporada(datos: pd.DataFrame, respuesta: str, ajuste: list[str], n_minimo: int = N_MINIMO
+                        ) -> pd.DataFrame:
+    """Media ajustada de la respuesta por turno dentro de cada temporada (el modelo de medias_por_grupo en cada
+    temporada, con las condiciones de trabajo menos la temporada). Columnas: temporada, turno, n, media, ic_inf,
+    ic_sup, estimable."""
+    filas = []
+    for temporada, sub in datos.dropna(subset=["temporada"]).groupby("temporada", sort=True):
+        resultado = medias_por_grupo(sub, respuesta, ["turno"], [f for f in ajuste if f != "temporada"], n_minimo)
+        for fila in resultado["medias"].to_dict("records"):
+            filas.append({"temporada": temporada, "turno": fila["grupo"], **{k: fila[k] for k in (
+                "n", "media", "ic_inf", "ic_sup", "estimable")}})
+    tabla = pd.DataFrame(filas, columns=["temporada", "turno", "n", "media", "ic_inf", "ic_sup", "estimable"])
+    orden = {t: k for k, t in enumerate(orden_turnos(tabla["turno"].unique()))}
+    return tabla.sort_values(["temporada", "turno"], key=lambda c: c.map(orden) if c.name == "turno" else c,
+                             ignore_index=True)
+
+
+AJUSTE_LECTURA = ["eboe", "programa_grupo", "mtph_rango", "semana"]     # la semana fija la temporada y la fruta
+LECTURAS = {"aceite_fruta": "Entrada", "aceite_salida": "Salida"}
+UMBRAL_SESGO_PCT = 2.0      # diferencia mínima (% de la lectura mediana) para marcar un posible sesgo (a confirmar)
+
+
+def lectura_por_quimico(datos: pd.DataFrame, n_minimo: int = N_MINIMO, alfa: float = 0.05) -> pd.DataFrame:
+    """¿Algún químico lee distinto el aceite en fruta de entrada o de salida con la misma fruta? Para cada lectura
+    (LECTURAS), un modelo aceite ~ químico + eBOE + programa + MTPH + semana de producción, y para cada químico el
+    contraste "su media ajustada − la lectura mediana de los químicos" (kg/MT) con su p (t). La referencia es el químico
+    del medio (o el promedio de los dos del medio): así uno que lee distinto no corre la referencia de los demás.
+    Una diferencia significativa (p < alfa) y de al menos UMBRAL_SESGO_PCT % de la lectura mediana (con miles de datos,
+    diferencias chiquitas dan p < 0,05) en la entrada o en la salida es un posible sesgo de medición, no desempeño:
+    la fruta y la operación son las mismas. datos: pares (core.efectos.preparar_datos, con analista).
+    Columnas: quimico, n y, por lectura, media_<l>, dif_<l>, pct_<l> (% de la lectura mediana) y p_<l> (l = entrada o
+    salida), y lectura (texto)."""
+    datos = datos.assign(semana=pd.to_datetime(datos["fecha_produccion"]).dt.strftime("%G-%V"))
+    salida = {}
+    for respuesta, lugar in LECTURAS.items():
+        sub = datos.dropna(subset=[respuesta, "analista"])
+        conteo = sub["analista"].value_counts()
+        sub = sub[sub["analista"].isin(conteo[conteo >= n_minimo].index)].assign(_grupo=lambda d: d["analista"])
+        factores = [f for f in AJUSTE_LECTURA if f in sub and sub[f].nunique() > 1]
+        sub = sub.dropna(subset=factores)
+        if sub["_grupo"].nunique() < 2:
+            continue
+        modelo = smf.ols(f"{respuesta} ~ C(_grupo)" + "".join(f" + C({f})" for f in factores), data=sub).fit()
+        niveles = {f: sorted(sub[f].unique()) for f in ["_grupo", *factores]}
+        vectores = {q: _vector(modelo.model.exog_names, niveles, {"_grupo": q}) for q in niveles["_grupo"]}
+        ordenados = sorted(vectores, key=lambda q: float(vectores[q] @ modelo.params.values))
+        mitad = len(ordenados) // 2
+        del_medio = ordenados[mitad - 1:mitad + 1] if len(ordenados) % 2 == 0 else [ordenados[mitad]]
+        referencia = sum(vectores[q] for q in del_medio) / len(del_medio)
+        proyector = modelo.model.pinv_wexog @ modelo.model.wexog
+        for quimico, vector in vectores.items():
+            contraste = vector - referencia
+            estimable = np.linalg.norm(contraste - contraste @ proyector) <= 1e-6 * max(1.0, np.linalg.norm(contraste))
+            fila = salida.setdefault(quimico, {"quimico": quimico, "n": 0})
+            fila["n"] = max(fila["n"], int((sub["_grupo"] == quimico).sum()))
+            if not estimable:
+                continue
+            dif = float(contraste @ modelo.params.values)
+            error = float(np.sqrt(contraste @ modelo.cov_params().values @ contraste))
+            clave = lugar.lower()
+            fila[f"media_{clave}"] = float(vector @ modelo.params.values)
+            fila[f"dif_{clave}"] = dif
+            mediana = float(referencia @ modelo.params.values)
+            fila[f"pct_{clave}"] = dif / mediana * 100 if mediana else None
+            fila[f"p_{clave}"] = float(2 * stats.t.sf(abs(dif / error), modelo.df_resid)) if error > 0 else None
+    columnas = ["quimico", "n", "media_entrada", "dif_entrada", "pct_entrada", "p_entrada", "media_salida",
+                "dif_salida", "pct_salida", "p_salida", "lectura"]
+    tabla = pd.DataFrame(list(salida.values())).reindex(columns=columnas)
+
+    def texto(fila) -> str:
+        distintas = [lugar.lower() for lugar in LECTURAS.values()
+                     if pd.notna(fila[f"p_{lugar.lower()}"]) and fila[f"p_{lugar.lower()}"] < alfa
+                     and abs(fila[f"pct_{lugar.lower()}"]) >= UMBRAL_SESGO_PCT]
+        if not distintas:
+            return "sin diferencias de lectura"
+        return "posible sesgo de medición (" + " y ".join(distintas) + ")"
+
+    tabla["lectura"] = tabla.apply(texto, axis=1) if len(tabla) else []
+    return tabla.sort_values("n", ascending=False, ignore_index=True)

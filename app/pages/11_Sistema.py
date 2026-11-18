@@ -37,7 +37,9 @@ from core.fase_pesada import CLAVES_TURNO, mediana_por, tabla_fase_pesada
 from core.formato import numero, texto_p
 from core.parametros import ParametrosIncompletos
 from core.personas import (ACLARACION, AJUSTE_EBOE, AJUSTE_PRIMARIA, N_MINIMO, NOMBRES_GRUPO, anonimizar,
-                           datos_eboe, datos_primaria, medias_por_grupo, orden_turnos)
+                           UMBRAL_SESGO_PCT, datos_eboe, datos_primaria, lectura_por_quimico, medias_por_grupo,
+                           orden_turnos,
+                           turno_por_temporada)
 from core.proceso import filtrar_produccion, turnos_sin_aprobar
 from core.repetidas import sin_entradas_repetidas
 from core.volatilizacion import (HIPOTESIS, RANGOS_FP, eficiencia_eboe_por_turno, eficiencias_por_dia,
@@ -613,6 +615,18 @@ def bloque_personas(datos: pd.DataFrame, agrupaciones: dict, ajuste: list[str], 
                + (f" ({resultado['excluidos']} con menos datos no se muestran)." if resultado["excluidos"] else "."))
 
 
+def tabla_turno_por_temporada(datos: pd.DataFrame, ajuste: list[str]) -> None:
+    """Media ajustada por turno dentro de cada temporada: "media (N)", una fila por temporada (st.table)."""
+    tabla = turno_por_temporada(datos, "eficiencia_pct", ajuste)
+    tabla = tabla[tabla["estimable"]]
+    if tabla.empty:
+        st.caption("Sin datos suficientes por turno y temporada.")
+        return
+    tabla = tabla.assign(valor=[f"{numero(m, 1)} % (N {numero(n, 0)})" for m, n in zip(tabla["media"], tabla["n"])])
+    vista = tabla.pivot(index="temporada", columns="turno", values="valor")
+    st.table(vista[[t for t in orden_turnos(vista.columns)]].rename_axis(index="Temporada", columns=None))
+
+
 def pestana_personas(registro: Descargas) -> None:
     st.info(ACLARACION)
     st.caption("Esta pestaña no se exporta (ni PNG, ni Excel, ni «Descargar todo») y no aparece en el modo "
@@ -639,6 +653,29 @@ def pestana_personas(registro: Descargas) -> None:
     st.markdown("##### Eficiencia eBOE")
     bloque_personas(eboe, AGRUPACIONES_EBOE, AJUSTE_EBOE, "sistema_personas_eboe", "Eficiencia eBOE",
                     "eBOE, programa, MTPH, temporada y turno (si no es lo que se agrupa); sin entradas repetidas")
+    st.markdown("###### Turno por temporada (eBOE)")
+    tabla_turno_por_temporada(eboe, AJUSTE_EBOE)
+    st.caption("Media ajustada de cada turno dentro de su temporada (eBOE, programa y MTPH), con N.")
+
+    st.markdown("##### Lectura de los químicos: aceite en fruta de entrada y de salida")
+    lectura = lectura_por_quimico(eboe)
+    if lectura.empty:
+        st.caption(f"Hacen falta al menos dos químicos con N ≥ {N_MINIMO}.")
+    else:
+        st.table(pd.DataFrame({
+            "Químico": lectura["quimico"], "N": lectura["n"].map(lambda v: numero(v, 0)),
+            **{f"{lugar}: diferencia (kg/MT)": [
+                ("—" if pd.isna(d) else ("+" if d > 0 else "") + numero(d, 2) + f" ({numero(pct, 1)} %)")
+                + ("" if pd.isna(p) else f" · {texto_p(p)}")
+                for d, pct, p in zip(lectura[f"dif_{clave}"], lectura[f"pct_{clave}"], lectura[f"p_{clave}"])]
+               for lugar, clave in (("Entrada", "entrada"), ("Salida", "salida"))},
+            "Lectura": lectura["lectura"]}).set_index("Químico"))
+        st.caption("Diferencia de cada químico contra la lectura mediana de los químicos, con la misma fruta: modelo "
+                   "ajustado por eBOE, programa, MTPH y semana de producción. Una diferencia significativa (p < 0,05) "
+                   f"y de al menos {numero(UMBRAL_SESGO_PCT, 0)} % en la entrada o en la salida es un posible sesgo de "
+                   "medición, no desempeño: la fruta y la operación son las mismas. Conviene revisarlo con el "
+                   "laboratorio (técnica, normalidad, muestreo).")
+
     st.markdown("##### Eficiencia de la centrífuga primaria")
     if primaria.empty:
         st.info("No hay balances de las primarias con estos filtros.")
@@ -646,6 +683,8 @@ def pestana_personas(registro: Descargas) -> None:
     bloque_personas(primaria, AGRUPACIONES_PRIMARIA, AJUSTE_PRIMARIA, "sistema_personas_primaria",
                     "Eficiencia de la primaria", "equipo, temporada y turno (si no es lo que se agrupa); sin "
                                                  "muestreos copiados ni fuera de rango físico")
+    st.markdown("###### Turno por temporada (primaria)")
+    tabla_turno_por_temporada(primaria, AJUSTE_PRIMARIA)
 
 
 PESTANAS = {"Volatilización": pestana_volatilizacion, "Efectos principales": pestana_efectos,

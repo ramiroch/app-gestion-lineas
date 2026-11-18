@@ -9,7 +9,8 @@ import pytest
 from sqlalchemy import select
 
 from core.models import LecturaOperacion
-from core.personas import (N_MINIMO, anonimizar, datos_eboe, datos_primaria, medias_por_grupo, operadores_eboe,
+from core.personas import (N_MINIMO, anonimizar, datos_eboe, datos_primaria, lectura_por_quimico, medias_por_grupo,
+                           operadores_eboe, turno_por_temporada,
                            personas_centrifugas)
 from tests.test_carga_scott import sesion  # noqa: F401  (fixture)
 from tests.test_inicio import _muestra, _ronda, planta  # noqa: F401  (fixture)
@@ -146,3 +147,38 @@ def test_equipos_de_trabajo_solo_con_permiso_y_anonimizado(base_con_operadores):
     assert not [b for b in con_permiso.get("download_button")]                            # nada para descargar
     en_presentacion = _sistema(base_con_operadores(True), presentacion=True)
     assert "Equipos de trabajo" not in [t.label for t in en_presentacion.tabs]           # nunca en presentación
+
+
+def test_turno_por_temporada():
+    azar = np.random.default_rng(4)
+    filas = []
+    for temporada in ("2025", "2026"):
+        for k in range(300):
+            turno = ["M", "T", "N"][k % 3]
+            caida = 3 if (temporada == "2026" and turno == "T") else 0          # el T, abajo solo en 2026
+            filas.append({"temporada": temporada, "turno": turno, "eboe": ["1", "2"][k % 2],
+                          "eficiencia_pct": 85 - caida + azar.normal(0, 0.5)})
+    tabla = turno_por_temporada(pd.DataFrame(filas), "eficiencia_pct", ["eboe", "temporada", "turno"]).set_index(
+        ["temporada", "turno"])
+    assert tabla.index.get_level_values("turno")[:3].tolist() == ["M", "T", "N"]          # en el orden del día
+    assert tabla.loc[("2026", "M"), "media"] - tabla.loc[("2026", "T"), "media"] == pytest.approx(3, abs=0.3)
+    assert abs(tabla.loc[("2025", "M"), "media"] - tabla.loc[("2025", "T"), "media"]) < 0.3
+    assert tabla.loc[("2025", "T"), "n"] == 100
+
+
+def test_lectura_por_quimico_marca_posible_sesgo():
+    """Lía lee la entrada 0,6 kg/MT más alta con la misma fruta (misma semana, eBOE y operación); la salida, igual."""
+    azar = np.random.default_rng(9)
+    filas = []
+    for k in range(600):
+        quimico = ["Ana", "Lía", "Sol"][k % 3]
+        semana = pd.Timestamp("2026-07-06") + pd.Timedelta(days=7 * (k % 8))
+        fruta = 8 + 0.3 * (k % 8)                                           # cada semana, otra fruta
+        filas.append({"analista": quimico, "fecha_produccion": semana, "eboe": ["1", "2"][k % 2],
+                      "programa_grupo": "N4–N5", "mtph_rango": "≤ 11",
+                      "aceite_fruta": fruta + 0.6 * (quimico == "Lía") + azar.normal(0, 0.2),
+                      "aceite_salida": 1.2 + azar.normal(0, 0.1)})
+    tabla = lectura_por_quimico(pd.DataFrame(filas)).set_index("quimico")
+    assert tabla.loc["Lía", "lectura"] == "posible sesgo de medición (entrada)"
+    assert tabla.loc["Lía", "dif_entrada"] == pytest.approx(0.6, abs=0.1)              # contra la lectura mediana
+    assert tabla.loc["Ana", "lectura"] == "sin diferencias de lectura" and tabla.loc["Ana", "n"] == 200
