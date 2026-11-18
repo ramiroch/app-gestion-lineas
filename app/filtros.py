@@ -25,6 +25,7 @@ from core.parametros import ParametrosIncompletos, validar_parametros
 from core.analisis_centrifugas import balance_por_muestreo, por_muestreo, rangos_centrifugas, tabla_muestras
 from core.capacidad import limites_capacidad
 from core.cambios_operativos import listar_cambios
+from core.personas import operadores_eboe, personas_centrifugas
 from core.fase_pesada import parametros_fase_pesada
 
 PLANTA_POR_DEFECTO = "LEDESMA"
@@ -156,6 +157,20 @@ def umbral_paralelo_planta(planta_id: int) -> float | None:
             return validar_parametros(sesion.get(Planta, planta_id), ["umbral_paralelo_lh"])["umbral_paralelo_lh"]
         except ParametrosIncompletos:
             return None
+
+
+@st.cache_data(ttl=600)
+def mostrar_personas_planta(planta_id: int) -> bool:
+    """Planta.mostrar_personas (vacío = no): si se muestran los análisis por operador y químico."""
+    with crear_sesion(motor()) as sesion:
+        return bool(sesion.get(Planta, planta_id).mostrar_personas)
+
+
+@st.cache_data(ttl=600)
+def operadores_planta(planta_id: int):
+    """(operadores de los eBOE, químico y operador de cada muestreo de centrífugas) de la planta (core.personas)."""
+    with crear_sesion(motor()) as sesion:
+        return operadores_eboe(sesion, planta_id), personas_centrifugas(sesion, planta_id)
 
 
 @st.cache_data(ttl=600)

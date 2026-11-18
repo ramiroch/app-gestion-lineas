@@ -10,6 +10,9 @@ cada tabla Excel y cada pestaña "Descargar todo".
 - Umbral de MTPH: respuesta por MTPH y regresión segmentada por temporada.
 - Antes/después: un cambio de la bitácora (Carga diaria › Cambios operativos) y los KPI en los N días de producción
   antes y después, con su prueba.
+- Equipos de trabajo: eficiencia del eBOE y de la primaria por operador, químico y turno (medias ajustadas por las
+  condiciones de trabajo). Solo con mostrar_personas = sí y nunca en el modo presentación; anonimizado por defecto; no
+  se exporta (sin PNG, Excel ni "Descargar todo").
 - Fase pesada: caudal de fase pesada real (laboratorio) contra el requerido por el balance de aceite del licor;
   rango de fase pesada (gráfico Brown) por temporada, eBOE, día y turno; coherencia del muestreo del licor (indicador
   interno: no se usa en otros análisis y no se muestra en el modo presentación).
@@ -33,16 +36,19 @@ from core.estadistica import es_outlier_iqr
 from core.fase_pesada import CLAVES_TURNO, mediana_por, tabla_fase_pesada
 from core.formato import numero, texto_p
 from core.parametros import ParametrosIncompletos
+from core.personas import (ACLARACION, AJUSTE_EBOE, AJUSTE_PRIMARIA, N_MINIMO, NOMBRES_GRUPO, anonimizar,
+                           datos_eboe, datos_primaria, medias_por_grupo, orden_turnos)
 from core.proceso import filtrar_produccion, turnos_sin_aprobar
 from core.repetidas import sin_entradas_repetidas
 from core.volatilizacion import (HIPOTESIS, RANGOS_FP, eficiencia_eboe_por_turno, eficiencias_por_dia,
                                  medias_por_rango)
 from descargas import Descargas
 from filtros import (barra_filtros, cambios_planta, casilla_repetidas, centrifugas_planta, filtros_elegidos, motor,
+                     mostrar_personas_planta, operadores_planta,
                      parametros_fase_pesada_planta, planta_elegida, produccion_con_borradores, produccion_planta,
                      tabla_emulsion_planta, toneladas_planta, umbral_paralelo_planta)
 from graficos import (boxplot_temporadas, curva_mtph, dispersion_por_temporada, efectos_principales,
-                      grafico_interaccion, intervalos_agrupados, lineas_en_el_tiempo)
+                      grafico_interaccion, intervalos, intervalos_agrupados, lineas_en_el_tiempo)
 from presentacion import en_presentacion
 
 st.set_page_config(page_title="Sistema", layout="wide")
@@ -571,9 +577,82 @@ def pestana_antes_despues(registro: Descargas) -> None:
                "menos 60 t). Retorno de FP y aceite captado: por turno, desde las centrífugas.")
 
 
+PERSONAS = "Equipos de trabajo"
+AGRUPACIONES_EBOE = {"Operador de eBOE": ["operador"], "Químico": ["analista"], "Turno": ["turno"],
+                     "Operador × turno": ["operador", "turno"], "Químico × operador": ["analista", "operador"]}
+AGRUPACIONES_PRIMARIA = {"Operador de centrífugas": ["operador_centrifugas"], "Químico": ["analista"],
+                         "Turno": ["turno"], "Químico × operador": ["analista", "operador_centrifugas"]}
+
+
+def bloque_personas(datos: pd.DataFrame, agrupaciones: dict, ajuste: list[str], clave: str, titulo: str,
+                    condiciones: str) -> None:
+    """Medias ajustadas por grupo, con su gráfico y su tabla. Nada se registra en Descargas: no se exporta. El gráfico
+    va sin la barra de Plotly (que tiene su propio botón de descarga) y la tabla con st.table (sin descarga)."""
+    eleccion = st.radio("Agrupar por", list(agrupaciones), horizontal=True, key=clave)
+    grupo = agrupaciones[eleccion]
+    resultado = medias_por_grupo(datos, "eficiencia_pct", grupo, ajuste)
+    medias = resultado["medias"]
+    if medias.empty:
+        st.info(f"No hay al menos dos grupos con N ≥ {N_MINIMO} con estos filtros.")
+        return
+    if grupo == ["turno"]:
+        medias = medias.set_index("grupo").loc[orden_turnos(medias["grupo"])].reset_index()
+    medias = medias[medias["estimable"]]
+    if medias.empty:
+        st.info("Las medias ajustadas no se pueden estimar: los grupos están confundidos con las condiciones de trabajo "
+                "(por ejemplo, cada operador siempre en el mismo eBOE).")
+        return
+    st.plotly_chart(intervalos(medias, f"{titulo} (%)", "%", 1, titulo_x=eleccion, titulo="Media ajustada e IC del 95 %"),
+                    width="stretch", config={"displayModeBar": False})
+    st.table(pd.DataFrame({eleccion: medias["grupo"], "N": medias["n"].map(lambda v: numero(v, 0)),
+                           "Media ajustada (%)": medias["media"].map(lambda v: numero(v, 1)),
+                           "IC 95 %": [f"{numero(a, 1)} a {numero(b, 1)}" for a, b in
+                                       zip(medias["ic_inf"], medias["ic_sup"])]}).set_index(eleccion))
+    st.caption(f"Ajustado por {condiciones}. N = {numero(resultado['n'], 0)}; R² del modelo "
+               f"{numero(resultado['r2'] * 100, 1)} %. Solo grupos con N ≥ {N_MINIMO}"
+               + (f" ({resultado['excluidos']} con menos datos no se muestran)." if resultado["excluidos"] else "."))
+
+
+def pestana_personas(registro: Descargas) -> None:
+    st.info(ACLARACION)
+    st.caption("Esta pestaña no se exporta (ni PNG, ni Excel, ni «Descargar todo») y no aparece en el modo "
+               "presentación. Se ve solo si la planta tiene mostrar_personas = sí.")
+    anonimo = st.toggle("Anonimizar", value=True, key="sistema_personas_anonimizar",
+                        help="Operador A, B, C… y Químico A, B… por cantidad de datos (A = el que tiene más).")
+    try:
+        parametros = parametros_fase_pesada_planta(planta_elegida())
+    except ParametrosIncompletos as error:
+        st.warning(str(error))
+        return
+    operadores, personas = operadores_planta(planta_elegida())
+    pares = sin_entradas_repetidas(pares_con_emulsion(datos, SIN_EMULSION))
+    eboe = datos_eboe(preparar_datos(tabla_fase_pesada(pares, parametros)), operadores)
+    _, balance = centrifugas_planta(planta_elegida())
+    if not balance.empty:
+        balance = filtrar_centrifugas(balance, filtros_elegidos())
+    primaria = datos_primaria(balance, personas) if not balance.empty else pd.DataFrame()
+    if anonimo:
+        eboe = anonimizar(eboe, ["operador", "analista"])
+        if not primaria.empty:
+            primaria = anonimizar(primaria, ["analista", "operador_centrifugas"])
+
+    st.markdown("##### Eficiencia eBOE")
+    bloque_personas(eboe, AGRUPACIONES_EBOE, AJUSTE_EBOE, "sistema_personas_eboe", "Eficiencia eBOE",
+                    "eBOE, programa, MTPH, temporada y turno (si no es lo que se agrupa); sin entradas repetidas")
+    st.markdown("##### Eficiencia de la centrífuga primaria")
+    if primaria.empty:
+        st.info("No hay balances de las primarias con estos filtros.")
+        return
+    bloque_personas(primaria, AGRUPACIONES_PRIMARIA, AJUSTE_PRIMARIA, "sistema_personas_primaria",
+                    "Eficiencia de la primaria", "equipo, temporada y turno (si no es lo que se agrupa); sin "
+                                                 "muestreos copiados ni fuera de rango físico")
+
+
 PESTANAS = {"Volatilización": pestana_volatilizacion, "Efectos principales": pestana_efectos,
             "Umbral de MTPH": pestana_umbral, "Antes/después": pestana_antes_despues,
             "Fase pesada": pestana_fase_pesada}
+if mostrar_personas_planta(planta_elegida()) and not en_presentacion():
+    PESTANAS[PERSONAS] = pestana_personas
 # Con key y on_change, cada pestaña sabe si está abierta (.open): solo se dibuja la abierta.
 # bind="query-params": la pestaña queda en la URL (?pestana_sistema=Fase+pesada) y se puede compartir el enlace.
 for (nombre, dibujar), pestana in zip(PESTANAS.items(), st.tabs(list(PESTANAS), key="pestana_sistema",
@@ -583,4 +662,5 @@ for (nombre, dibujar), pestana in zip(PESTANAS.items(), st.tabs(list(PESTANAS), 
             arriba = st.container()
             registro = Descargas(nombre)
             dibujar(registro)
-            registro.boton_todo(arriba)
+            if nombre != PERSONAS:                 # los análisis por persona no se exportan
+                registro.boton_todo(arriba)

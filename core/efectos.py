@@ -104,14 +104,16 @@ def _categorias(datos: pd.DataFrame) -> pd.DataFrame:
     datos["mtph_rango"] = rango_mtph(datos["tph"])
     datos["fp_rango"] = asignar_rango(datos["fp_especifica"], "fp_especifica")
     datos["regimen"] = regimen_agua(datos["fp_especifica"])
-    if datos["aceite_fruta"].notna().sum() >= 4:
-        cortes = cortes_cuartiles(datos["aceite_fruta"])
+    # Con cortes repetidos (por ejemplo, un período corto con valores iguales) el factor no varía: queda vacío y no
+    # entra al modelo.
+    cortes = cortes_cuartiles(datos["aceite_fruta"]) if datos["aceite_fruta"].notna().sum() >= 4 else []
+    if cortes and len(set(cortes)) == len(cortes):
         datos["aceite_rango"] = asignar_cuartil(datos["aceite_fruta"], cortes).map(
             etiquetas_cuartiles(cortes, "kg/MT", 1)).astype(object)
     else:
         datos["aceite_rango"] = None
-    if datos["frutos_10kg"].notna().sum() >= 5:
-        cortes = cortes_quintiles(datos["frutos_10kg"])
+    cortes = cortes_quintiles(datos["frutos_10kg"]) if datos["frutos_10kg"].notna().sum() >= 5 else []
+    if cortes and len(set(cortes)) == len(cortes):
         datos["calibre"] = asignar_quintil(datos["frutos_10kg"], cortes).map(etiquetas_quintiles(cortes)).astype(object)
     else:
         datos["calibre"] = None

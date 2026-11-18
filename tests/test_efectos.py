@@ -11,7 +11,7 @@ import statsmodels.formula.api as smf
 
 from core.efectos import (ETIQUETAS_MTPH, REGIMENES, _media_ajustada, captado_por_turno, correlaciones,
                           datos_por_turno, descomponer_por_mezcla, frase_quiebre, modelo_efectos, modelo_interaccion, quiebre, quiebres_por_temporada,
-                          rango_mtph, regimen_agua)
+                          preparar_datos, rango_mtph, regimen_agua)
 
 RUIDO = np.random.default_rng(7)
 
@@ -216,3 +216,14 @@ def test_descomponer_por_mezcla_de_mtph():
     assert resultado["por_mezcla"] + resultado["a_igual_carga"] == pytest.approx(resultado["diferencia"])
     assert resultado["rangos"]["n_nueva"].tolist() == [1, 3]
     assert descomponer_por_mezcla({"celdas": None}, datos, "2025", "2026") is None
+
+
+def test_cortes_repetidos_no_rompen():
+    """Un período con todos los frutos iguales: los quintiles se repiten y el calibre queda sin rangos."""
+    tabla = pd.DataFrame({"eficiencia_par": [0.8] * 6, "n_frutos": [40] * 6, "peso_fruta_kg": [8.0] * 6,
+                          "tph": [10.0, 11, 12, 13, 14, 15], "fp_especifica": [0.5] * 6,
+                          "aceite_fruta": [7.0, 7.5, 8.0, 8.5, 9.0, 9.5], "programa": ["N3"] * 6,
+                          "fecha_produccion": pd.to_datetime(["2026-07-01"] * 6), "turno": ["M"] * 6,
+                          "temporada": [2026] * 6, "eboe": [1, 2, 3, 1, 2, 3]})
+    datos = preparar_datos(tabla)
+    assert datos["calibre"].isna().all() and datos["aceite_rango"].notna().all()
