@@ -937,6 +937,84 @@ def dispersion_por_temporada(datos: pd.DataFrame, x: str, y: str, titulo_x: str,
     return estilo(figura, ALTURA_CHICA)
 
 
+def efectos_principales(medias: pd.DataFrame, titulo_y: str, unidad: str, decimales: int,
+                        por_fila: int = 4) -> go.Figure:
+    """Gráfica de efectos principales (medias ajustadas, como Minitab): un panel por factor, la media ajustada de cada
+    nivel unida con una línea, con su IC del 95 % y el N en el tooltip. medias: core.efectos.modelo_efectos()["medias"]
+    (los niveles no estimables no se dibujan)."""
+    factores = list(dict.fromkeys(medias["factor"]))
+    filas = -(-len(factores) // por_fila)
+    nombres = [medias.loc[medias["factor"] == f, "nombre"].iloc[0] for f in factores]
+    figura = make_subplots(rows=filas, cols=por_fila, shared_yaxes=True, subplot_titles=nombres,
+                           horizontal_spacing=0.03, vertical_spacing=0.22)
+    for k, factor in enumerate(factores):
+        sub = medias[(medias["factor"] == factor) & medias["estimable"]]
+        figura.add_scatter(
+            x=sub["nivel"], y=sub["media"], mode="lines+markers", showlegend=False,
+            line=dict(color=COLOR_DATOS, width=1.5), marker=dict(size=7, color=COLOR_DATOS),
+            error_y=dict(type="data", symmetric=False, array=sub["ic_sup"] - sub["media"],
+                         arrayminus=sub["media"] - sub["ic_inf"], color=GRIS, thickness=1.5, width=5),
+            customdata=list(zip(*(sub[c].map(lambda v: numero(v, decimales)) for c in ("media", "ic_inf", "ic_sup")),
+                                sub["n"].map(lambda v: numero(v, 0) + (" ⚠ N < 3" if v < 3 else "")))),
+            hovertemplate=f"<b>{nombres[k]} · %{{x}}</b><br>Media ajustada %{{customdata[0]}} {unidad}<br>IC 95 %: "
+                          f"%{{customdata[1]}} a %{{customdata[2]}}<br>N %{{customdata[3]}}<extra></extra>",
+            row=k // por_fila + 1, col=k % por_fila + 1)
+        figura.update_xaxes(type="category", tickangle=-35, tickfont=dict(size=10), row=k // por_fila + 1,
+                            col=k % por_fila + 1)
+    for fila in range(1, filas + 1):
+        figura.update_yaxes(title_text=titulo_y, row=fila, col=1)
+    figura.update_annotations(font_size=12)
+    return estilo(figura, 300 * filas + 80)
+
+
+def grafico_interaccion(celdas: pd.DataFrame, titulo_x: str, titulo_y: str, unidad: str, decimales: int,
+                        orden_x: list[str]) -> go.Figure:
+    """Gráfico de interacción: una línea por nivel de b (por ejemplo, temporada) sobre los niveles de a (rangos de
+    MTPH), con la media ajustada de cada celda, su IC del 95 % y el N (tenues con N < 3; las no estimables no se
+    dibujan). celdas: core.efectos.modelo_interaccion()["celdas"]."""
+    figura = go.Figure()
+    for k, (nivel_b, sub) in enumerate(celdas.groupby("b", sort=False)):
+        sub = sub[sub["estimable"]]
+        color = PALETA[k % len(PALETA)]
+        chicos = (sub["n"] < 3).tolist()
+        figura.add_scatter(
+            x=sub["a"], y=sub["media"], mode="lines+markers", name=str(nivel_b),
+            line=dict(color=color, width=2), marker=dict(size=8, color=color, opacity=[0.3 if c else 1 for c in chicos]),
+            error_y=dict(type="data", symmetric=False, array=sub["ic_sup"] - sub["media"],
+                         arrayminus=sub["media"] - sub["ic_inf"], color=color, thickness=1.5, width=6),
+            customdata=list(zip(*(sub[c].map(lambda v: numero(v, decimales)) for c in ("media", "ic_inf", "ic_sup")),
+                                sub["n"].map(lambda v: numero(v, 0)), ["<br><b>⚠ N < 3</b>" if c else "" for c in chicos])),
+            hovertemplate=f"<b>{nivel_b} · %{{x}}</b><br>Media ajustada %{{customdata[0]}} {unidad}<br>IC 95 %: "
+                          "%{customdata[1]} a %{customdata[2]}<br>N %{customdata[3]}%{customdata[4]}<extra></extra>")
+    figura.update_layout(yaxis_title=f"{titulo_y} ({unidad})", xaxis=dict(type="category", title=titulo_x,
+                                                                         categoryorder="array", categoryarray=orden_x))
+    return estilo(figura)
+
+
+def curva_mtph(tabla: pd.DataFrame, quiebres: pd.DataFrame, titulo_y: str, unidad: str, decimales: int) -> go.Figure:
+    """Respuesta por MTPH (de a 1) con una línea por temporada (media, IC 95 % y N; tenues con N < 3) y el punto de
+    quiebre de cada temporada como línea vertical punteada de su color. tabla: core.efectos.por_mtph(por=None);
+    quiebres: core.efectos.quiebres_por_temporada()."""
+    figura = go.Figure()
+    for k, (temporada, sub) in enumerate(tabla.sort_values("mtph").groupby("temporada", sort=True)):
+        color = PALETA[k % len(PALETA)]
+        chicos = (sub["n"] < 3).tolist()
+        figura.add_scatter(
+            x=sub["mtph"], y=sub["media"], mode="lines+markers", name=str(temporada), line=dict(color=color, width=2),
+            marker=dict(size=7, color=color, opacity=[0.3 if c else 1 for c in chicos]),
+            error_y=dict(type="data", symmetric=False, array=sub["ic_sup"] - sub["media"],
+                         arrayminus=sub["media"] - sub["ic_inf"], color=color, thickness=1, width=4),
+            customdata=list(zip(sub["media"].map(lambda v: numero(v, decimales)), sub["n"].map(lambda v: numero(v, 0)),
+                                ["<br><b>⚠ N < 3</b>" if c else "" for c in chicos])),
+            hovertemplate=f"<b>{temporada} · %{{x}} MTPH</b><br>{titulo_y}: %{{customdata[0]}} {unidad}<br>N "
+                          "%{customdata[1]}%{customdata[2]}<extra></extra>")
+        fila = quiebres[quiebres["temporada"] == temporada]
+        if len(fila) and pd.notna(fila["quiebre"].iloc[0]):
+            figura.add_vline(x=float(fila["quiebre"].iloc[0]), line=dict(color=color, dash="dot", width=1.5))
+    figura.update_layout(yaxis_title=f"{titulo_y} ({unidad})", xaxis=dict(title="MTPH (redondeada)", dtick=1))
+    return estilo(figura)
+
+
 def barras_importancia(importancia: pd.DataFrame, sin_explicar: float, titulo: str) -> go.Figure:
     """"¿Qué pesa más?": % de la variación que explica cada factor por sí solo, en barras horizontales.
 

@@ -4,10 +4,14 @@ Usa la barra de filtros global. Una pestaña por análisis; solo se dibuja la ab
 cada tabla Excel y cada pestaña "Descargar todo".
 - Volatilización: eficiencia eBOE (por turno y por día) y eficiencia de proceso (por día), en gráficos separados,
   contra la fase pesada específica o el rango de fase pesada de referencia (sin circularidad con la eficiencia).
+- Efectos principales: modelo lineal con medias ajustadas (como Minitab), correlaciones y VIF de los factores, e
+  interacción de la MTPH con la temporada o con el régimen de agua. Respuestas: eficiencia eBOE, aceite en salida o
+  aceite captado por las primarias (por turno).
+- Umbral de MTPH: respuesta por MTPH y regresión segmentada por temporada.
 - Fase pesada: caudal de fase pesada real (laboratorio) contra el requerido por el balance de aceite del licor;
   rango de fase pesada (gráfico Brown) por temporada, eBOE, día y turno; coherencia del muestreo del licor (indicador
   interno: no se usa en otros análisis y no se muestra en el modo presentación).
-Solo muestra: la lógica está en core/fase_pesada.py y core/volatilizacion.py.
+Solo muestra: la lógica está en core/fase_pesada.py, core/volatilizacion.py y core/efectos.py.
 """
 
 import pandas as pd
@@ -15,20 +19,25 @@ import streamlit as st
 
 from cartel import cartel_modo_prueba
 from core.analisis import filtrar, pares_con_emulsion
+from core.analisis_centrifugas import filtrar_centrifugas
+from core.efectos import (CARGAS, EXPLICACION_MEDIA_AJUSTADA, NOMBRES, RESPUESTAS, captado_por_turno, correlaciones,
+                          datos_por_turno, frase_quiebre, modelo_efectos, modelo_interaccion, orden_de_niveles, por_mtph,
+                          preparar_datos, quiebres_por_temporada)
 from core.inicio import SIN_EMULSION
 from core.estadistica import es_outlier_iqr
 from core.fase_pesada import CLAVES_TURNO, mediana_por, tabla_fase_pesada
-from core.formato import numero
+from core.formato import numero, texto_p
 from core.parametros import ParametrosIncompletos
 from core.proceso import filtrar_produccion, turnos_sin_aprobar
 from core.repetidas import sin_entradas_repetidas
 from core.volatilizacion import (HIPOTESIS, RANGOS_FP, eficiencia_eboe_por_turno, eficiencias_por_dia,
                                  medias_por_rango)
 from descargas import Descargas
-from filtros import (barra_filtros, casilla_repetidas, filtros_elegidos, parametros_fase_pesada_planta,
-                     planta_elegida, produccion_con_borradores, produccion_planta, tabla_emulsion_planta,
-                     toneladas_planta)
-from graficos import boxplot_temporadas, dispersion_por_temporada, intervalos_agrupados, lineas_en_el_tiempo
+from filtros import (barra_filtros, casilla_repetidas, centrifugas_planta, filtros_elegidos,
+                     parametros_fase_pesada_planta, planta_elegida, produccion_con_borradores, produccion_planta,
+                     tabla_emulsion_planta, toneladas_planta)
+from graficos import (boxplot_temporadas, curva_mtph, dispersion_por_temporada, efectos_principales,
+                      grafico_interaccion, intervalos_agrupados, lineas_en_el_tiempo)
 from presentacion import en_presentacion
 
 st.set_page_config(page_title="Sistema", layout="wide")
@@ -248,7 +257,189 @@ def pestana_volatilizacion(registro: Descargas) -> None:
             "Outlier (IQR)": marcados["outlier"].map({True: "sí", False: ""})}), "Eficiencia de proceso por día")
 
 
-PESTANAS = {"Volatilización": pestana_volatilizacion, "Fase pesada": pestana_fase_pesada}
+def datos_para_modelo(parametros: dict, clave: str, respuesta: str) -> pd.DataFrame:
+    """Pares (core.efectos.preparar_datos; sin las entradas repetidas salvo que se marque la casilla, porque el modelo
+    compara eBOE) o, para el aceite captado, un registro por turno (las centrífugas, con la barra de filtros)."""
+    pares = pares_con_emulsion(datos, SIN_EMULSION)
+    if RESPUESTAS[respuesta]["por_turno"]:
+        _, balance = centrifugas_planta(planta_elegida())
+        balance = filtrar_centrifugas(balance, filtros_elegidos()) if not balance.empty else balance
+        st.caption("Aceite captado por las primarias (kg/MT) = aceite de la fase liviana de las primarias en marcha "
+                   "(kg/h, balance de cada muestreo sin los copiados; mediana de cada primaria en el turno, sumadas) / "
+                   "MTPH total de los eBOE del turno. Un registro por turno.")
+        return datos_por_turno(preparar_datos(tabla_fase_pesada(pares, parametros)), captado_por_turno(balance))
+    incluir = casilla_repetidas(f"{clave}_repetidas")
+    if not incluir:
+        pares = sin_entradas_repetidas(pares)
+        st.caption("Sin las entradas repetidas en varios eBOE (posible copia): el modelo compara eBOE.")
+    return preparar_datos(tabla_fase_pesada(pares, parametros))
+
+
+def elegir_respuesta(clave: str) -> str:
+    return st.radio("Respuesta", list(RESPUESTAS), horizontal=True, key=clave,
+                    format_func=lambda r: f"{RESPUESTAS[r]['nombre']} ({RESPUESTAS[r]['unidad']})")
+
+
+def tabla_correlaciones(tabla: pd.DataFrame) -> pd.DataFrame:
+    """Una fila por par de variables y una columna por temporada: "r (N)"."""
+    vista = tabla.assign(par=tabla["x"] + " – " + tabla["y"],
+                         valor=[("—" if pd.isna(r) else numero(r, 2)) + f" (N {numero(n, 0)})"
+                                for r, n in zip(tabla["r"], tabla["n"])])
+    return vista.pivot(index="par", columns="temporada", values="valor").reset_index().rename(columns={"par": "Variables"})
+
+
+def pestana_efectos(registro: Descargas) -> None:
+    try:
+        parametros = parametros_fase_pesada_planta(planta_elegida())
+    except ParametrosIncompletos as error:
+        st.warning(str(error))
+        return
+    respuesta = elegir_respuesta("sistema_efectos_respuesta")
+    carga = st.radio("Factor de carga", list(CARGAS), horizontal=True, key="sistema_efectos_carga",
+                     format_func=lambda c: {"mtph": "MTPH en rangos (por defecto)",
+                                            "fp": "Fase pesada específica en rangos"}[c],
+                     help="Nunca los dos juntos: dentro de una temporada pueden ser casi la misma variable (en 2026 "
+                          "el caudal de fase pesada es casi constante, así que la fase pesada específica es casi 1/MTPH).")
+    info = RESPUESTAS[respuesta]
+    nombre, unidad, decimales = info["nombre"], info["unidad"], info["decimales"]
+    base = datos_para_modelo(parametros, "sistema_efectos", respuesta)
+    if base.empty:
+        st.info("No hay datos para el modelo con estos filtros.")
+        return
+
+    st.markdown("##### Antes del modelo: correlaciones entre los factores numéricos")
+    registro.tabla(tabla_correlaciones(correlaciones(base)), "Correlaciones entre factores")
+    st.caption("r de Pearson dentro de cada temporada. Con |r| ≥ 0,7 dos variables son casi la misma: no entran juntas "
+               "al modelo (por eso usa MTPH o fase pesada específica, nunca las dos).")
+
+    resultado = modelo_efectos(base, respuesta, carga)
+    if resultado["medias"] is None:
+        st.info(f"No hay datos suficientes para el modelo (N = {resultado['n']}).")
+        return
+    vif = resultado["vif"]
+    for fila in vif[vif["confundido"]].to_dict("records"):
+        st.warning(f"**{fila['nombre']}** está confundido" + (
+            f" con **{fila['confundido_con']}** (V de Cramér {numero(fila['v_cramer'], 2)})" if fila["confundido_con"]
+            else "") + f": VIF {numero(fila['vif'], 1)} > 5. Sus efectos no se pueden separar bien.")
+    with st.expander("VIF de cada factor"):
+        registro.tabla(pd.DataFrame({"Factor": vif["nombre"], "gl": vif["gl"].map(lambda v: numero(v, 0)),
+                                     "VIF": vif["vif"].map(lambda v: numero(v, 2)),
+                                     "Confundido con": vif["confundido_con"].fillna("—")}), "VIF de los factores")
+        st.caption("VIF = GVIF^(1/gl) (Fox y Monette): con un gl es el VIF de siempre. Más de 5: el factor está "
+                   "confundido con otros.")
+
+    st.markdown(f"##### Efectos principales · {nombre}")
+    columnas = st.columns(3)
+    columnas[0].metric("R²", f"{numero(resultado['r2'] * 100, 1)} %", border=True,
+                       help="Parte de la variación de la respuesta que explica el modelo.")
+    columnas[1].metric("R² ajustado", f"{numero(resultado['r2_ajustado'] * 100, 1)} %", border=True)
+    columnas[2].metric("N", numero(resultado["n"], 0), border=True,
+                       help="Registros con todos los datos del modelo (" +
+                            ("turnos" if info["por_turno"] else "pares entrada/salida") + ").")
+    st.caption(EXPLICACION_MEDIA_AJUSTADA)
+    registro.grafico(efectos_principales(resultado["medias"], f"{nombre} ({unidad})", unidad, decimales),
+                     f"Efectos principales - {nombre}")
+    anova = resultado["anova"]
+    registro.tabla(pd.DataFrame({"Factor": anova["nombre"], "gl": anova["gl"].map(lambda v: numero(v, 0)),
+                                 "F": anova["f"].map(lambda v: numero(v, 1)), "p": anova["p"].map(texto_p)}),
+                   f"ANOVA - {nombre}")
+    st.caption(f"Modelo lineal con {', '.join(NOMBRES[f].lower() for f in resultado['factores'])}. ANOVA tipo II: el "
+               "efecto de cada factor una vez que están los demás. La fase pesada " +
+               ("no entra." if carga == "mtph" else "entra en lugar de la MTPH."))
+    with st.expander("Medias ajustadas"):
+        medias = resultado["medias"]
+        registro.tabla(pd.DataFrame({
+            "Factor": medias["nombre"], "Nivel": medias["nivel"],
+            "N": medias["n"].map(lambda v: numero(v, 0) + (" ⚠️" if v < 3 else "")),
+            f"Media ajustada ({unidad})": [numero(m, decimales) if e else "no estimable"
+                                          for m, e in zip(medias["media"], medias["estimable"])],
+            "IC 95 %": [f"{numero(a, decimales)} a {numero(b, decimales)}" if e else "—"
+                        for a, b, e in zip(medias["ic_inf"], medias["ic_sup"], medias["estimable"])]}),
+            f"Medias ajustadas - {nombre}")
+
+    st.markdown("##### Interacción con la carga")
+    opciones = ["temporada"] if carga == "fp" else ["temporada", "regimen"]
+    por_defecto = 0 if base["temporada"].nunique() > 1 else len(opciones) - 1
+    con = st.radio("Interacción con", opciones, index=por_defecto, horizontal=True, key="sistema_efectos_con",
+                   format_func=lambda c: {"temporada": "Temporada",
+                                          "regimen": "Régimen de agua (FP ≥ 0,8 m³/t o menos)"}[c])
+    if base["temporada"].nunique() == 1:
+        st.caption("Hay una sola temporada en el período. Para comparar temporadas (por ejemplo, si con agua suficiente "
+                   "la eficiencia no cae con la MTPH), elegí en la barra un período que las incluya: «Personalizado» con "
+                   "todas las fechas.")
+    interaccion = modelo_interaccion(base, respuesta, carga, con)
+    if interaccion["celdas"] is None:
+        st.info("Hace falta más de un nivel de la carga y de " + ("temporada." if con == "temporada" else
+                                                                  "régimen de agua."))
+        return
+    a = interaccion["a"]
+    st.markdown(f"**{NOMBRES[a]} × {NOMBRES[con].lower()}: {texto_p(interaccion['p'])}** · "
+                f"{'el efecto de la carga cambia' if interaccion['p'] < 0.05 else 'no hay evidencia de que cambie'} "
+                f"según {NOMBRES[con].lower()} (N = {numero(interaccion['n'], 0)}).")
+    celdas = interaccion["celdas"]
+    registro.grafico(grafico_interaccion(celdas, NOMBRES[a], nombre, unidad, decimales,
+                                         orden_de_niveles(a, celdas["a"].unique())),
+                     f"Interacción {NOMBRES[a]} x {NOMBRES[con].lower()} - {nombre}")
+    st.caption("Media ajustada de cada combinación, con los demás factores repartidos en partes iguales, e IC 95 %. "
+               "Las combinaciones sin datos no se dibujan; las de N < 3 se ven tenues.")
+    registro.tabla(pd.DataFrame({
+        NOMBRES[con]: celdas["b"], NOMBRES[a]: celdas["a"],
+        "N": celdas["n"].map(lambda v: numero(v, 0) + (" ⚠️" if 0 < v < 3 else "")),
+        f"Media ajustada ({unidad})": [numero(m, decimales) if e else ("sin datos" if n == 0 else "no estimable")
+                                      for m, e, n in zip(celdas["media"], celdas["estimable"], celdas["n"])],
+        "IC 95 %": [f"{numero(x, decimales)} a {numero(y, decimales)}" if e else "—"
+                    for x, y, e in zip(celdas["ic_inf"], celdas["ic_sup"], celdas["estimable"])]}),
+        f"Interacción - {nombre}")
+
+
+def pestana_umbral(registro: Descargas) -> None:
+    try:
+        parametros = parametros_fase_pesada_planta(planta_elegida())
+    except ParametrosIncompletos as error:
+        st.warning(str(error))
+        return
+    respuesta = elegir_respuesta("sistema_umbral_respuesta")
+    info = RESPUESTAS[respuesta]
+    nombre, unidad, decimales = info["nombre"], info["unidad"], info["decimales"]
+    base = datos_para_modelo(parametros, "sistema_umbral", respuesta)
+    if base.dropna(subset=["tph", respuesta]).empty:
+        st.info("No hay datos con MTPH con estos filtros.")
+        return
+    quiebres = quiebres_por_temporada(base, respuesta)
+    registro.grafico(curva_mtph(por_mtph(base, respuesta, por=None), quiebres, nombre, unidad, decimales),
+                     f"{nombre} por MTPH")
+    st.caption("Media e IC 95 % de cada MTPH (redondeada a la unidad), los eBOE juntos; tenues con N < 3. Línea "
+               "punteada: el punto de quiebre de cada temporada. Sin ajustar por los demás factores (ver Efectos "
+               "principales).")
+    st.markdown("##### Punto de quiebre por temporada")
+    for fila in quiebres.to_dict("records"):
+        st.markdown("- " + frase_quiebre(fila, respuesta))
+    unidad_pendiente = "puntos" if unidad == "%" else unidad
+    registro.tabla(pd.DataFrame({
+        "Temporada": quiebres["temporada"].astype(str), "Quiebre (MTPH)": quiebres["quiebre"].map(lambda v: numero(v, 0)),
+        f"Pendiente antes ({unidad_pendiente}/MTPH)": quiebres["pendiente_antes"].map(lambda v: numero(v, 3)),
+        f"Pendiente después ({unidad_pendiente}/MTPH)": quiebres["pendiente_despues"].map(lambda v: numero(v, 3)),
+        "p del cambio": quiebres["p_cambio"].map(lambda v: "—" if pd.isna(v) else texto_p(v)),
+        "p después": quiebres["p_despues"].map(lambda v: "—" if pd.isna(v) else texto_p(v)),
+        "N": quiebres["n"].map(lambda v: numero(v, 0)), "N después": quiebres["n_despues"].map(lambda v: numero(v, 0))}),
+        f"Quiebre de MTPH - {nombre}")
+    st.caption("Regresión segmentada: se prueba cada MTPH entera de 10 a 18 como quiebre (con al menos 10 datos de "
+               "cada lado) y se elige la de menor error. p del cambio: ¿la pendiente cambia en el quiebre? p después: "
+               "¿por encima del quiebre la respuesta sube o baja con la MTPH?")
+    if not info["por_turno"]:
+        with st.expander("Por eBOE"):
+            tabla = por_mtph(base, respuesta, por="eboe")
+            registro.tabla(pd.DataFrame({
+                "Temporada": tabla["temporada"].astype(str), "eBOE": tabla["grupo"].astype(str),
+                "MTPH": tabla["mtph"].map(lambda v: numero(v, 0)),
+                "N": tabla["n"].map(lambda v: numero(v, 0) + (" ⚠️" if v < 3 else "")),
+                f"Media ({unidad})": tabla["media"].map(lambda v: numero(v, decimales)),
+                "IC 95 %": [f"{numero(x, decimales)} a {numero(y, decimales)}" if pd.notna(x) else "—"
+                            for x, y in zip(tabla["ic_inf"], tabla["ic_sup"])]}), f"{nombre} por MTPH y eBOE")
+
+
+PESTANAS = {"Volatilización": pestana_volatilizacion, "Efectos principales": pestana_efectos,
+            "Umbral de MTPH": pestana_umbral, "Fase pesada": pestana_fase_pesada}
 # Con key y on_change, cada pestaña sabe si está abierta (.open): solo se dibuja la abierta.
 # bind="query-params": la pestaña queda en la URL (?pestana_sistema=Fase+pesada) y se puede compartir el enlace.
 for (nombre, dibujar), pestana in zip(PESTANAS.items(), st.tabs(list(PESTANAS), key="pestana_sistema",
