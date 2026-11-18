@@ -13,6 +13,6 @@ from presentacion import casilla_presentacion
 
 st.set_page_config(page_title="Gestión de líneas", layout="wide", initial_sidebar_state="expanded")
 aplicar()
-pagina = st.navigation(paginas(casilla_presentacion()))
+pagina = st.navigation(paginas(casilla_presentacion()), expanded=True)   # todas las páginas, sin "View more"
 pagina.run()
 pie()

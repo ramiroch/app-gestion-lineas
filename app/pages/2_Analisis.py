@@ -28,8 +28,9 @@ from core.analisis import (ATAJO_PERSONALIZADO, FUENTES, atajos, con_fuente, fil
 from core.comparaciones import comparar_grupos, frase_resultado
 from core.estadistica import limites_iqr, resumen_descriptivo
 from core.formato import numero, texto_p
+from core.cambios_operativos import marcas
 from core.mensual import (cajas_por_mes, eficiencia_eboe_planta_por_mes, eficiencia_proceso_por_mes, eje_de_meses,
-                          por_mes_y_eboe)
+                          etiqueta_mes, mes_de, por_mes_y_eboe)
 from core.parametros import ParametrosIncompletos
 from core.programa import (N_MINIMO, N_MINIMO_RANKING, combinaciones, de_combinaciones, frase_programa, frase_uso, numero_programa,
                            grilla, mejores_y_peores, rallado_por_programa, uso_de_programas)
@@ -40,12 +41,12 @@ from core.regresion import frase_pendiente, regresiones_por_grupo
 from core.repetidas import sin_entradas_repetidas
 from descargas import Descargas
 from pestana_factores import pestana_factores
-from filtros import (barra_filtros, casilla_repetidas, produccion_con_borradores, ultima_fecha_planta, filtros_elegidos, planta_elegida, produccion_planta, rango_planta,
+from filtros import (barra_filtros, cambios_planta, casilla_repetidas, produccion_con_borradores, ultima_fecha_planta, filtros_elegidos, planta_elegida, produccion_planta, rango_planta,
                      tabla_emulsion_planta, tabla_planta, toneladas_planta)
 from graficos import (PALETA, barras_uso, boxplot, boxplot_mensual, boxplot_temporadas, burbujas, columnas_mensuales,
                       columnas_mensuales_series, combinaciones_de_puntos,
                       contorno, dispersion_por_eboe, histograma,
-                      histograma_grupos, intervalos, superficie)
+                      histograma_grupos, intervalos, marcar_cambios, superficie)
 
 
 def porcentaje(fraccion, decimales: int = 1) -> str:
@@ -170,20 +171,26 @@ def bloque_evolucion_mensual(datos: pd.DataFrame, registro: Descargas) -> None:
     proceso = eficiencia_proceso_por_mes(pares, toneladas, produccion).rename(columns={"eficiencia_proceso": "valor"})
     cajas, outliers = cajas_por_mes(datos)
     eje = eje_de_meses(pd.concat([eficiencia["mes"], proceso["mes"], cajas["mes"]]))
+    cambios = cambios_planta(planta_id)                  # bitácora: una línea vertical en el mes de cada cambio
+    filtros = filtros_elegidos()
+    cambios = cambios[(cambios["fecha_produccion"] >= pd.Timestamp(filtros.desde))
+                      & (cambios["fecha_produccion"] <= pd.Timestamp(filtros.hasta))]
+    meses = [etiqueta_mes(m) for m in mes_de(cambios["fecha_produccion"])]
+    del_mes = marcas(cambios, [m if m in eje else None for m in meses])
     # Las eficiencias (por eBOE, de la planta y del proceso) comparten la escala del eje Y.
     tope = max([100.0, *eficiencia["valor"].dropna(), *proceso["valor"].dropna(), *planta_eboe["valor"].dropna()]) * 1.08
     objetivo = rango_planta(planta_id, "Eficiencia eBOE")
 
     st.markdown("##### Eficiencia eBOE por mes")
-    registro.grafico(columnas_mensuales(eficiencia, eje, "Eficiencia eBOE (%)", "%", rango_y=[0, tope],
-                                        objetivo=objetivo), "Eficiencia eBOE por mes")
+    registro.grafico(marcar_cambios(columnas_mensuales(eficiencia, eje, "Eficiencia eBOE (%)", "%", rango_y=[0, tope],
+                                                       objetivo=objetivo), del_mes), "Eficiencia eBOE por mes")
     if objetivo is None:
         st.caption("La planta no tiene cargado el objetivo de eficiencia eBOE en RangoReferencia.")
     with st.expander("Tabla"):
         registro.tabla(tabla_mensual(eficiencia, "Eficiencia (%)"), "Eficiencia eBOE por mes")
 
     st.markdown("##### MTPH promedio por mes")
-    registro.grafico(columnas_mensuales(mtph, eje, "MTPH promedio", "MTPH"), "MTPH por mes")
+    registro.grafico(marcar_cambios(columnas_mensuales(mtph, eje, "MTPH promedio", "MTPH"), del_mes), "MTPH por mes")
     with st.expander("Tabla"):
         registro.tabla(tabla_mensual(mtph, "MTPH"), "MTPH por mes")
 
@@ -211,7 +218,7 @@ def bloque_evolucion_mensual(datos: pd.DataFrame, registro: Descargas) -> None:
     if cajas.empty:
         st.info("No hay muestras de aceite en fruta con estos filtros.")
         return
-    registro.grafico(boxplot_mensual(cajas, outliers, eje), "Aceite en fruta por mes")
+    registro.grafico(marcar_cambios(boxplot_mensual(cajas, outliers, eje), del_mes), "Aceite en fruta por mes")
     st.caption("Por muestra (no ponderado). Caja: Q1 a Q3 con la mediana (cuartiles de Minitab). Bigotes: hasta el "
                "último valor dentro de los límites IQR. Círculos abiertos: outliers (se marcan, no se borran). N "
                "debajo de cada caja.")

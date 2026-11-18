@@ -23,8 +23,9 @@ from core.inicio import (cargar_flowsheet, datos_flowsheet, logo_planta, objetiv
 from core.models import Planta
 from core.turnos import fecha_produccion
 from estilo import encabezado_cobrand, titulo_planta
-from filtros import PLANTA_POR_DEFECTO, fijar_filtros, motor, plantas
-from graficos import flowsheet, tendencia_semanal as grafico_tendencia
+from filtros import PLANTA_POR_DEFECTO, cambios_planta, fijar_filtros, motor, plantas
+from graficos import flowsheet, marcar_cambios, tendencia_semanal as grafico_tendencia
+from core.cambios_operativos import marcas, periodo_de
 from presentacion import en_presentacion
 
 st.set_page_config(page_title="Inicio", layout="wide")
@@ -251,7 +252,12 @@ with st.container(border=True, key="tarjeta_tendencia"):
         st.caption(f"Últimas 8 semanas hasta el {hasta:%d/%m/%Y}, ponderadas por las toneladas aprobadas del turno "
                    "(promedio simple si no hay). N en el tooltip; las semanas con N < 3 se ven tenues.")
         uno, dos = st.columns(2)
-        uno.plotly_chart(grafico_tendencia(tabla, "eficiencia", "Eficiencia eBOE (%)", "%", 1, objetivo),
+        semanas = tabla[["desde", "hasta", "etiqueta"]].drop_duplicates()
+        cambios = cambios_planta(planta_id)               # bitácora: una línea en la semana de cada cambio
+        de_la_semana = marcas(cambios, periodo_de(cambios["fecha_produccion"], semanas))
+        uno.plotly_chart(marcar_cambios(grafico_tendencia(tabla, "eficiencia", "Eficiencia eBOE (%)", "%", 1, objetivo),
+                                        de_la_semana),
                          width="stretch")
-        dos.plotly_chart(grafico_tendencia(tabla, "aceite_salida", "Aceite en fruta de salida (kg/MT)", "kg/MT", 2),
+        dos.plotly_chart(marcar_cambios(grafico_tendencia(tabla, "aceite_salida", "Aceite en fruta de salida (kg/MT)",
+                                                          "kg/MT", 2), de_la_semana),
                          width="stretch")

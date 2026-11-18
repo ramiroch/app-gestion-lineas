@@ -28,6 +28,7 @@ ESTADOS_ALERTA = ("abierta", "en análisis", "cerrada", "histórico")
 ESTADOS_PRODUCCION = ("borrador", "aprobado")
 ORIGENES_CARGA = ("importación", "app")
 ACCIONES_CAMBIO = ("edición", "borrado", "restaurado", "hora", "estado", "seguimiento")
+CATEGORIAS_CAMBIO_OPERATIVO = ("programa", "agua/fase pesada", "centrífugas", "mantenimiento", "fruta", "otro")
 
 
 class Base(DeclarativeBase):
@@ -798,4 +799,38 @@ class Cambio(Base):
     def validar_motivo(self, clave, valor):
         if not (valor or "").strip():
             raise ValueError("El motivo del cambio es obligatorio.")
+        return valor.strip()
+
+
+class CambioOperativo(Base):
+    """Bitácora de cambios operativos de la planta (core.cambios_operativos): un cambio de programa, de agua o fase
+    pesada, de centrífugas, un mantenimiento, un cambio de fruta u otro, con su fecha y hora y, si es de un equipo, el
+    equipo. Se dibujan como líneas verticales en los gráficos de evolución y se comparan antes/después (Sistema).
+    Editar o borrar queda en el historial (Cambio, tabla "cambio_operativo"), con motivo.
+    """
+
+    __tablename__ = "cambio_operativo"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    planta_id: Mapped[int] = mapped_column(ForeignKey("planta.id"))
+    fecha_hora: Mapped[datetime] = mapped_column(DateTime)
+    equipo_id: Mapped[int | None] = mapped_column(ForeignKey("equipo.id"))
+    categoria: Mapped[str] = mapped_column(String(30))
+    descripcion: Mapped[str] = mapped_column(Text)
+    cargado_por: Mapped[str] = mapped_column(String(100))
+    cargado_en: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    planta: Mapped["Planta"] = relationship()
+    equipo: Mapped["Equipo | None"] = relationship()
+
+    @validates("categoria")
+    def validar_categoria(self, clave, valor):
+        if valor not in CATEGORIAS_CAMBIO_OPERATIVO:
+            raise ValueError(f'Categoría "{valor}" no válida. Usá una de: {", ".join(CATEGORIAS_CAMBIO_OPERATIVO)}.')
+        return valor
+
+    @validates("descripcion")
+    def validar_descripcion(self, clave, valor):
+        if not (valor or "").strip():
+            raise ValueError("La descripción del cambio es obligatoria.")
         return valor.strip()

@@ -26,7 +26,7 @@ def test_menu_con_todas_las_paginas_y_sus_secciones():
     assert {seccion: [titulo for _, titulo, _, _ in lista] for seccion, lista in MENU.items()} == {
         "Planta": ["Inicio", "Planta"],
         "Análisis": ["Análisis", "Gráficos de control", "Laboratorio", "Operación", "Centrífugas", "Sistema"],
-        "Carga diaria": ["Carga Scott", "Datos", "Producción"],
+        "Carga diaria": ["Carga Scott", "Datos", "Producción", "Cambios operativos"],
         "Gestión": ["Alertas"]}
     for lista in MENU.values():
         for ruta, _, icono, direccion in lista:

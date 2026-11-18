@@ -37,9 +37,10 @@ from core.parametros import ParametrosIncompletos
 from core.repetidas import sin_entradas_repetidas
 from core.spc import DESCRIPCION_REGLAS, REGLAS, resumen_reglas
 from descargas import Descargas
-from filtros import (barra_filtros, casilla_repetidas, fijar_filtros, filtros_elegidos, limites_capacidad_planta,
+from filtros import (barra_filtros, cambios_planta, casilla_repetidas, fijar_filtros, filtros_elegidos, limites_capacidad_planta,
                      motor, planta_elegida, tabla_emulsion_planta, tabla_planta)
-from graficos import carta_control, carta_periodo as carta_periodo_grafico, histograma_capacidad
+from graficos import carta_control, carta_periodo as carta_periodo_grafico, histograma_capacidad, marcar_cambios
+from core.cambios_operativos import marcas
 
 TIPOS = {POR_TURNO: "X̄-R / X̄-S por turno", POR_MUESTRA: "I-MR por muestra"}
 MODO_PERIODO, MODO_ANALISIS = "periodo", "analisis"
@@ -51,6 +52,25 @@ DECIMALES_CAPACIDAD = {"eficiencia": 1, "rendimiento": 2, "aceite_emulsion": 2, 
 NOTA_GAGE = ("La eficiencia sale de dos titulaciones Scott; parte de la variación es error de medición (pendiente: "
              "estudio Gage R&R).")
 LADOS = {"ambos": "LIE y LSE", "inferior": "solo LIE (lado inferior)", "superior": "solo LSE (lado superior)"}
+
+
+def marcas_de_la_carta(carta: dict, planta_id: int) -> list[dict]:
+    """Cambios operativos de la bitácora que caen en la carta: por turno, en su turno ("10/08 M"); por muestra, en la
+    primera muestra desde el cambio."""
+    tabla, cambios = carta["tabla"], cambios_planta(planta_id)
+    if tabla.empty or cambios.empty:
+        return []
+    if carta["por"] == "turno":
+        dentro = cambios[(cambios["fecha_produccion"] >= tabla["fecha_produccion"].min())
+                         & (cambios["fecha_produccion"] <= tabla["fecha_produccion"].max())]
+        etiquetas = {f"{f:%d/%m} {t}" for f, t in zip(tabla["fecha_produccion"], tabla["turno"])}
+        posiciones = [f"{f:%d/%m} {t}" if f"{f:%d/%m} {t}" in etiquetas else None
+                      for f, t in zip(dentro["fecha_produccion"], dentro["turno"])]
+        return marcas(dentro, posiciones)
+    momentos = pd.to_datetime(tabla["fecha_hora"]).reset_index(drop=True)
+    dentro = cambios[(cambios["fecha_hora"] >= momentos.min()) & (cambios["fecha_hora"] <= momentos.max())]
+    posiciones = [int((momentos < momento).sum()) + 1 for momento in dentro["fecha_hora"]]
+    return marcas(dentro, posiciones)
 
 
 def elegir_opciones(fruta_planta: pd.DataFrame, filtros) -> dict:
@@ -368,7 +388,8 @@ def carta_del_periodo(registro: Descargas) -> None:
                + (f" · {carta['n_extremos']} con valor extremo" if carta["n_extremos"] else "") + ".")
     if VARIABLES_PERIODO[variable]["control"] is None:
         st.caption("Esta variable no tiene límites de control congelados: no genera alertas.")
-    registro.grafico(carta_periodo_grafico(carta), f"Carta {carta['titulo']}")
+    registro.grafico(marcar_cambios(carta_periodo_grafico(carta), marcas_de_la_carta(carta, planta_id)),
+                     f"Carta {carta['titulo']}")
     tabla = carta["tabla"]
     fuera = int(tabla["reglas"].map(bool).sum())
     st.markdown(f"**{fuera} de {len(tabla)} {'turnos' if por == POR_TURNO_PERIODO else 'muestras'} violan alguna "

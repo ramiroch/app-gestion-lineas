@@ -24,6 +24,7 @@ from core.operacion import lecturas_plc, preparar_plc
 from core.parametros import ParametrosIncompletos, validar_parametros
 from core.analisis_centrifugas import balance_por_muestreo, por_muestreo, rangos_centrifugas, tabla_muestras
 from core.capacidad import limites_capacidad
+from core.cambios_operativos import listar_cambios
 from core.fase_pesada import parametros_fase_pesada
 
 PLANTA_POR_DEFECTO = "LEDESMA"
@@ -155,6 +156,14 @@ def umbral_paralelo_planta(planta_id: int) -> float | None:
             return validar_parametros(sesion.get(Planta, planta_id), ["umbral_paralelo_lh"])["umbral_paralelo_lh"]
         except ParametrosIncompletos:
             return None
+
+
+@st.cache_data(ttl=600)
+def cambios_planta(planta_id: int):
+    """Cambios operativos de la planta (core.cambios_operativos.listar_cambios), en caché; la página de la bitácora
+    la limpia al guardar."""
+    with crear_sesion(motor()) as sesion:
+        return listar_cambios(sesion, planta_id)
 
 
 @st.cache_data(ttl=600)

@@ -20,7 +20,9 @@ MENU = {
                  ("pages/11_Sistema.py", "Sistema", ":material/hub:", "Sistema")],
     "Carga diaria": [("pages/7_Carga_Scott.py", "Carga Scott", ":material/edit_note:", "Carga_Scott"),
                      ("pages/8_Datos.py", "Datos", ":material/table_edit:", "Datos"),
-                     ("pages/10_Produccion.py", "Producción", ":material/inventory_2:", "Produccion")],
+                     ("pages/10_Produccion.py", "Producción", ":material/inventory_2:", "Produccion"),
+                     ("pages/12_Cambios_operativos.py", "Cambios operativos", ":material/history_edu:",
+                      "Cambios_operativos")],
     "Gestión": [("pages/9_Alertas.py", "Alertas", ":material/notifications:", "Alertas")],
 }
 

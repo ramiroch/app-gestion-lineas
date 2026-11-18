@@ -937,6 +937,27 @@ def dispersion_por_temporada(datos: pd.DataFrame, x: str, y: str, titulo_x: str,
     return estilo(figura, ALTURA_CHICA)
 
 
+COLOR_CAMBIO = "#6250d6"      # cambios operativos: violeta, raya y punto (no se confunde con los límites grises)
+
+
+def marcar_cambios(figura: go.Figure, marcas: list[dict]) -> go.Figure:
+    """Agrega una línea vertical por cambio operativo, con la categoría arriba y el detalle en el tooltip de la
+    etiqueta. marcas: [{"x": posición en el eje X (fecha, categoría del eje o número), "categoria", "texto"}]; las
+    que caen en la misma x van juntas. En un gráfico con paneles, la línea cruza todos."""
+    juntas = {}
+    for marca in marcas:
+        if marca.get("x") is not None:
+            juntas.setdefault(marca["x"], []).append(marca)
+    paneles = {"row": "all", "col": "all"} if getattr(figura, "_grid_ref", None) else {}
+    for x, lista in juntas.items():
+        figura.add_vline(x=x, line=dict(color=COLOR_CAMBIO, width=1.5, dash="dashdot"), **paneles)
+        categorias = sorted({m["categoria"] for m in lista})
+        figura.add_annotation(x=x, y=1, xref="x", yref="paper", yanchor="bottom", showarrow=False,
+                              text="▼ " + " · ".join(categorias), font=dict(size=10, color=COLOR_CAMBIO),
+                              hovertext="<br>".join(m["texto"] for m in lista))
+    return figura
+
+
 def efectos_principales(medias: pd.DataFrame, titulo_y: str, unidad: str, decimales: int,
                         por_fila: int = 4) -> go.Figure:
     """Gráfica de efectos principales (medias ajustadas, como Minitab): un panel por factor, la media ajustada de cada

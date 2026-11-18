@@ -52,6 +52,7 @@ def test_eficiencias_por_dia():
     # proceso: (650 + 2100) / 400 = 6,875 kg/MT sobre la entrada ponderada (8 × 100 + 7 × 300) / 400 = 7,25
     assert uno["eficiencia_proceso"] == pytest.approx(6.875 / 7.25 * 100)
     assert uno["fruta_t"] == 400 and uno["valor"] == pytest.approx(0.55)
+    assert uno["rendimiento"] == pytest.approx(6.875)                       # rendimiento en tambor (kg/MT)
     assert pd.isna(dias.loc[DIA_2, "eficiencia_proceso"])                   # 40 t: menos que el mínimo del día
     assert dias.loc[DIA_2, "eficiencia_eboe"] == pytest.approx(85.0)
     sin_produccion = eficiencias_por_dia(_tabla(), "fp_especifica", TONELADAS.iloc[0:0], PRODUCCION.iloc[0:0])

@@ -8,6 +8,8 @@ cada tabla Excel y cada pestaña "Descargar todo".
   interacción de la MTPH con la temporada o con el régimen de agua. Respuestas: eficiencia eBOE, aceite en salida o
   aceite captado por las primarias (por turno).
 - Umbral de MTPH: respuesta por MTPH y regresión segmentada por temporada.
+- Antes/después: un cambio de la bitácora (Carga diaria › Cambios operativos) y los KPI en los N días de producción
+  antes y después, con su prueba.
 - Fase pesada: caudal de fase pesada real (laboratorio) contra el requerido por el balance de aceite del licor;
   rango de fase pesada (gráfico Brown) por temporada, eBOE, día y turno; coherencia del muestreo del licor (indicador
   interno: no se usa en otros análisis y no se muestra en el modo presentación).
@@ -20,6 +22,8 @@ import streamlit as st
 from cartel import cartel_modo_prueba
 from core.analisis import filtrar, pares_con_emulsion
 from core.analisis_centrifugas import filtrar_centrifugas
+from core.cambios_operativos import DIAS_POR_DEFECTO, antes_despues, texto_cambio
+from core.db import crear_sesion
 from core.efectos import (AYUDA_CAPTADO, CARGAS, EXPLICACION_MEDIA_AJUSTADA, NOMBRES, RESPUESTAS, captado_por_turno,
                           correlaciones, datos_por_turno, frase_quiebre, modelo_efectos, modelo_interaccion,
                           orden_de_niveles, por_mtph, preparar_datos, segmentada_por_temporada)
@@ -33,7 +37,7 @@ from core.repetidas import sin_entradas_repetidas
 from core.volatilizacion import (HIPOTESIS, RANGOS_FP, eficiencia_eboe_por_turno, eficiencias_por_dia,
                                  medias_por_rango)
 from descargas import Descargas
-from filtros import (barra_filtros, casilla_repetidas, centrifugas_planta, filtros_elegidos,
+from filtros import (barra_filtros, cambios_planta, casilla_repetidas, centrifugas_planta, filtros_elegidos, motor,
                      parametros_fase_pesada_planta, planta_elegida, produccion_con_borradores, produccion_planta,
                      tabla_emulsion_planta, toneladas_planta)
 from graficos import (boxplot_temporadas, curva_mtph, dispersion_por_temporada, efectos_principales,
@@ -467,8 +471,52 @@ def pestana_umbral(registro: Descargas) -> None:
                             for x, y in zip(tabla["ic_inf"], tabla["ic_sup"])]}), f"{nombre} por MTPH y eBOE")
 
 
+def pestana_antes_despues(registro: Descargas) -> None:
+    cambios = cambios_planta(planta_elegida())
+    if cambios.empty:
+        st.info("No hay cambios en la bitácora de la planta (se cargan en Carga diaria › Cambios operativos).")
+        return
+    cambios = cambios.sort_values("fecha_hora", ascending=False)
+    textos = {int(i): texto_cambio(fila) for i, fila in zip(cambios["id"], cambios.to_dict("records"))}
+    uno, dos = st.columns([3, 1])
+    elegido = uno.selectbox("Cambio", list(textos), format_func=textos.get, key="sistema_cambio")
+    dias = dos.number_input("Días antes y después", min_value=1, max_value=60, value=DIAS_POR_DEFECTO, step=1,
+                            key="sistema_cambio_dias")
+    fila = cambios[cambios["id"] == elegido].iloc[0]
+    dia = fila["fecha_produccion"]
+    with crear_sesion(motor()) as sesion:
+        tabla = antes_despues(sesion, elegido, int(dias))
+    st.caption(f"Antes: {dia - pd.Timedelta(days=dias):%d/%m/%Y} al {dia - pd.Timedelta(days=1):%d/%m/%Y}. Después: "
+               f"{dia + pd.Timedelta(days=1):%d/%m/%Y} al {dia + pd.Timedelta(days=dias):%d/%m/%Y}. El día del cambio "
+               f"({dia:%d/%m/%Y}) no entra en ninguno de los dos lados. Prueba: Welch si los dos lados son normales "
+               "(Anderson-Darling), si no Mann-Whitney.")
+    st.info("Una comparación antes/después no prueba la causa: en esos días pudieron cambiar otras cosas (fruta, "
+            "programa, MTPH). Miralo junto con la bitácora y los gráficos de evolución.")
+
+    def con(v, d, signo=False):
+        if v is None or pd.isna(v):
+            return "—"
+        return ("+" if signo and v > 0 else "") + numero(v, d)
+
+    registro.tabla(pd.DataFrame({
+        "KPI": tabla["kpi"] + " (" + tabla["unidad"] + ")", "Ámbito": tabla["ambito"], "Por": tabla["por"],
+        "Antes": [con(v, d) for v, d in zip(tabla["antes"], tabla["decimales"])],
+        "Después": [con(v, d) for v, d in zip(tabla["despues"], tabla["decimales"])],
+        "Diferencia": [con(v, d, True) for v, d in zip(tabla["diferencia"], tabla["decimales"])],
+        "%": [con(v, 1, True) for v in tabla["pct"]],
+        "N antes": [numero(n, 0) + (" ⚠️" if n < 3 else "") for n in tabla["n_antes"]],
+        "N desp.": [numero(n, 0) + (" ⚠️" if n < 3 else "") for n in tabla["n_despues"]],
+        "Prueba": tabla["prueba"].fillna("—"), "p": tabla["p"].map(lambda v: "—" if pd.isna(v) else texto_p(v))}),
+        f"Antes y después del cambio del {fila['fecha_hora']:%d-%m-%Y}")
+    st.caption("Por: qué se cuenta en el N (cada análisis, cada par entrada/salida, cada día de producción o cada "
+               "turno). Si el cambio es de un eBOE, los KPI de los eBOE son solo de ese eBOE; los de la planta, de la "
+               "planta. Rendimiento en tambor y eficiencia de proceso: por día, con la producción aprobada (días con al "
+               "menos 60 t). Retorno de FP y aceite captado: por turno, desde las centrífugas.")
+
+
 PESTANAS = {"Volatilización": pestana_volatilizacion, "Efectos principales": pestana_efectos,
-            "Umbral de MTPH": pestana_umbral, "Fase pesada": pestana_fase_pesada}
+            "Umbral de MTPH": pestana_umbral, "Antes/después": pestana_antes_despues,
+            "Fase pesada": pestana_fase_pesada}
 # Con key y on_change, cada pestaña sabe si está abierta (.open): solo se dibuja la abierta.
 # bind="query-params": la pestaña queda en la URL (?pestana_sistema=Fase+pesada) y se puede compartir el enlace.
 for (nombre, dibujar), pestana in zip(PESTANAS.items(), st.tabs(list(PESTANAS), key="pestana_sistema",

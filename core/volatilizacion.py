@@ -67,7 +67,7 @@ def eficiencia_eboe_por_turno(tabla: pd.DataFrame, variable: str) -> pd.DataFram
     return turnos.assign(rango=asignar_rango(turnos["valor"], variable))[columnas]
 
 
-def eficiencias_por_dia(tabla: pd.DataFrame, variable: str, toneladas: pd.DataFrame,
+def eficiencias_por_dia(tabla: pd.DataFrame, variable: str | None, toneladas: pd.DataFrame,
                         produccion: pd.DataFrame) -> pd.DataFrame:
     """Por día de producción: eficiencia eBOE (%, media de cada turno ponderada por sus toneladas aprobadas) y
     eficiencia de proceso (%, la de Análisis › Proceso con los turnos aprobados del día; vacía si el día tiene menos de
@@ -75,10 +75,11 @@ def eficiencias_por_dia(tabla: pd.DataFrame, variable: str, toneladas: pd.DataFr
 
     tabla: core.fase_pesada.tabla_fase_pesada(). toneladas: core.produccion.toneladas_por_turno(). produccion:
     registros aprobados del período (core.proceso.filtrar_produccion). Columnas: temporada, fecha_produccion,
-    eficiencia_eboe, n_pares, ponderada, eficiencia_proceso, fruta_t, valor y rango.
+    eficiencia_eboe, n_pares, ponderada, eficiencia_proceso, rendimiento (rendimiento en tambor = Σ aceite envasado /
+    Σ fruta, kg/MT; vacío como la eficiencia de proceso), fruta_t, valor y rango (vacíos si variable es None).
     """
     columnas = ["temporada", "fecha_produccion", "eficiencia_eboe", "n_pares", "ponderada", "eficiencia_proceso",
-                "fruta_t", "valor", "rango"]
+                "rendimiento", "fruta_t", "valor", "rango"]
     pares = tabla.dropna(subset=["eficiencia_par"]).assign(eficiencia_pct=lambda d: d["eficiencia_par"] * 100)
     if pares.empty:
         return pd.DataFrame(columns=columnas)
@@ -89,13 +90,16 @@ def eficiencias_por_dia(tabla: pd.DataFrame, variable: str, toneladas: pd.DataFr
         del_dia = por_dia.get(dia, produccion.iloc[0:0])
         totales = resumen_proceso(sub, toneladas, del_dia)["totales"]
         fruta = totales["fruta_t"]
-        proceso = totales["eficiencia_proceso"] if fruta is not None and fruta >= FRUTA_MINIMA_DIA else None
+        alcanza = fruta is not None and fruta >= FRUTA_MINIMA_DIA
         filas.append({"temporada": sub["temporada"].iloc[0], "fecha_produccion": dia,
                       "eficiencia_eboe": eficiencia["valor"], "n_pares": eficiencia["n"],
-                      "ponderada": eficiencia["ponderada"], "eficiencia_proceso": proceso, "fruta_t": fruta,
-                      "valor": sub[variable].median()})
+                      "ponderada": eficiencia["ponderada"],
+                      "eficiencia_proceso": totales["eficiencia_proceso"] if alcanza else None,
+                      "rendimiento": totales["rendimiento"] if alcanza else None, "fruta_t": fruta,
+                      "valor": sub[variable].median() if variable else np.nan})
     dias = pd.DataFrame(filas)
-    return dias.assign(rango=asignar_rango(dias["valor"], variable))[columnas]
+    rango = asignar_rango(dias["valor"], variable) if variable else None
+    return dias.assign(rango=rango)[columnas]
 
 
 def media_ic(valores, alfa: float = ALFA) -> dict:
