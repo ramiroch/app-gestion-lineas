@@ -15,3 +15,13 @@ def texto_p(p: float) -> str:
     if p is None or math.isnan(p):
         return "p = —"
     return "p < 0,001" if p < 0.001 else f"p = {numero(p, 3)}"
+
+
+def con_signo(valor, decimales: int = 1) -> str:
+    """Diferencia con signo: 1.24 → "+1,2"; -0.4 → "-0,4"; lo que redondea a 0 → "0,0" (sin signo); vacío → "—"."""
+    if valor is None or (isinstance(valor, float) and math.isnan(valor)):
+        return "—"
+    redondeado = round(valor, decimales)
+    if redondeado == 0:
+        return numero(0.0, decimales)
+    return ("+" if redondeado > 0 else "") + numero(redondeado, decimales)

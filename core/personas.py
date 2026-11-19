@@ -8,7 +8,8 @@ Muestra desempeño de equipos y condiciones de trabajo, no evalúa personas. Pri
 
 Cálculo: medias ajustadas (como core.efectos) del modelo respuesta ~ grupo + condiciones de trabajo, con IC 95 % y N.
 Condiciones: para el eBOE, eBOE, programa (grupos), MTPH (rangos), temporada y turno (si el grupo no es el turno);
-para la primaria, el equipo, la temporada y el turno. Solo entran los grupos (o combinaciones) con N ≥ N_MINIMO.
+para la primaria, el equipo, la temporada, el turno, el químico (Etapa 6: un químico que lee distinto no se confunde
+con el operador o el turno) y el aceite en la emulsión de alimentación (cuartiles). Solo entran los grupos (o combinaciones) con N ≥ N_MINIMO.
 Eficiencia de la primaria: la del balance de cada muestreo, sin copiados ni fuera de rango físico (dato inválido).
 - turno_por_temporada(): el turno dentro de cada temporada (¿un turno sale abajo siempre o en una sola?).
 - lectura_por_quimico(): ¿un químico lee distinto la entrada o la salida con la misma fruta? Es un posible sesgo de
@@ -22,7 +23,7 @@ import pandas as pd
 import statsmodels.formula.api as smf
 from sqlalchemy import select
 
-from core.analisis_centrifugas import PRIMARIA
+from core.condiciones_primaria import datos_primarias
 from core.efectos import _media_ajustada, _vector, contraste, orden_de_niveles
 from core.models import Equipo, LecturaOperacion, Linea, MuestraCentrifuga
 
@@ -32,7 +33,7 @@ PREFIJOS = {"operador": "Operador", "analista": "Químico", "operador_centrifuga
 NOMBRES_GRUPO = {"operador": "Operador de eBOE", "analista": "Químico", "turno": "Turno",
                  "operador_centrifugas": "Operador de centrífugas"}
 AJUSTE_EBOE = ["eboe", "programa_grupo", "mtph_rango", "temporada", "turno"]
-AJUSTE_PRIMARIA = ["equipo", "temporada", "turno"]
+AJUSTE_PRIMARIA = ["equipo", "temporada", "turno", "analista", "aceite_rango"]
 LETRAS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
@@ -82,14 +83,8 @@ def datos_eboe(datos: pd.DataFrame, operadores: pd.DataFrame) -> pd.DataFrame:
 
 def datos_primaria(balance: pd.DataFrame, personas: pd.DataFrame) -> pd.DataFrame:
     """Los balances de las primarias con eficiencia válida (sin copiados ni fuera de rango físico), con el químico y el
-    operador de centrífugas del muestreo. Columnas del balance más eficiencia_pct, analista, operador_centrifugas;
-    equipo, temporada y turno como texto."""
-    validos = balance[(balance["tipo"] == PRIMARIA) & ~balance["copiada"].fillna(False).astype(bool)
-                      & ~balance["fuera_fisico"].fillna(False).astype(bool) & balance["eficiencia_pct"].notna()]
-    unidos = validos.drop(columns=["analista"], errors="ignore").merge(personas, on=["codigo", "fecha_hora"], how="left")
-    for columna in ("equipo", "temporada", "turno"):
-        unidos[columna] = unidos[columna].map(lambda v: None if pd.isna(v) else str(v))
-    return unidos
+    operador de centrífugas del muestreo: core.condiciones_primaria.datos_primarias (con mes y aceite_rango)."""
+    return datos_primarias(balance, personas=personas)
 
 
 def anonimizar(datos: pd.DataFrame, columnas: list[str]) -> pd.DataFrame:

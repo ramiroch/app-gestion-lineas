@@ -37,7 +37,7 @@ from core.inicio import SIN_EMULSION
 from core.emulsion import ZONAS, dilucion_por_turno, pct_sobre_mediana, resumen_dilucion, resumen_zonas, zonas
 from core.estadistica import es_outlier_iqr
 from core.fase_pesada import CLAVES_TURNO, mediana_por, tabla_fase_pesada
-from core.formato import numero, texto_p
+from core.formato import con_signo, numero, texto_p
 from core.parametros import ParametrosIncompletos
 from core.personas import (ACLARACION, AJUSTE_EBOE, AJUSTE_PRIMARIA, N_MINIMO, NOMBRES_GRUPO, UMBRAL_SESGO_PCT,
                            anonimizar, brecha_turno_t, con_quimico, conclusion_turno_t, datos_eboe, datos_primaria,
@@ -702,11 +702,6 @@ def tabla_turno_por_temporada(datos: pd.DataFrame, ajuste: list[str]) -> None:
     st.table(vista[[t for t in orden_turnos(vista.columns)]].rename_axis(index="Temporada", columns=None))
 
 
-def signo(valor, decimales: int = 1) -> str:
-    """Número con signo (+1,2 / −0,4); "—" si falta."""
-    return "—" if valor is None or pd.isna(valor) else ("+" if valor > 0 else "") + numero(valor, decimales)
-
-
 def tabla_brecha_turno(datos: pd.DataFrame, ajuste: list[str]) -> None:
     """Medias ajustadas por turno y temporada con el químico en el modelo, la brecha del T sin y con el químico y la
     frase de conclusión (st.table, no se exporta)."""
@@ -722,7 +717,7 @@ def tabla_brecha_turno(datos: pd.DataFrame, ajuste: list[str]) -> None:
         index=brechas["temporada"])
     vista = vista[[t for t in orden_turnos(vista.columns)]]
     for sufijo, titulo in (("sin", "Brecha del T sin químico"), ("con", "Brecha del T con químico")):
-        vista[titulo] = [f"{signo(b)} puntos ({texto_p(p)})" if pd.notna(b) else "no estimable"
+        vista[titulo] = [f"{con_signo(b)} puntos ({texto_p(p)})" if pd.notna(b) else "no estimable"
                          for b, p in zip(brechas.set_index("temporada").reindex(vista.index)[f"brecha_{sufijo}"],
                                          brechas.set_index("temporada").reindex(vista.index)[f"p_{sufijo}"])]
     st.table(vista.rename_axis(index="Temporada", columns=None))
@@ -817,9 +812,9 @@ def pestana_personas(registro: Descargas) -> None:
             if pd.isna(fila.por_quimico):
                 frases.append(f"{fila.base} → {fila.nueva}: no se puede separar la parte del químico.")
             else:
-                frases.append(f"{fila.base} → {fila.nueva}: la eficiencia eBOE ajustada cambia {signo(fila.dif_sin)} "
-                              f"puntos; con el mismo químico, {signo(fila.dif_con)}. Hasta {signo(fila.por_quimico)} "
-                              "puntos podrían venir de quién midió.")
+                frases.append(f"{fila.base} → {fila.nueva}: la eficiencia eBOE ajustada cambia "
+                              f"{con_signo(fila.dif_sin)} puntos; con el mismo químico, {con_signo(fila.dif_con)}. "
+                              f"Hasta {con_signo(fila.por_quimico)} puntos podrían venir de quién midió.")
         st.markdown("\n".join(f"- {f}" for f in frases))
         st.caption("% de los pares de la temporada medidos por cada químico (⚠ = posible sesgo de medición en la "
                    "tabla de lectura). Eficiencia ajustada por eBOE, programa, MTPH y turno, sin y con el químico en "
@@ -830,13 +825,16 @@ def pestana_personas(registro: Descargas) -> None:
         st.info("No hay balances de las primarias con estos filtros.")
         return
     bloque_personas(primaria, AGRUPACIONES_PRIMARIA, AJUSTE_PRIMARIA, "sistema_personas_primaria",
-                    "Eficiencia de la primaria", "equipo, temporada y turno (si no es lo que se agrupa); sin "
-                                                 "muestreos copiados ni fuera de rango físico")
+                    "Eficiencia de la primaria",
+                    "equipo, temporada, turno, químico y aceite en la emulsión de alimentación (si no es lo que se "
+                    "agrupa); sin muestreos copiados ni fuera de rango físico")
     st.markdown("###### Turno por temporada (primaria)")
     tabla_turno_por_temporada(primaria, AJUSTE_PRIMARIA)
+    st.caption("Media ajustada de cada turno dentro de su temporada (equipo, químico y aceite en la emulsión), con N.")
     st.markdown("###### Turno con el químico en el modelo (primaria)")
     tabla_brecha_turno(primaria, AJUSTE_PRIMARIA)
-    st.caption("Medias ajustadas por equipo y químico; brecha del T sin y con el químico, con la misma muestra.")
+    st.caption("Medias ajustadas por equipo, aceite en la emulsión y químico; brecha del T sin y con el químico, con "
+               "la misma muestra.")
 
 
 PESTANAS = {"Volatilización": pestana_volatilizacion, "Efectos principales": pestana_efectos,

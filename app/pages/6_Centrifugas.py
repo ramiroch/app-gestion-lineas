@@ -2,7 +2,8 @@
 
 Usa la barra de filtros global: a las centrífugas les aplican las fechas de producción, el turno y el proceso (el
 eBOE y el programa no; sí a los datos del laboratorio del BOE de la pestaña Retorno de FP y BOE). Una pestaña por bloque:
-resumen, retorno de FP y BOE, fases, operación vs referencias, pérdidas y muestras para revisar. Solo se dibuja la pestaña
+resumen, retorno de FP y BOE, fases, operación vs referencias, pérdidas, condiciones de eficiencia de la primaria y
+muestras para revisar. Solo se dibuja la pestaña
 abierta; cada gráfico tiene botón PNG, cada tabla Excel y cada pestaña "Descargar todo".
 Solo muestra: la lógica está en core/analisis_centrifugas.py y los rangos en RangoReferencia.
 """
@@ -17,13 +18,19 @@ from core.analisis_centrifugas import (A_DEFINIR, CALCULADO, NO_APLICA, ORDEN_EQ
                                        SIN_DATOS, VARIABLES, agua_por_eboe, con_motivo, filtrar_centrifugas, motivos,
                                        para_revisar, perdida_descarga_mensual, perdida_pesada_por_destino,
                                        primarias_por_turno, relacion_boe, resumen_por_temporada, resumen_temporadas,
-                                       valores_por_variable)
-from core.formato import numero
+                                       caudal_nominal_primaria, valores_por_variable)
+from core.condiciones_primaria import (VARIABLES as VARIABLES_CONDICION, cp_liviana_por_muestreo, datos_primarias,
+                                       frase_nominal, frase_pendiente, hasta_nominal, pendiente, por_cuantiles,
+                                       por_rango_caudal)
+from core.formato import con_signo, numero, texto_p
 from core.proceso import filtrar_produccion
 from descargas import Descargas
-from filtros import (barra_filtros, centrifugas_planta, filtros_elegidos, planta_elegida, produccion_planta,
-                     rangos_centrifugas_planta, tabla_emulsion_planta, umbral_paralelo_planta)
-from graficos import GRIS, agua_en_el_tiempo, boxplot_por_equipo, color_equipo, columnas_agrupadas, lineas_en_el_tiempo
+from filtros import (barra_filtros, centrifugas_planta, filtros_elegidos, mostrar_personas_planta, operadores_planta,
+                     planta_elegida, produccion_planta, rangos_centrifugas_planta, tabla_emulsion_planta,
+                     umbral_paralelo_planta)
+from graficos import (GRIS, agua_en_el_tiempo, boxplot_por_equipo, color_equipo, columnas_agrupadas,
+                      intervalos_agrupados, lineas_en_el_tiempo)
+from presentacion import en_presentacion
 
 FASES = ["aceite_emulsion", "aceite_liviana", "aceite_pesada", "aceite_descarga"]
 OPERACION = ["solidos", "cp_pesada", "cp_liviana", "t_descarga", "caudal_emulsion"]
@@ -282,6 +289,108 @@ def pestana_perdidas(registro: Descargas) -> None:
         st.caption(f"\"{SIN_DATOS}\": la fase pesada de la secundaria casi nunca se muestrea.")
 
 
+def avisar_n(tabla: pd.DataFrame, columna: str) -> None:
+    """Aviso de los grupos con N < 3 (temporada y grupo)."""
+    pocos = tabla[tabla["n"] < 3]
+    if not pocos.empty:
+        st.warning("N < 3 (poco representativo) en " + ", ".join(
+            f"{t} {g}" for t, g in zip(pocos["temporada"], pocos[columna])) + ".")
+
+
+def bloque_variable(registro: Descargas, datos: pd.DataFrame, variable: str, por: float, unidad_por: str) -> str:
+    """Eficiencia por quintil de la variable (IC 95 % y N por temporada) y la pendiente ajustada. Devuelve la
+    tendencia (frase_pendiente)."""
+    nombre, unidad, _ = VARIABLES_CONDICION[variable]
+    cuantiles = por_cuantiles(datos, variable)
+    if cuantiles.empty:
+        st.info(f"Sin datos de {nombre.lower()} con estos filtros.")
+        return "sin datos"
+    registro.grafico(intervalos_agrupados(cuantiles.sort_values(["orden", "temporada"]), "Eficiencia de la primaria (%)",
+                                          "%", 1, f"{nombre} ({unidad}), quintiles"), f"Eficiencia por {nombre.lower()}")
+    avisar_n(cuantiles, "grupo")
+    tabla = pendiente(datos, variable, por)
+    if not tabla.empty:
+        registro.tabla(pd.DataFrame({
+            "Temporada": tabla["temporada"].astype(str), "N": tabla["n"],
+            f"Cambio de eficiencia cada {unidad_por} (puntos)": tabla["pendiente"].map(con_signo),
+            "IC 95 %": [f"{con_signo(a)} a {con_signo(b)}" for a, b in zip(tabla["ic_inf"], tabla["ic_sup"])],
+            "p": tabla["p"].map(texto_p)}), f"Pendiente: {nombre.lower()}")
+    return frase_pendiente(tabla)
+
+
+TENDENCIAS = {"sube": "sube", "baja": "baja", "no cambia": "no cambia de forma significativa",
+              "en parte": "cambia solo en algunas temporadas", "sin datos": "sin datos"}
+
+
+def pestana_condiciones(registro: Descargas) -> None:
+    st.caption("Eficiencia de la centrífuga primaria (balance de cada muestreo, sin copiados ni fuera de rango físico) "
+               "según las condiciones de operación, por temporada, con IC 95 % y N. Las diferencias y pendientes se "
+               "ajustan por equipo, mes, turno, químico y aceite en la emulsión (cuartiles): así un químico que lee "
+               "distinto o un mes con otra fruta no se confunden con el caudal.")
+    _, personas = operadores_planta(planta_id)
+    quimicos = personas[["codigo", "fecha_hora", "analista"]] if not personas.empty else None
+    datos = datos_primarias(balance_f, cp_liviana_por_muestreo(muestras_f), quimicos) if not balance_f.empty else []
+    if len(datos) == 0:
+        st.info("No hay balances de las primarias con estos filtros.")
+        return
+    try:
+        nominal = caudal_nominal_primaria(rangos)
+    except ValueError as error:
+        st.warning(str(error))
+        return
+    rango = rangos.get(("caudal_emulsion", PRIMARIA)) or {}
+
+    st.markdown("#### Caudal de alimentación")
+    rangos_caudal = por_rango_caudal(datos).sort_values(["desde", "temporada"])
+    registro.grafico(intervalos_agrupados(rangos_caudal.rename(columns={"rango": "grupo"}),
+                                          "Eficiencia de la primaria (%)", "%", 1, "Caudal de emulsión (L/h)"),
+                     "Eficiencia por caudal de alimentación")
+    avisar_n(rangos_caudal, "rango")
+    if rango.get("minimo") is not None and (datos["caudal_emulsion"] < rango["minimo"]).any():
+        bajos = int((datos["caudal_emulsion"] < rango["minimo"]).sum())
+        st.caption(f"Marcados, no excluidos: {numero(bajos, 0)} muestreos con caudal menor que "
+                   f"{numero(rango['minimo'], 0)} L/h (mínimo del rango de referencia; posible error de carga).")
+    tabla = hasta_nominal(datos, nominal)
+    registro.tabla(pd.DataFrame({
+        "Temporada": tabla["temporada"].astype(str),
+        f"Hasta {numero(nominal, 0)} L/h": [f"{numero(m, 1)} % (N {numero(n, 0)})" if n else "—"
+                                            for m, n in zip(tabla["media_hasta"], tabla["n_hasta"])],
+        f"Más de {numero(nominal, 0)} L/h": [f"{numero(m, 1)} % (N {numero(n, 0)})" if n else "—"
+                                             for m, n in zip(tabla["media_sobre"], tabla["n_sobre"])],
+        "Diferencia simple (puntos)": (tabla["media_sobre"] - tabla["media_hasta"]).map(con_signo),
+        "Diferencia ajustada (puntos)": [f"{con_signo(d)} ({texto_p(p)})" if pd.notna(d) else "pocos datos de un lado"
+                                         for d, p in zip(tabla["dif"], tabla["p"])]}),
+        "Hasta el caudal nominal y por encima")
+    st.markdown(f"**«Hasta {numero(nominal, 0)} L/h, buena performance»: {frase_nominal(tabla, nominal)}**")
+    st.caption(f"{numero(nominal, 0)} L/h = máximo del rango «Caudal de emulsión» de la primaria en RangoReferencia "
+               f"({rango.get('fuente') or 'sin fuente'}). Diferencia = más del nominal − hasta el nominal. La simple "
+               "compara promedios; la ajustada, a igual equipo, mes, turno, químico y aceite en la emulsión (cuando el "
+               "caudal cambia con el mes, la simple mezcla las dos cosas).")
+
+    st.markdown("#### Caudal de fase liviana")
+    tendencia = bloque_variable(registro, datos, "caudal_liviana", 100, "100 L/h")
+    respuesta = {"sube": "se repite", "baja": "no se repite (baja)", "no cambia": "no se repite",
+                 "en parte": "se repite solo en algunas temporadas"}.get(tendencia, tendencia)
+    st.markdown(f"**«Más caudal de fase liviana → más eficiencia»: {respuesta}.**")
+    st.warning("Ojo: se cumple por construcción. La eficiencia sale del balance con el caudal de fase liviana "
+               "(eficiencia = caudal de fase liviana × aceite en la fase liviana / aceite que entra), así que a igual "
+               "alimentación más fase liviana es, por definición, más eficiencia. No dice qué mover en la operación: "
+               "para eso sirve la CP de la fase liviana (abajo), que se mide aparte.")
+
+    st.markdown("#### Aceite en la emulsión de alimentación")
+    tendencia = bloque_variable(registro, datos, "aceite_emulsion", 0.1, "0,1 % de aceite")
+    st.caption(f"La eficiencia {TENDENCIAS[tendencia]} con el aceite en la emulsión (en el ajuste no entra el aceite "
+               "en la emulsión: es la variable).")
+
+    st.markdown("#### CP de la fase liviana")
+    tendencia = bloque_variable(registro, datos, "cp_liviana", 0.1, "0,1 bar")
+    st.caption(f"La eficiencia {TENDENCIAS[tendencia]} con la CP de la fase liviana. Es la lectura del manómetro, "
+               "independiente del balance (las CP «no medible» no entran).")
+    if mostrar_personas_planta(planta_id) and not en_presentacion():
+        st.caption("Por operador de centrífugas y turno (ajustado también por químico): Análisis › Sistema › Equipos "
+                   "de trabajo.")
+
+
 def pestana_revisar(registro: Descargas) -> None:
     st.caption("Muestras importadas tal cual pero marcadas para revisar, con su motivo (una muestra puede tener "
                "varios). Respeta las fechas, el turno y el proceso de la barra.")
@@ -337,6 +446,7 @@ PESTANAS = {
     "Fases": pestana_fases,
     "Operación vs referencias": pestana_operacion,
     "Pérdidas": pestana_perdidas,
+    "Condiciones de eficiencia": pestana_condiciones,
     "Para revisar": pestana_revisar,
 }
 for (nombre, dibujar), pestana in zip(PESTANAS.items(), st.tabs(list(PESTANAS), key="pestana_centrifugas",

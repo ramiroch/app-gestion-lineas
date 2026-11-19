@@ -17,3 +17,9 @@ def test_texto_p():
     assert texto_p(0.0004) == "p < 0,001"
     assert texto_p(0.04213) == "p = 0,042"
     assert texto_p(0.5) == "p = 0,500"
+
+
+def test_con_signo():
+    from core.formato import con_signo
+    assert (con_signo(1.24), con_signo(-0.4), con_signo(-0.021), con_signo(None)) == ("+1,2", "-0,4", "0,0", "—")
+    assert con_signo(1234.5, 0) == "+1.234"
