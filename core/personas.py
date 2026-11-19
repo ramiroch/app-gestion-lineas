@@ -13,16 +13,17 @@ Eficiencia de la primaria: la del balance de cada muestreo, sin copiados ni fuer
 - turno_por_temporada(): el turno dentro de cada temporada (¿un turno sale abajo siempre o en una sola?).
 - lectura_por_quimico(): ¿un químico lee distinto la entrada o la salida con la misma fruta? Es un posible sesgo de
   medición, no desempeño.
+- Cruce químico × turno: quimico_por_turno() y participacion_quimicos() (% de los pares), brecha_turno_t() (la brecha
+  del T sin y con el químico en el modelo) con conclusion_turno_t(), y temporada_con_y_sin_quimico() con
+  diferencias_por_quimico() (cuánto de la diferencia entre temporadas podría venir de quién midió).
 """
 
-import numpy as np
 import pandas as pd
 import statsmodels.formula.api as smf
-from scipy import stats
 from sqlalchemy import select
 
 from core.analisis_centrifugas import PRIMARIA
-from core.efectos import _media_ajustada, _vector, orden_de_niveles
+from core.efectos import _media_ajustada, _vector, contraste, orden_de_niveles
 from core.models import Equipo, LecturaOperacion, Linea, MuestraCentrifuga
 
 N_MINIMO = 20
@@ -183,22 +184,19 @@ def lectura_por_quimico(datos: pd.DataFrame, n_minimo: int = N_MINIMO, alfa: flo
         mitad = len(ordenados) // 2
         del_medio = ordenados[mitad - 1:mitad + 1] if len(ordenados) % 2 == 0 else [ordenados[mitad]]
         referencia = sum(vectores[q] for q in del_medio) / len(del_medio)
-        proyector = modelo.model.pinv_wexog @ modelo.model.wexog
         for quimico, vector in vectores.items():
-            contraste = vector - referencia
-            estimable = np.linalg.norm(contraste - contraste @ proyector) <= 1e-6 * max(1.0, np.linalg.norm(contraste))
             fila = salida.setdefault(quimico, {"quimico": quimico, "n": 0})
             fila["n"] = max(fila["n"], int((sub["_grupo"] == quimico).sum()))
-            if not estimable:
+            resultado = contraste(modelo, vector - referencia)
+            if resultado is None:
                 continue
-            dif = float(contraste @ modelo.params.values)
-            error = float(np.sqrt(contraste @ modelo.cov_params().values @ contraste))
+            dif, p = resultado
             clave = lugar.lower()
             fila[f"media_{clave}"] = float(vector @ modelo.params.values)
             fila[f"dif_{clave}"] = dif
             mediana = float(referencia @ modelo.params.values)
             fila[f"pct_{clave}"] = dif / mediana * 100 if mediana else None
-            fila[f"p_{clave}"] = float(2 * stats.t.sf(abs(dif / error), modelo.df_resid)) if error > 0 else None
+            fila[f"p_{clave}"] = p
     columnas = ["quimico", "n", "media_entrada", "dif_entrada", "pct_entrada", "p_entrada", "media_salida",
                 "dif_salida", "pct_salida", "p_salida", "lectura"]
     tabla = pd.DataFrame(list(salida.values())).reindex(columns=columnas)
@@ -213,3 +211,115 @@ def lectura_por_quimico(datos: pd.DataFrame, n_minimo: int = N_MINIMO, alfa: flo
 
     tabla["lectura"] = tabla.apply(texto, axis=1) if len(tabla) else []
     return tabla.sort_values("n", ascending=False, ignore_index=True)
+
+
+# ── Cruce químico × turno: ¿la brecha del turno T (o la diferencia entre temporadas) viene de quién midió? ──────────
+
+def con_quimico(datos: pd.DataFrame, respuesta: str, n_minimo: int = N_MINIMO) -> pd.DataFrame:
+    """Las filas con respuesta y químico, solo de los químicos con N ≥ n_minimo en su temporada: la misma muestra
+    para el modelo con y sin el factor químico (así la comparación es justa)."""
+    datos = datos.dropna(subset=[respuesta, "analista", "temporada"])
+    conteo = datos.groupby(["temporada", "analista"])[respuesta].transform("size")
+    return datos[conteo >= n_minimo]
+
+
+def quimico_por_turno(datos: pd.DataFrame) -> pd.DataFrame:
+    """% de los pares de cada turno medidos por cada químico, por temporada. Columnas: temporada, turno, analista, n,
+    pct (sobre los pares con químico de ese turno y temporada)."""
+    datos = datos.dropna(subset=["temporada", "turno", "analista"])
+    if datos.empty:
+        return pd.DataFrame(columns=["temporada", "turno", "analista", "n", "pct"])
+    conteo = datos.groupby(["temporada", "turno", "analista"]).size().rename("n").reset_index()
+    return conteo.assign(pct=conteo["n"] / conteo.groupby(["temporada", "turno"])["n"].transform("sum") * 100)
+
+
+def participacion_quimicos(datos: pd.DataFrame) -> pd.DataFrame:
+    """% de los pares de cada temporada medidos por cada químico. Columnas: temporada, analista, n, pct."""
+    datos = datos.dropna(subset=["temporada", "analista"])
+    if datos.empty:
+        return pd.DataFrame(columns=["temporada", "analista", "n", "pct"])
+    conteo = datos.groupby(["temporada", "analista"]).size().rename("n").reset_index()
+    return conteo.assign(pct=conteo["n"] / conteo.groupby("temporada")["n"].transform("sum") * 100)
+
+
+def brecha_turno_t(datos: pd.DataFrame, respuesta: str, ajuste: list[str], n_minimo: int = N_MINIMO
+                   ) -> pd.DataFrame:
+    """Brecha del turno T en cada temporada, sin y con el químico en el modelo.
+
+    Brecha = media ajustada del T − promedio de las medias ajustadas de los otros turnos (puntos de la respuesta), con
+    su p. Modelo: respuesta ~ turno + condiciones de trabajo (`ajuste` sin la temporada ni el turno) [+ químico], en la
+    muestra de con_quimico() (la misma para los dos). Columnas: temporada, n, brecha_sin, p_sin, brecha_con, p_con
+    (brecha_con vacía si no es estimable: el químico y el turno están confundidos)."""
+    filas = []
+    for temporada, sub in con_quimico(datos, respuesta, n_minimo).groupby("temporada", sort=True):
+        if "T" not in set(sub["turno"]) or sub["turno"].nunique() < 2:
+            continue
+        fila = {"temporada": temporada, "n": len(sub)}
+        sin_quimico = [f for f in ajuste if f != "analista"]      # por si el ajuste ya trae el químico
+        for sufijo, extra in (("sin", []), ("con", ["analista"])):
+            factores = [f for f in [*sin_quimico, *extra] if f not in ("temporada", "turno") and f in sub
+                        and sub[f].nunique() > 1]
+            sub_modelo = sub.dropna(subset=["turno", *factores])
+            modelo = smf.ols(f"{respuesta} ~ C(turno)" + "".join(f" + C({f})" for f in factores),
+                             data=sub_modelo).fit()
+            niveles = {f: sorted(sub_modelo[f].unique()) for f in ["turno", *factores]}
+            otros = [t for t in niveles["turno"] if t != "T"]
+            nombres = modelo.model.exog_names
+            vector = (_vector(nombres, niveles, {"turno": "T"})
+                      - sum(_vector(nombres, niveles, {"turno": t}) for t in otros) / len(otros))
+            resultado = contraste(modelo, vector)
+            fila[f"brecha_{sufijo}"], fila[f"p_{sufijo}"] = resultado if resultado else (None, None)
+        filas.append(fila)
+    return pd.DataFrame(filas, columns=["temporada", "n", "brecha_sin", "p_sin", "brecha_con", "p_con"])
+
+
+def conclusion_turno_t(brechas: pd.DataFrame, alfa: float = 0.05) -> str:
+    """Frase de conclusión sobre la brecha del turno T. Solo cuentan las temporadas con el T abajo y significativo sin
+    el químico; ahí la brecha "se explica por el químico" si con el químico deja de ser significativa o se reduce a
+    menos de la mitad. Todas → se explica; ninguna → no se explica; algunas → en parte."""
+    abajo = brechas[(brechas["brecha_sin"] < 0) & (brechas["p_sin"] < alfa)]
+    if abajo.empty:
+        return "Sin el químico en el modelo, el turno T no sale significativamente abajo en ninguna temporada."
+    if abajo["brecha_con"].isna().any():
+        return ("No se puede separar el turno del químico en alguna temporada (cada químico trabaja siempre en el "
+                "mismo turno): no se sabe si la brecha del turno T viene de quién midió.")
+    explicada = (abajo["p_con"] >= alfa) | (abajo["brecha_con"].abs() < abajo["brecha_sin"].abs() / 2)
+    if explicada.all():
+        return ("La brecha del turno T se explica por el químico: con el químico en el modelo, desaparece o se reduce "
+                "a menos de la mitad.")
+    if not explicada.any():
+        return "La brecha del turno T no se explica por el químico: con el químico en el modelo, se mantiene."
+    temporadas = ", ".join(str(t) for t in abajo.loc[explicada, "temporada"])
+    return ("La brecha del turno T se explica en parte por el químico: desaparece o se reduce a menos de la mitad "
+            f"solo en {temporadas}.")
+
+
+def temporada_con_y_sin_quimico(datos: pd.DataFrame, respuesta: str, ajuste: list[str], n_minimo: int = N_MINIMO
+                                ) -> pd.DataFrame:
+    """Media ajustada de la respuesta por temporada sin y con el químico en el modelo (condiciones `ajuste`), en la
+    misma muestra (con_quimico). Columnas: temporada, n, media_sin, media_con (vacía si no es estimable)."""
+    sin_quimico = [f for f in ajuste if f != "analista"]
+    muestra = con_quimico(datos, respuesta, n_minimo)
+    sin = medias_por_grupo(muestra, respuesta, ["temporada"], sin_quimico, n_minimo)["medias"]
+    con = medias_por_grupo(muestra, respuesta, ["temporada"], [*sin_quimico, "analista"], n_minimo)["medias"]
+    if sin.empty:
+        return pd.DataFrame(columns=["temporada", "n", "media_sin", "media_con"])
+    con = con if not con.empty else pd.DataFrame(columns=["grupo", "media"])
+    tabla = sin[["grupo", "n", "media"]].rename(columns={"grupo": "temporada", "media": "media_sin"}).merge(
+        con[["grupo", "media"]].rename(columns={"grupo": "temporada", "media": "media_con"}), on="temporada",
+        how="left")
+    return tabla.sort_values("temporada", ignore_index=True)
+
+
+def diferencias_por_quimico(tabla: pd.DataFrame) -> pd.DataFrame:
+    """Diferencia entre temporadas seguidas, sin y con el químico en el modelo, y la parte que podría venir de quién
+    midió (por_quimico = dif_sin − dif_con). tabla: temporada_con_y_sin_quimico. Columnas: base, nueva, dif_sin,
+    dif_con, por_quimico."""
+    filas = []
+    for k in range(1, len(tabla)):
+        a, b = tabla.iloc[k - 1], tabla.iloc[k]
+        dif_sin = b["media_sin"] - a["media_sin"]
+        dif_con = None if pd.isna(a["media_con"]) or pd.isna(b["media_con"]) else b["media_con"] - a["media_con"]
+        filas.append({"base": a["temporada"], "nueva": b["temporada"], "dif_sin": dif_sin, "dif_con": dif_con,
+                      "por_quimico": None if dif_con is None else dif_sin - dif_con})
+    return pd.DataFrame(filas, columns=["base", "nueva", "dif_sin", "dif_con", "por_quimico"])

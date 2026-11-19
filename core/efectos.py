@@ -260,6 +260,17 @@ def _media_ajustada(modelo, niveles: dict[str, list], fijos: dict[str, str], alf
     return {"media": media, "ic_inf": media - margen, "ic_sup": media + margen, "estimable": True}
 
 
+def contraste(modelo, vector: np.ndarray) -> tuple[float, float | None] | None:
+    """Valor (L·β) y p (t, dos colas) de un contraste del modelo; None si no es estimable (L fuera del espacio de las
+    filas de X, por ejemplo cuando dos factores están confundidos)."""
+    proyector = modelo.model.pinv_wexog @ modelo.model.wexog
+    if np.linalg.norm(vector - vector @ proyector) > 1e-6 * max(1.0, np.linalg.norm(vector)):
+        return None
+    valor = float(vector @ modelo.params.values)
+    error = float(np.sqrt(vector @ modelo.cov_params().values @ vector))
+    return valor, (float(2 * stats.t.sf(abs(valor / error), modelo.df_resid)) if error > 0 else None)
+
+
 def orden_de_niveles(factor: str, niveles) -> list[str]:
     """Niveles en el orden natural del factor (MTPH, fase pesada, meses, turnos y programas en su orden; el resto,
     alfabético o numérico)."""

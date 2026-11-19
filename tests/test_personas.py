@@ -9,9 +9,10 @@ import pytest
 from sqlalchemy import select
 
 from core.models import LecturaOperacion
-from core.personas import (N_MINIMO, anonimizar, datos_eboe, datos_primaria, lectura_por_quimico, medias_por_grupo,
-                           operadores_eboe, turno_por_temporada,
-                           personas_centrifugas)
+from core.personas import (N_MINIMO, anonimizar, brecha_turno_t, conclusion_turno_t, datos_eboe, datos_primaria,
+                           diferencias_por_quimico, lectura_por_quimico, medias_por_grupo, operadores_eboe,
+                           participacion_quimicos, personas_centrifugas, quimico_por_turno, temporada_con_y_sin_quimico,
+                           turno_por_temporada)
 from tests.test_carga_scott import sesion  # noqa: F401  (fixture)
 from tests.test_inicio import _muestra, _ronda, planta  # noqa: F401  (fixture)
 
@@ -182,3 +183,64 @@ def test_lectura_por_quimico_marca_posible_sesgo():
     assert tabla.loc["Lía", "lectura"] == "posible sesgo de medición (entrada)"
     assert tabla.loc["Lía", "dif_entrada"] == pytest.approx(0.6, abs=0.1)              # contra la lectura mediana
     assert tabla.loc["Ana", "lectura"] == "sin diferencias de lectura" and tabla.loc["Ana", "n"] == 200
+
+
+def _cruce(azar, sesgo_quimico: bool):
+    """Tres turnos y tres químicos en 2025 y 2026. Si sesgo_quimico: Lía lee la eficiencia 3 puntos más baja (lee la
+    salida alta), trabaja casi siempre en el T y en 2026 mide más; el T en sí no cambia nada. Si no: los químicos rotan
+    parejo y el T rinde 2 puntos menos de verdad."""
+    filas = []
+    for temporada in ("2025", "2026"):
+        for k in range(900):
+            turno = ["M", "T", "N"][k % 3]
+            if sesgo_quimico:
+                propia = 0.8 if temporada == "2025" else 0.95            # en 2026, Lía mide más en el T
+                quimico = "Lía" if (turno == "T" and azar.random() < propia) else ["Ana", "Sol", "Lía"][k // 3 % 3]
+            else:
+                quimico = ["Ana", "Sol", "Lía"][k // 3 % 3]
+            efecto = -3 * (quimico == "Lía") if sesgo_quimico else -2 * (turno == "T")
+            filas.append({"temporada": temporada, "turno": turno, "analista": quimico, "eboe": ["1", "2"][k % 2],
+                          "eficiencia_pct": 85 + efecto + azar.normal(0, 0.5)})
+    return pd.DataFrame(filas)
+
+
+def test_quimico_por_turno_y_participacion():
+    datos = pd.DataFrame({"temporada": ["2026"] * 4, "turno": ["M", "M", "M", "T"],
+                          "analista": ["Ana", "Ana", "Lía", "Lía"]})
+    tabla = quimico_por_turno(datos).set_index(["turno", "analista"])
+    assert tabla.loc[("M", "Ana"), "pct"] == pytest.approx(200 / 3) and tabla.loc[("T", "Lía"), "pct"] == 100
+    assert participacion_quimicos(datos).set_index("analista").loc["Lía", "pct"] == 50
+
+
+def test_brecha_del_turno_t_que_viene_del_quimico():
+    datos = _cruce(np.random.default_rng(11), sesgo_quimico=True)
+    brechas = brecha_turno_t(datos, "eficiencia_pct", ["eboe", "temporada", "turno"]).set_index("temporada")
+    assert brechas.loc["2026", "brecha_sin"] < -1.5 and brechas.loc["2026", "p_sin"] < 0.05
+    assert abs(brechas.loc["2026", "brecha_con"]) < 0.3                 # con el químico en el modelo, desaparece
+    assert conclusion_turno_t(brechas.reset_index()).startswith("La brecha del turno T se explica por el químico")
+
+
+def test_brecha_del_turno_t_que_no_viene_del_quimico():
+    datos = _cruce(np.random.default_rng(12), sesgo_quimico=False)
+    brechas = brecha_turno_t(datos, "eficiencia_pct", ["eboe", "temporada", "turno"])
+    assert brechas["brecha_con"].to_numpy() == pytest.approx([-2, -2], abs=0.2)
+    assert conclusion_turno_t(brechas).startswith("La brecha del turno T no se explica por el químico")
+    sin_brecha = brechas.assign(brecha_sin=0.1, p_sin=0.6)
+    assert "no sale significativamente abajo" in conclusion_turno_t(sin_brecha)
+
+
+def test_brecha_no_separable_si_cada_quimico_tiene_su_turno():
+    datos = _cruce(np.random.default_rng(13), sesgo_quimico=False)
+    datos["analista"] = datos["turno"].map({"M": "Ana", "T": "Lía", "N": "Sol"})
+    brechas = brecha_turno_t(datos, "eficiencia_pct", ["eboe"])
+    assert brechas["brecha_con"].isna().all() and "No se puede separar" in conclusion_turno_t(brechas)
+
+
+def test_diferencia_entre_temporadas_por_quien_midio():
+    datos = _cruce(np.random.default_rng(14), sesgo_quimico=True)
+    tabla = temporada_con_y_sin_quimico(datos, "eficiencia_pct", ["eboe", "turno"])
+    assert tabla["temporada"].tolist() == ["2025", "2026"] and tabla["media_con"].notna().all()
+    dif = diferencias_por_quimico(tabla).iloc[0]
+    assert dif["dif_sin"] < -0.1                                    # en 2026 Lía mide más → parece que cae
+    assert dif["dif_con"] == pytest.approx(0, abs=0.15)             # con el mismo químico, igual
+    assert dif["por_quimico"] == pytest.approx(dif["dif_sin"], abs=0.15)

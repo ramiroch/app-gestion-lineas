@@ -39,9 +39,10 @@ from core.estadistica import es_outlier_iqr
 from core.fase_pesada import CLAVES_TURNO, mediana_por, tabla_fase_pesada
 from core.formato import numero, texto_p
 from core.parametros import ParametrosIncompletos
-from core.personas import (ACLARACION, AJUSTE_EBOE, AJUSTE_PRIMARIA, N_MINIMO, NOMBRES_GRUPO, anonimizar,
-                           UMBRAL_SESGO_PCT, datos_eboe, datos_primaria, lectura_por_quimico, medias_por_grupo,
-                           orden_turnos,
+from core.personas import (ACLARACION, AJUSTE_EBOE, AJUSTE_PRIMARIA, N_MINIMO, NOMBRES_GRUPO, UMBRAL_SESGO_PCT,
+                           anonimizar, brecha_turno_t, con_quimico, conclusion_turno_t, datos_eboe, datos_primaria,
+                           diferencias_por_quimico, lectura_por_quimico, medias_por_grupo, orden_turnos,
+                           participacion_quimicos, quimico_por_turno, temporada_con_y_sin_quimico,
                            turno_por_temporada)
 from core.proceso import filtrar_produccion, turnos_sin_aprobar
 from core.repetidas import sin_entradas_repetidas
@@ -701,6 +702,33 @@ def tabla_turno_por_temporada(datos: pd.DataFrame, ajuste: list[str]) -> None:
     st.table(vista[[t for t in orden_turnos(vista.columns)]].rename_axis(index="Temporada", columns=None))
 
 
+def signo(valor, decimales: int = 1) -> str:
+    """Número con signo (+1,2 / −0,4); "—" si falta."""
+    return "—" if valor is None or pd.isna(valor) else ("+" if valor > 0 else "") + numero(valor, decimales)
+
+
+def tabla_brecha_turno(datos: pd.DataFrame, ajuste: list[str]) -> None:
+    """Medias ajustadas por turno y temporada con el químico en el modelo, la brecha del T sin y con el químico y la
+    frase de conclusión (st.table, no se exporta)."""
+    muestra = con_quimico(datos, "eficiencia_pct")
+    brechas = brecha_turno_t(datos, "eficiencia_pct", ajuste)
+    if brechas.empty:
+        st.caption("Sin datos suficientes con químico por turno y temporada.")
+        return
+    medias = turno_por_temporada(muestra, "eficiencia_pct", [*ajuste, "analista"])
+    medias = medias[medias["estimable"]].assign(valor=lambda t: [f"{numero(m, 1)} % (N {numero(n, 0)})"
+                                                                 for m, n in zip(t["media"], t["n"])])
+    vista = medias.pivot(index="temporada", columns="turno", values="valor") if len(medias) else pd.DataFrame(
+        index=brechas["temporada"])
+    vista = vista[[t for t in orden_turnos(vista.columns)]]
+    for sufijo, titulo in (("sin", "Brecha del T sin químico"), ("con", "Brecha del T con químico")):
+        vista[titulo] = [f"{signo(b)} puntos ({texto_p(p)})" if pd.notna(b) else "no estimable"
+                         for b, p in zip(brechas.set_index("temporada").reindex(vista.index)[f"brecha_{sufijo}"],
+                                         brechas.set_index("temporada").reindex(vista.index)[f"p_{sufijo}"])]
+    st.table(vista.rename_axis(index="Temporada", columns=None))
+    st.markdown(f"**{conclusion_turno_t(brechas)}**")
+
+
 def pestana_personas(registro: Descargas) -> None:
     st.info(ACLARACION)
     st.caption("Esta pestaña no se exporta (ni PNG, ni Excel, ni «Descargar todo») y no aparece en el modo "
@@ -750,6 +778,53 @@ def pestana_personas(registro: Descargas) -> None:
                    "medición, no desempeño: la fruta y la operación son las mismas. Conviene revisarlo con el "
                    "laboratorio (técnica, normalidad, muestreo).")
 
+    st.markdown("##### Químico y turno")
+    st.markdown("###### Pares de cada turno medidos por cada químico (%)")
+    cruce = quimico_por_turno(eboe)
+    if cruce.empty:
+        st.caption("Los pares no tienen químico con estos filtros.")
+    else:
+        vista = cruce.assign(valor=[f"{numero(p, 0)} %" for p in cruce["pct"]]).pivot(
+            index=["temporada", "turno"], columns="analista", values="valor").fillna("—")
+        vista = vista.reindex(sorted(vista.index, key=lambda i: (i[0], orden_turnos(["M", "T", "N"]).index(i[1])
+                                                                  if i[1] in ("M", "T", "N") else 9)))
+        st.table(vista.rename_axis(index=["Temporada", "Turno"], columns=None))
+        st.caption("% sobre los pares con químico de cada turno y temporada (cada fila suma 100 %).")
+    st.markdown("###### Turno con el químico en el modelo (eBOE)")
+    tabla_brecha_turno(eboe, AJUSTE_EBOE)
+    st.caption("Medias ajustadas por eBOE, programa, MTPH y químico. Brecha del T = media del T − promedio de los "
+               "otros turnos, sin y con el químico en el modelo, con la misma muestra (químicos con N ≥ "
+               f"{N_MINIMO} en la temporada). Si con el químico la brecha deja de ser significativa o se reduce a "
+               "menos de la mitad, se explica por quién midió.")
+
+    st.markdown("###### Participación de cada químico y eficiencia eBOE por temporada")
+    participacion = participacion_quimicos(eboe)
+    sesgo = set(lectura.loc[lectura["lectura"].str.startswith("posible sesgo"), "quimico"]) if not lectura.empty else set()
+    temporadas = temporada_con_y_sin_quimico(eboe, "eficiencia_pct", AJUSTE_EBOE)
+    if participacion.empty or temporadas.empty:
+        st.caption("Sin datos suficientes con químico por temporada.")
+    else:
+        vista = participacion.assign(valor=[f"{numero(p, 0)} %" for p in participacion["pct"]]).pivot(
+            index="temporada", columns="analista", values="valor").fillna("—")
+        vista.columns = [f"{q} ⚠" if q in sesgo else q for q in vista.columns]
+        indice = temporadas.set_index("temporada").reindex(vista.index)
+        vista["Eficiencia eBOE sin químico"] = [numero(v, 1) + " %" if pd.notna(v) else "—" for v in indice["media_sin"]]
+        vista["Con químico"] = [numero(v, 1) + " %" if pd.notna(v) else "no estimable" for v in indice["media_con"]]
+        vista["N"] = [numero(v, 0) if pd.notna(v) else "—" for v in indice["n"]]
+        st.table(vista.rename_axis(index="Temporada", columns=None))
+        frases = []
+        for fila in diferencias_por_quimico(temporadas).itertuples():
+            if pd.isna(fila.por_quimico):
+                frases.append(f"{fila.base} → {fila.nueva}: no se puede separar la parte del químico.")
+            else:
+                frases.append(f"{fila.base} → {fila.nueva}: la eficiencia eBOE ajustada cambia {signo(fila.dif_sin)} "
+                              f"puntos; con el mismo químico, {signo(fila.dif_con)}. Hasta {signo(fila.por_quimico)} "
+                              "puntos podrían venir de quién midió.")
+        st.markdown("\n".join(f"- {f}" for f in frases))
+        st.caption("% de los pares de la temporada medidos por cada químico (⚠ = posible sesgo de medición en la "
+                   "tabla de lectura). Eficiencia ajustada por eBOE, programa, MTPH y turno, sin y con el químico en "
+                   "el modelo, con la misma muestra.")
+
     st.markdown("##### Eficiencia de la centrífuga primaria")
     if primaria.empty:
         st.info("No hay balances de las primarias con estos filtros.")
@@ -759,6 +834,9 @@ def pestana_personas(registro: Descargas) -> None:
                                                  "muestreos copiados ni fuera de rango físico")
     st.markdown("###### Turno por temporada (primaria)")
     tabla_turno_por_temporada(primaria, AJUSTE_PRIMARIA)
+    st.markdown("###### Turno con el químico en el modelo (primaria)")
+    tabla_brecha_turno(primaria, AJUSTE_PRIMARIA)
+    st.caption("Medias ajustadas por equipo y químico; brecha del T sin y con el químico, con la misma muestra.")
 
 
 PESTANAS = {"Volatilización": pestana_volatilizacion, "Efectos principales": pestana_efectos,
