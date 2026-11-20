@@ -18,7 +18,9 @@ cada tabla Excel y cada pestaña "Descargar todo".
 - Fase pesada: caudal de fase pesada real (laboratorio) contra el requerido por el balance de aceite del licor;
   rango de fase pesada (gráfico Brown) por temporada, eBOE, día y turno; coherencia del muestreo del licor (indicador
   interno: no se usa en otros análisis y no se muestra en el modo presentación).
-Solo muestra: la lógica está en core/fase_pesada.py, core/volatilizacion.py y core/efectos.py.
+- Muestreo: representatividad de la muestra de salida (peso medio del fruto y frutos en 10 kg de la entrada contra la
+  salida de la misma ronda, prueba pareada por temporada y eBOE, aviso con la tolerancia de calibre de la planta).
+Solo muestra: la lógica está en core/fase_pesada.py, core/volatilizacion.py, core/efectos.py y core/muestreo.py.
 """
 
 import pandas as pd
@@ -44,6 +46,8 @@ from core.personas import (ACLARACION, AJUSTE_EBOE, AJUSTE_PRIMARIA, N_MINIMO, N
                            diferencias_por_quimico, lectura_por_quimico, medias_por_grupo, orden_turnos,
                            participacion_quimicos, quimico_por_turno, temporada_con_y_sin_quimico,
                            turno_por_temporada)
+from core.muestreo import AVISO as AVISO_MUESTREO, ERROR_CARGA as ERROR_CARGA_MUESTREO, VARIABLES as VARIABLES_MUESTREO
+from core.muestreo import diferencia_por_eboe, eficiencia_por_calibre, frase_muestreo, pares_calibre, prueba_pareada
 from core.proceso import filtrar_produccion, turnos_sin_aprobar
 from core.repetidas import sin_entradas_repetidas
 from core.volatilizacion import (HIPOTESIS, RANGOS_FP, eficiencia_eboe_por_turno, eficiencias_por_dia,
@@ -52,7 +56,8 @@ from descargas import Descargas
 from filtros import (barra_filtros, cambios_planta, rango_planta, casilla_repetidas, centrifugas_planta, filtros_elegidos, motor,
                      mostrar_personas_planta, operadores_planta,
                      parametros_fase_pesada_planta, planta_elegida, produccion_con_borradores, produccion_planta,
-                     tabla_emulsion_planta, toneladas_planta, umbral_paralelo_planta)
+                     tabla_emulsion_planta, tolerancia_calibre_planta, toneladas_planta,
+                     umbral_paralelo_planta)
 from graficos import (boxplot_temporadas, brix_contra_ph, curva_mtph, dispersion_por_temporada, efectos_principales,
                       grafico_interaccion, intervalos, intervalos_agrupados, lineas_en_el_tiempo)
 from presentacion import en_presentacion
@@ -837,9 +842,85 @@ def pestana_personas(registro: Descargas) -> None:
                "la misma muestra.")
 
 
+def tabla_pareada(tabla: pd.DataFrame, variable: str, tolerancia: float | None) -> pd.DataFrame:
+    """prueba_pareada() con nombres para la pantalla."""
+    _, unidad, _, _, decimales = VARIABLES_MUESTREO[variable]
+    vista = {"Temporada": tabla["temporada"].astype(str), "eBOE": tabla["eboe"].astype(str),
+             "N rondas": tabla["n"].map(lambda v: numero(v, 0) + (" ⚠️" if v < 3 else "")),
+             f"Entrada ({unidad})": tabla["media_entrada"].map(lambda v: numero(v, decimales)),
+             f"Salida ({unidad})": tabla["media_salida"].map(lambda v: numero(v, decimales)),
+             f"Diferencia ({unidad})": tabla["dif"].map(lambda v: con_signo(v, decimales)),
+             "Diferencia (%)": tabla["dif_pct"].map(lambda v: con_signo(v, 1)),
+             "Prueba": tabla["prueba"].fillna("—"), "p": tabla["p"].map(lambda v: "—" if pd.isna(v) else texto_p(v))}
+    if tolerancia is not None:
+        vista[f"% rondas fuera de ±{numero(tolerancia, 1)} %"] = tabla["pct_fuera"].map(lambda v: numero(v, 0))
+        vista["Aviso"] = tabla["no_comparable"].map({True: "⚠️ pueden no ser comparables", False: ""})
+    return pd.DataFrame(vista)
+
+
+def pestana_muestreo(registro: Descargas) -> None:
+    tolerancia = tolerancia_calibre_planta(planta_elegida())
+    incluir = casilla_repetidas("sistema_muestreo_repetidas")
+    pares = sin_entradas_repetidas(pares_calibre(datos), incluir)
+    if pares.empty:
+        st.info("No hay rondas con el peso y el n.º de frutos de la entrada y de la salida con estos filtros.")
+        return
+    st.caption("El eBOE no cambia el tamaño de la fruta: la muestra de salida de una ronda debería traer fruta del "
+               "mismo peso medio que la de entrada. Si la salida trae fruta más grande, tiene menos cáscara por kilo y "
+               "su aceite en kg/MT sale más bajo aunque el eBOE haya trabajado igual (y al revés). Peso medio del fruto "
+               "= peso de la muestra × 1000 / n.º de frutos.")
+    if tolerancia is None:
+        st.info("La tolerancia de calibre de la planta (tolerancia_calibre_pct) está a definir: se muestran las "
+                "diferencias sin aviso. Se completa en la hoja Planta de data/maestros_clientes.xlsx.")
+    peso = prueba_pareada(pares, "peso", tolerancia)
+    st.markdown(f"**{frase_muestreo(peso, tolerancia)}**")
+    if peso["no_comparable"].fillna(False).astype(bool).any():
+        st.warning(f"{AVISO_MUESTREO}: revisar cómo se toma la muestra de salida (punto, momento y si se eligen frutos).")
+
+    st.markdown("##### Diferencia de peso medio del fruto, salida contra entrada")
+    diferencias = diferencia_por_eboe(pares)
+    if not diferencias.empty:
+        figura = intervalos_agrupados(diferencias.assign(grupo="eBOE " + diferencias["grupo"]),
+                                      "Salida − entrada (% del peso de entrada)", "%", 1, "eBOE")
+        figura.add_hline(y=0, line_color="#888888")
+        if tolerancia is not None:
+            figura.add_hrect(y0=-tolerancia, y1=tolerancia, fillcolor="#2E7D32", opacity=0.08, line_width=0)
+        registro.grafico(figura, "Diferencia de calibre salida contra entrada")
+        st.caption("Media de las rondas con IC 95 %" + (f"; banda: ±{numero(tolerancia, 1)} % (tolerancia de la "
+                                                          "planta)" if tolerancia is not None else "") +
+                   ". Arriba de 0: la fruta de la salida es más grande.")
+    registro.tabla(tabla_pareada(peso, "peso", tolerancia), "Peso medio del fruto entrada y salida")
+    st.caption("Por temporada y eBOE, con las rondas que tienen las dos muestras. Diferencia = salida − entrada de cada "
+               "ronda, promediada; % sobre el peso de entrada. Prueba pareada: t si las diferencias son normales "
+               "(Anderson-Darling), si no Wilcoxon de rangos con signo.")
+    with st.expander("Frutos en 10 kg"):
+        registro.tabla(tabla_pareada(prueba_pareada(pares, "frutos", tolerancia), "frutos", tolerancia),
+                       "Frutos en 10 kg entrada y salida")
+        st.caption("Lo mismo con los frutos en 10 kg (n.º de frutos × 10 / peso de la muestra): más frutos, fruta más "
+                   "chica.")
+    errores = int(pares["error_carga"].sum())
+    if errores:
+        st.caption(f"{numero(errores, 0)} rondas con {ERROR_CARGA_MUESTREO}: marcadas, fuera de la prueba y de los "
+                   "gráficos.")
+
+    if tolerancia is not None:
+        st.markdown("##### Eficiencia eBOE según el calibre de la salida")
+        eficiencias = eficiencia_por_calibre(pares, tolerancia)
+        if eficiencias.empty:
+            st.info("No hay rondas suficientes en cada grupo para comparar.")
+        else:
+            registro.grafico(intervalos_agrupados(eficiencias, "Eficiencia eBOE (%)", "%", 1,
+                                                  "Fruta de la salida contra la de entrada"),
+                             "Eficiencia eBOE según el calibre de la salida")
+            st.caption(f"Rondas con la fruta de la salida más chica (< −{numero(tolerancia, 1)} %), comparable o más "
+                       f"grande (> +{numero(tolerancia, 1)} %) que la de entrada; promedio simple de las rondas con IC "
+                       "95 %. Es una comparación entre rondas, no prueba la causa: si las rondas con la salida más "
+                       "grande dan más eficiencia, parte de esa eficiencia puede venir de la muestra y no del eBOE.")
+
+
 PESTANAS = {"Volatilización": pestana_volatilizacion, "Efectos principales": pestana_efectos,
             "Umbral de MTPH": pestana_umbral, "Antes/después": pestana_antes_despues,
-            "Emulsión": pestana_emulsion, "Fase pesada": pestana_fase_pesada}
+            "Emulsión": pestana_emulsion, "Fase pesada": pestana_fase_pesada, "Muestreo": pestana_muestreo}
 if mostrar_personas_planta(planta_elegida()) and not en_presentacion():
     PESTANAS[PERSONAS] = pestana_personas
 # Con key y on_change, cada pestaña sabe si está abierta (.open): solo se dibuja la abierta.

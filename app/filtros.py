@@ -160,6 +160,16 @@ def umbral_paralelo_planta(planta_id: int) -> float | None:
 
 
 @st.cache_data(ttl=600)
+def tolerancia_calibre_planta(planta_id: int) -> float | None:
+    """Parámetro tolerancia_calibre_pct de la planta (%); None si no está definido."""
+    with crear_sesion(motor()) as sesion:
+        try:
+            return validar_parametros(sesion.get(Planta, planta_id), ["tolerancia_calibre_pct"])["tolerancia_calibre_pct"]
+        except ParametrosIncompletos:
+            return None
+
+
+@st.cache_data(ttl=600)
 def mostrar_personas_planta(planta_id: int) -> bool:
     """Planta.mostrar_personas (vacío = no): si se muestran los análisis por operador y químico."""
     with crear_sesion(motor()) as sesion:
